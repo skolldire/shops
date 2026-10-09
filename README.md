@@ -52,15 +52,33 @@ DB_PASSWORD="$(docker compose exec -T db cat /run/secrets/db_password)" make run
 
 `make run` uses `config/config.local.yaml`.
 
-## Tests
+## Tests and checks
 
 ```sh
-make lint
-make test
-make test-integration
+make lint               # golangci-lint (style, gosec, errorlint...), no comments in code or config, go mod tidy
+make test               # unit tests with the race detector
+make coverage           # unit tests with a coverage report
+make test-integration   # PostgreSQL via Testcontainers
+make vuln               # govulncheck
 ```
 
-Integration tests start PostgreSQL with Testcontainers and need a running Docker daemon. When `DOCKER_HOST` is unset, the Makefile uses the endpoint of the active Docker context, which also covers Colima.
+Integration tests need a running Docker daemon. When `DOCKER_HOST` is unset, the Makefile uses the endpoint of the active Docker context, which also covers Colima.
+
+## Continuous integration
+
+Every pull request to `master` runs:
+
+| Check | What it enforces |
+|---|---|
+| Lint and style | golangci-lint, no comments, tidy modules, hadolint on the Dockerfile |
+| Unit tests | Race detector on the `go.mod` floor and on the latest stable Go |
+| Integration tests | Repositories and transactions against PostgreSQL |
+| govulncheck | Known vulnerabilities in reachable code |
+| Image scan and end-to-end smoke | Trivy on the image, then the compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
+| Dependency review | New dependencies with high-severity advisories |
+| CodeQL | Static security analysis, also weekly |
+
+CodeRabbit reviews every pull request with the rules in `.coderabbit.yaml` and approves it once its findings are resolved. Dependabot keeps Go modules, actions and base images up to date.
 
 ## Endpoints
 

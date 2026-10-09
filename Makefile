@@ -3,8 +3,10 @@ COMPOSE ?= docker compose
 BIN ?= bin/api
 DEV_CONFIG ?= config/config.local.yaml
 SCHEMA := db/init/001_schema.sql
+GOLANGCI_LINT_VERSION ?= v2.14.0
+GOVULNCHECK_VERSION ?= v1.8.0
 
-.PHONY: build run test test-integration lint up up-debug down schema logs
+.PHONY: build run test test-integration coverage lint lint-comments tidy-check vuln up up-debug down schema logs
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/api
@@ -20,10 +22,23 @@ test-integration:
 	TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE="$${TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE:-/var/run/docker.sock}" \
 	$(GO) test -race -tags=integration ./...
 
-lint:
-	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
-	$(GO) vet ./...
-	$(GO) vet -tags=integration ./...
+coverage:
+	$(GO) test -race -covermode=atomic -coverprofile=coverage.out ./...
+	$(GO) tool cover -func=coverage.out | tail -1
+
+lint: lint-comments tidy-check
+	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
+
+lint-comments:
+	@! grep -rnE '(^|[[:space:]])//([[:space:]]|$$)|/[*]' --include='*.go' . || { echo "Go comments are not allowed"; exit 1; }
+	@! grep -rn -- '--' db/init || { echo "SQL comments are not allowed"; exit 1; }
+	@! grep -rnE '^[[:space:]]*#' Makefile Dockerfile .gitignore .dockerignore .golangci.yml .coderabbit.yaml compose*.yaml config deploy .github --include='*' --exclude='*.md' || { echo "# comments are not allowed"; exit 1; }
+
+tidy-check:
+	$(GO) mod tidy -diff
+
+vuln:
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 up:
 	$(COMPOSE) up --build

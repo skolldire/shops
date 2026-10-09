@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/go-viper/mapstructure/v2"
 	"go.yaml.in/yaml/v3"
@@ -16,7 +17,7 @@ type validator interface {
 func Load[T any](ctx context.Context, path string, resolvers Resolvers) (T, error) {
 	var zero, cfg T
 
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return zero, fmt.Errorf("config: read %s: %w", path, err)
 	}

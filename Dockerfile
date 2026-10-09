@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/api /api
 COPY config/config.yaml /etc/shop/config.yaml
-USER nonroot
+USER 65532:65532
 EXPOSE 8080 9100
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 CMD ["/api", "healthcheck"]
 ENTRYPOINT ["/api"]

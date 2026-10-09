@@ -1,0 +1,10 @@
+* @skolldire
+
+/.github/ @skolldire
+/Makefile @skolldire
+/go.mod @skolldire
+/go.sum @skolldire
+/.golangci.yml @skolldire
+/.coderabbit.yaml @skolldire
+/internal/platform/ @skolldire
+/db/ @skolldire

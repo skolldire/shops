@@ -1,0 +1,134 @@
+language: en-US
+
+reviews:
+  profile: assertive
+  review_details: true
+  request_changes_workflow: true
+
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    title:
+      mode: warning
+      requirements: "Start with a gitmoji such as :sparkles:, :bug:, :recycle: or :memo:, followed by an imperative summary in English."
+    description:
+      mode: warning
+    custom_checks:
+      - name: Repository conventions
+        mode: error
+        instructions: |
+          Fail if the change breaks any of these repository rules:
+          - No comments in Go, SQL, YAML, Dockerfile or Makefile files. The //go:build and //go:embed directives are allowed.
+          - The loaded configuration is never logged, and secrets or resolved configuration values never appear in logs, errors or HTTP responses.
+          - Business modules depend on each other only through their public api.go facade, and internal/platform imports no business module.
+          - No foreign keys between tables owned by different modules.
+          - Dependencies are wired manually in cmd/api: no global state, no init functions and no package-level loggers.
+
+  auto_review:
+    enabled: true
+    drafts: false
+
+  path_instructions:
+    - path: "**/*.go"
+      instructions: |
+        Act as a senior Go engineer reviewing production code.
+        Prioritize correctness, security, reliability, and maintainability.
+        Apply these criteria where relevant to the changed code.
+
+        Correctness and error handling:
+        - Identify functional bugs, regressions, nil dereferences,
+          incorrect assumptions, and unhandled edge cases.
+        - Check error propagation, wrapping, and errors.Is/errors.As usage.
+        - Flag ignored errors and panics in normal recoverable error paths.
+        - Verify resource cleanup and partial-failure behavior.
+
+        Idiomatic Go:
+        - Prefer clear, idiomatic Go and useful zero values.
+        - Keep interfaces small and define them near their consumers.
+        - Check pointer/value receiver consistency and mutation semantics.
+        - Avoid unnecessary interfaces, embedding, reflection, and globals.
+        - Follow established repository conventions when they are sound.
+
+        SOLID and separation of concerns:
+        - Identify responsibilities that change for unrelated reasons.
+        - Keep business logic separate from transport and persistence.
+        - Check that dependencies point toward stable business contracts.
+        - Ensure interface implementations honor their documented contracts.
+        - Prefer composition and narrow interfaces.
+        - Recommend dependency injection when it improves testability or
+          isolates external dependencies.
+        - Apply SOLID pragmatically; do not force class-oriented patterns
+          into Go or introduce abstractions without a concrete benefit.
+
+        DRY, KISS, and YAGNI:
+        - Flag duplicated business rules that could diverge.
+        - Distinguish meaningful duplication from coincidentally similar code.
+        - Prefer the simplest implementation that meets current requirements.
+        - Identify unnecessary indirection, speculative extensibility,
+          dead code, and premature optimization.
+        - Suggest extraction only when it improves clarity or consistency.
+
+        Design patterns:
+        - Assess whether existing patterns solve an actual problem.
+        - Suggest patterns only for demonstrated variation, coupling,
+          lifecycle, or testing needs.
+        - Explain the benefit and tradeoff of each proposed pattern.
+        - Avoid pattern-driven rewrites and generic frameworks.
+
+        Concurrency and lifecycle:
+        - Check for data races, goroutine leaks, deadlocks, and unsafe sharing.
+        - Verify channel ownership, closure, cancellation, and backpressure.
+        - Ensure context.Context propagates through blocking operations.
+        - Check bounded concurrency, timeouts, and graceful shutdown.
+        - Review synchronization assumptions and concurrent error handling.
+
+        Security:
+        - Review input validation, authentication, and authorization.
+        - Check injection risks and unsafe handling of paths and URLs.
+        - Flag exposed secrets and sensitive information in logs or errors.
+        - Check trust boundaries and tenant isolation where applicable.
+        - Identify unbounded resource consumption from untrusted inputs.
+
+        APIs, persistence, and external services:
+        - Check API compatibility and appropriate error/status semantics.
+        - Review transaction boundaries, rollback, and data consistency.
+        - Check idempotency, retry safety, and duplicate-request behavior.
+        - Identify missing timeouts and uncontrolled retry loops.
+        - Flag N+1 queries and inefficient operations on demonstrated
+          high-volume paths.
+        - Verify migrations preserve compatibility when relevant.
+
+        Testing:
+        - Identify missing tests for changed behavior, regressions,
+          boundary conditions, and failure paths.
+        - Prefer deterministic tests with meaningful behavioral assertions.
+        - Check whether mocks hide integration or contract failures.
+        - Recommend race or integration tests when the risk warrants them.
+        - Avoid tests that merely duplicate implementation details.
+
+        Observability:
+        - Check that failures provide actionable diagnostic context.
+        - Review logging levels and avoid duplicate or sensitive logs.
+        - Assess metrics and tracing for important failure boundaries.
+        - Flag high-cardinality labels when they can grow without bounds.
+
+        Review quality:
+        - Prioritize actionable findings over cosmetic preferences.
+        - Inspect relevant callers and contracts before claiming a defect.
+        - Explain the trigger, impact, and a concrete fix for each finding.
+        - Clearly distinguish confirmed bugs from potential risks.
+        - State missing context instead of presenting assumptions as facts.
+        - Do not demand broad refactors unrelated to the change.
+        - Avoid repeating findings already reported by automated tools.
+
+    - path: "**/*_test.go"
+      instructions: |
+        Focus on behavioral coverage, readable test cases, isolation,
+        determinism, and useful failure messages.
+        Review happy paths, boundary conditions, and failure scenarios.
+        Check cleanup, parallel-test safety, and timing assumptions.
+        Avoid unnecessary mocking and assertions tied to internal details.
+
+  tools:
+    golangci-lint:
+      enabled: true

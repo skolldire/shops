@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOLANGCI_LINT_VERSION: v2.14.0
+  GOVULNCHECK_VERSION: v1.8.0
+
+jobs:
+  lint:
+    name: Lint and style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --timeout=10m ./...
+      - name: No comments in code and config
+        run: make lint-comments
+      - name: go.mod and go.sum are tidy
+        run: make tidy-check
+      - name: Dockerfile style
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: Dockerfile
+
+  test:
+    name: Unit tests (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.26.x", stable]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Test with race detector and coverage
+        run: make coverage
+      - name: Upload coverage
+        if: matrix.go == 'stable'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Test against PostgreSQL with testcontainers
+        run: make test-integration
+
+  vulncheck:
+    name: Vulnerability scan (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: govulncheck
+        run: make vuln GOVULNCHECK_VERSION=${{ env.GOVULNCHECK_VERSION }}
+
+  container:
+    name: Image scan and end-to-end smoke
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: shops
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build image
+        run: docker compose build app
+      - name: Scan image (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: shops-app:latest
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Start stack
+        run: docker compose up -d --wait --wait-timeout 180
+      - name: Smoke test
+        run: |
+          set -eu
+          ready="$(curl -fsS localhost:8080/health/ready)"
+          test "$ready" = '{"status":"up","checks":{"postgres":"up"}}'
+          test "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' localhost:8080/no-existe)" = "404 application/problem+json"
+          curl -s -D - -o /dev/null -X DELETE localhost:8080/health/live | grep -qi '^allow: GET'
+          test "$(docker compose exec -T db psql -U shop -d shop -tAc "select count(*) from information_schema.tables where table_schema = 'public'")" = "4"
+          password="$(docker compose exec -T db cat /run/secrets/db_password)"
+          if docker inspect shops-app-1 | grep -qF "$password"; then echo "password found in docker inspect"; exit 1; fi
+          if docker compose logs app | grep -qF "$password"; then echo "password found in logs"; exit 1; fi
+      - name: Graceful shutdown
+        run: |
+          set -eu
+          timeout 15 docker compose stop app
+          docker compose logs app | grep -q '"message":"shutdown complete"'
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure

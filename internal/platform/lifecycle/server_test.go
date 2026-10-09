@@ -21,7 +21,7 @@ func freeAddr(t *testing.T) string {
 }
 
 func server(addr, body string) *http.Server {
-	return &http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return &http.Server{Addr: addr, ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, body)
 	})}
 }
@@ -83,7 +83,7 @@ func TestShutdownTimeoutBoundsSlowRequests(t *testing.T) {
 	lc, _ := newLifecycle(t)
 	addr := freeAddr(t)
 	started := make(chan struct{})
-	slow := &http.Server{Addr: addr, Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	slow := &http.Server{Addr: addr, ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		close(started)
 		time.Sleep(5 * time.Second)
 	})}

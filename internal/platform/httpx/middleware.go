@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -19,7 +20,7 @@ func Recover(log logger.Service) func(http.Handler) http.Handler {
 				if v == nil {
 					return
 				}
-				if v == http.ErrAbortHandler {
+				if err, ok := v.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(v)
 				}
 				log.Error(r.Context(), fmt.Errorf("panic recovered: %v", v), map[string]any{
