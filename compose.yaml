@@ -1,0 +1,51 @@
+services:
+  secrets-init:
+    image: alpine:3.20
+    command:
+      - sh
+      - -ec
+      - |
+        if [ ! -s /s/db_password ]; then
+          head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > /s/db_password.tmp
+          chmod 444 /s/db_password.tmp
+          mv /s/db_password.tmp /s/db_password
+        fi
+    volumes:
+      - secrets:/s
+    restart: "no"
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_DB: shop
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    volumes:
+      - secrets:/run/secrets:ro
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "shop", "-d", "shop"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    stop_grace_period: 20s
+    volumes:
+      - secrets:/run/secrets:ro
+      - ./config/config.yaml:/etc/shop/config.yaml:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  secrets:
+  pgdata:
