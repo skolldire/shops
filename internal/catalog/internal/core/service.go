@@ -45,6 +45,16 @@ func (s *Service) Update(ctx context.Context, id string, version int, c Changes)
 	if version < 1 {
 		return Product{}, ErrVersionConflict
 	}
+	if changes.Empty() {
+		current, err := s.repo.Get(ctx, id)
+		if err != nil {
+			return Product{}, err
+		}
+		if current.Version != version {
+			return Product{}, ErrVersionConflict
+		}
+		return current, nil
+	}
 	return s.repo.Update(ctx, id, version, changes)
 }
 

@@ -28,7 +28,7 @@ func (f *fakeRepo) Create(_ context.Context, p core.Product) (core.Product, erro
 
 func (f *fakeRepo) Get(_ context.Context, id string) (core.Product, error) {
 	f.calls = append(f.calls, "get")
-	return core.Product{ID: id}, nil
+	return core.Product{ID: id, Version: 3}, nil
 }
 
 func (f *fakeRepo) Update(_ context.Context, id string, version int, c core.Changes) (core.Product, error) {
@@ -102,6 +102,18 @@ func TestServiceUpdate(t *testing.T) {
 	require.Equal(t, 3, repo.version)
 	require.Equal(t, "Home Audio", *repo.changes.Category)
 	require.Equal(t, 4, p.Version)
+}
+
+func TestServiceEmptyUpdateDoesNotWrite(t *testing.T) {
+	svc, repo := newService(t)
+
+	p, err := svc.Update(t.Context(), validID, 3, core.Changes{})
+	require.NoError(t, err)
+	require.Equal(t, 3, p.Version)
+
+	_, err = svc.Update(t.Context(), validID, 2, core.Changes{})
+	require.ErrorIs(t, err, core.ErrVersionConflict)
+	require.Equal(t, []string{"get", "get"}, repo.calls)
 }
 
 func TestServiceSearchBuildsPage(t *testing.T) {
