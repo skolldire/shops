@@ -151,6 +151,23 @@ func TestDatabase(t *testing.T) {
 		}))
 	})
 
+	t.Run("products schema enforces version and sku constraint", func(t *testing.T) {
+		var version int
+		require.NoError(t, pool.QueryRow(ctx, `INSERT INTO products (sku, name, category, price, stock, weight_kg)
+			VALUES ('VERSION-1', 'v', 'test', 1, 1, 0) RETURNING version`).Scan(&version))
+		require.Equal(t, 1, version)
+
+		_, err := pool.Exec(ctx, `UPDATE products SET version = 0 WHERE sku = 'VERSION-1'`)
+		var pgErr *pgconn.PgError
+		require.ErrorAs(t, err, &pgErr)
+		require.Equal(t, "23514", pgErr.Code)
+
+		err = insertProduct(ctx, pool, "VERSION-1", 1)
+		require.ErrorAs(t, err, &pgErr)
+		require.Equal(t, "23505", pgErr.Code)
+		require.Equal(t, "products_sku_key", pgErr.ConstraintName)
+	})
+
 	t.Run("stock check constraint", func(t *testing.T) {
 		require.NoError(t, insertProduct(ctx, pool, "STOCK-1", 2))
 		_, err := pool.Exec(ctx, `UPDATE products SET stock = stock - 3 WHERE sku = 'STOCK-1'`)

@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE TABLE products (
     id          uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
-    sku         text          NOT NULL UNIQUE,
+    sku         text          NOT NULL,
     name        text          NOT NULL,
     description text          NOT NULL DEFAULT '',
     category    text          NOT NULL,
@@ -12,7 +12,9 @@ CREATE TABLE products (
     status      text          NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'DELETED')),
     created_at  timestamptz   NOT NULL DEFAULT now(),
     updated_at  timestamptz   NOT NULL DEFAULT now(),
-    deleted_at  timestamptz   NULL
+    deleted_at  timestamptz   NULL,
+    version     integer       NOT NULL DEFAULT 1 CHECK (version >= 1),
+    CONSTRAINT products_sku_key UNIQUE (sku)
 );
 
 CREATE INDEX products_status_category_idx ON products (status, category);
