@@ -1,6 +1,6 @@
 services:
   secrets-init:
-    image: alpine:3.20
+    image: alpine:3.24
     command:
       - sh
       - -ec
@@ -15,7 +15,7 @@ services:
     restart: "no"
 
   db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: shop
       POSTGRES_DB: shop
@@ -23,7 +23,7 @@ services:
     volumes:
       - secrets:/run/secrets:ro
       - ./db/init:/docker-entrypoint-initdb.d:ro
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     depends_on:
       secrets-init:
         condition: service_completed_successfully

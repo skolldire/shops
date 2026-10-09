@@ -1,0 +1,16 @@
+name: Docker Hub mirror
+description: Pull Docker Hub images through mirror.gcr.io to avoid anonymous rate limits on shared runners
+runs:
+  using: composite
+  steps:
+    - name: Configure the Docker daemon mirror
+      shell: bash
+      run: |
+        set -euo pipefail
+        config=/etc/docker/daemon.json
+        current='{}'
+        if sudo test -s "$config"; then current="$(sudo cat "$config")"; fi
+        printf '%s' "$current" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$config" >/dev/null
+        sudo systemctl restart docker
+        for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+        docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -q 'mirror.gcr.io'

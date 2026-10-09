@@ -19,7 +19,7 @@ make up
 | Service | Purpose |
 |---|---|
 | `secrets-init` | Generates the database password into a named volume on first run, then exits |
-| `db` | PostgreSQL 16. `db/init/001_schema.sql` is applied when the data volume is created |
+| `db` | PostgreSQL 18. `db/init/001_schema.sql` is applied when the data volume is created |
 | `app` | The store, the admin UI and the API on `http://localhost:8080` |
 
 ```sh

@@ -29,7 +29,7 @@ func Start(t *testing.T) (*pgxpool.Pool, database.Config) {
 	require.True(t, ok)
 	schema := filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "db", "init", "001_schema.sql")
 
-	ctr, err := tcpostgres.Run(ctx, "postgres:16-alpine",
+	ctr, err := tcpostgres.Run(ctx, "postgres:18-alpine",
 		tcpostgres.WithDatabase("shop"),
 		tcpostgres.WithUsername("shop"),
 		tcpostgres.WithPassword(password),
