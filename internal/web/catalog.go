@@ -114,7 +114,7 @@ func (ui *UI) listing(r *http.Request, path string) (listing, error) {
 
 func (ui *UI) listingPage(w http.ResponseWriter, r *http.Request, page string, data listing) {
 	if isPartial(r) {
-		if err := ui.views.render(w, http.StatusOK, page, "results", data); err != nil {
+		if err := ui.views.render(w, http.StatusOK, page, "partial", data); err != nil {
 			ui.serverError(w, r, err)
 		}
 		return

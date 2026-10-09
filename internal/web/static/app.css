@@ -151,6 +151,15 @@ input[type="checkbox"] {
   font-size: 0.9rem;
 }
 
+.field-error:empty {
+  display: none;
+}
+
+.field:has(.field-error:not(:empty)) input,
+.field:has(.field-error:not(:empty)) select {
+  border-color: var(--danger);
+}
+
 .form-card {
   max-width: 640px;
   padding: 1.5rem;

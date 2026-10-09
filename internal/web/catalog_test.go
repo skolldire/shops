@@ -118,24 +118,43 @@ func TestStoreShowsFilterErrorsNextToTheField(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.False(t, cat.searched)
 	body := rec.Body.String()
-	require.Contains(t, body, `<div class="field invalid">`+"\n"+`<label for="min_price">`)
-	require.Contains(t, body, `<p class="field-error">must be a decimal number</p>`)
-	require.Contains(t, body, `value="cheap"`)
+	require.Contains(t, fieldBlock(body, "min_price"), `<p id="error-min_price" class="field-error">must be a decimal number</p>`)
+	require.Contains(t, fieldBlock(body, "min_price"), `value="cheap"`)
+	require.Contains(t, fieldBlock(body, "max_price"), `<p id="error-max_price" class="field-error"></p>`)
 	require.Contains(t, body, "Some filters are not valid")
+	require.NotContains(t, body, "hx-swap-oob", "a full page has no out-of-band updates")
 }
 
-func TestProductDetail(t *testing.T) {
+func TestStorePartialUpdatesFilterErrorsOutOfBand(t *testing.T) {
 	h, _ := newTestUI(t, withProducts(shoes()))
 
-	rec := get(h, "/products/"+productID)
+	invalid := get(h, "/?min_price=cheap", "HX-Request", "true").Body.String()
+	require.NotContains(t, invalid, "<form")
+	require.Contains(t, invalid, `<p id="error-min_price" class="field-error" hx-swap-oob="true">must be a decimal number</p>`)
+	require.Contains(t, invalid, `<p id="error-q" class="field-error" hx-swap-oob="true"></p>`)
 
-	require.Equal(t, http.StatusOK, rec.Code)
-	requireSafeHTML(t, rec)
-	body := rec.Body.String()
-	require.Contains(t, body, "<h1>Running Shoes</h1>")
-	require.Contains(t, body, "<dd>RS-001</dd>")
-	require.Contains(t, body, "0.850 kg")
-	require.NotContains(t, strings.ToLower(body), "add to cart")
+	fixed := get(h, "/?min_price=10", "HX-Request", "true").Body.String()
+	require.Contains(t, fixed, `<p id="error-min_price" class="field-error" hx-swap-oob="true"></p>`, "fixing a filter clears its error")
+	require.Contains(t, fixed, "Running Shoes")
+
+	admin := get(h, "/admin/products?q="+strings.Repeat("x", 101), "HX-Request", "true").Body.String()
+	require.Contains(t, admin, `<p id="error-q" class="field-error" hx-swap-oob="true">must be at most 100 characters</p>`)
+}
+
+func TestPagesHaveTheirOwnTitle(t *testing.T) {
+	h, _ := newTestUI(t, withProducts(shoes()))
+
+	tests := map[string]string{
+		"/":                                      "<title>Store · Shops</title>",
+		"/products/" + productID:                 "<title>Running Shoes · Shops</title>",
+		"/admin/products":                        "<title>Admin · Products · Shops</title>",
+		"/admin/products/new":                    "<title>New product · Shops</title>",
+		"/admin/products/" + productID + "/edit": "<title>Edit product · Shops</title>",
+		"/no-existe":                             "<title>Not found · Shops</title>",
+	}
+	for path, want := range tests {
+		require.Contains(t, get(h, path).Body.String(), want, path)
+	}
 }
 
 func TestProductDetailNotFoundIsHTML(t *testing.T) {

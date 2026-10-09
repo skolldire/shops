@@ -95,6 +95,11 @@ func (ui *UI) updateProduct(w http.ResponseWriter, r *http.Request) {
 	}
 	version := formVersion(r)
 	price, stock, weight, formatErrs := parseNumbers(values)
+	for field, raw := range map[string]string{"price": values.Price, "stock": values.Stock, "weight_kg": values.WeightKg} {
+		if strings.TrimSpace(raw) == "" {
+			formatErrs[field] = "is required"
+		}
+	}
 	if len(formatErrs) > 0 {
 		ui.page(w, r, http.StatusUnprocessableEntity, "admin_form", editProductForm(id, version, values, formatErrs, false))
 		return

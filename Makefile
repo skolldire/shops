@@ -30,15 +30,17 @@ lint: lint-comments lint-arch tidy-check
 	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 
 lint-comments:
-	@! grep -rnE '(^|[[:space:]])(//([[:space:]]|$$)|/[*])' --include='*.go' . || { echo "Go comments are not allowed"; exit 1; }
+	@$(GO) run ./internal/tools/nocomments
 	@! grep -rn -- '--' db/init || { echo "SQL comments are not allowed"; exit 1; }
 	@! grep -rnE '^[[:space:]]*#' Makefile Dockerfile .gitignore .dockerignore .golangci.yml .coderabbit.yaml osv-scanner.toml compose*.yaml config deploy .github --include='*' --exclude='*.md' || { echo "# comments are not allowed"; exit 1; }
 	@! grep -rn '<!--' --include='*.html' internal || { echo "HTML comments are not allowed"; exit 1; }
 	@! grep -rn '/[*]' --include='*.css' internal || { echo "CSS comments are not allowed"; exit 1; }
 
 lint-arch:
-	@! $(GO) list -deps ./internal/catalog/internal/core | grep -E '^(github.com/jackc/pgx|net/http$$|github.com/go-chi|go.opentelemetry.io|github.com/skolldire/shops/internal/platform/(httpx|telemetry|database))' || { echo "catalog core must not depend on transport, persistence or telemetry"; exit 1; }
-	@! $(GO) list -deps ./internal/platform/... | grep -E '^github.com/skolldire/shops/internal/(catalog|web|ordering|payment)' || { echo "platform must not depend on business modules"; exit 1; }
+	@deps="$$($(GO) list -deps ./internal/catalog/internal/core)" || { echo "go list failed for catalog core"; exit 1; }; \
+	! printf '%s\n' "$$deps" | grep -E '^(github.com/jackc/pgx|net/http$$|database/sql$$|github.com/go-chi|go.opentelemetry.io|github.com/skolldire/shops/internal/platform/(httpx|telemetry|database))' || { echo "catalog core must not depend on transport, persistence or telemetry"; exit 1; }
+	@deps="$$($(GO) list -deps ./internal/platform/...)" || { echo "go list failed for platform"; exit 1; }; \
+	! printf '%s\n' "$$deps" | grep -E '^github.com/skolldire/shops/internal/(catalog|web|ordering|payment)' || { echo "platform must not depend on business modules"; exit 1; }
 
 tidy-check:
 	$(GO) mod tidy -diff

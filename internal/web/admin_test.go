@@ -148,6 +148,25 @@ func TestEditProduct(t *testing.T) {
 	require.EqualValues(t, 10, *cat.updated.Stock)
 }
 
+func TestEditProductRequiresNumbers(t *testing.T) {
+	cat := withProducts(shoes())
+	h, _ := newTestUI(t, cat)
+	values := validForm()
+	values.Set("version", "2")
+	values.Set("price", "  ")
+	values.Set("stock", "")
+	values.Set("weight_kg", "")
+
+	rec := post(h, "/admin/products/"+productID, values)
+
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	body := rec.Body.String()
+	for _, field := range []string{"price", "stock", "weight_kg"} {
+		require.Contains(t, fieldBlock(body, field), "is required", field)
+	}
+	require.Zero(t, cat.updated.Version, "a blank field must not be silently skipped")
+}
+
 func TestEditProductVersionConflict(t *testing.T) {
 	cat := withProducts(shoes())
 	cat.writeErr = catalog.ErrVersionConflict

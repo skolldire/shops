@@ -139,6 +139,12 @@ func TestNewProductReportsEveryError(t *testing.T) {
 	}, fieldCodes(t, err))
 }
 
+func TestChangesEmpty(t *testing.T) {
+	require.True(t, core.Changes{}.Empty())
+	require.False(t, core.Changes{SKU: str("X")}.Empty())
+	require.False(t, core.Changes{Stock: i64(0)}.Empty())
+}
+
 func TestValidateChanges(t *testing.T) {
 	changes, err := core.ValidateChanges(core.Changes{Name: str("  New name "), Category: str(" Home  Audio "), Stock: i64(0)})
 	require.NoError(t, err)

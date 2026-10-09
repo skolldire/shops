@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"net/url"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ const (
 	maxQueryLength  = 100
 	defaultPageSize = 20
 	maxPageSize     = 100
+	maxPage         = 100000
 )
 
 type SortField string
@@ -98,7 +100,8 @@ func newSearch(in SearchInput, errs validation.Errors) (Search, error) {
 	}
 	checkBound(&errs, "min_price", s.MinPrice)
 	checkBound(&errs, "max_price", s.MaxPrice)
-	if s.MinPrice != nil && s.MaxPrice != nil && !s.MinPrice.IsNegative() && s.MinPrice.GreaterThan(*s.MaxPrice) {
+	if s.MinPrice != nil && s.MaxPrice != nil && !s.MinPrice.IsNegative() && !s.MinPrice.GreaterThan(maxPrice) &&
+		s.MinPrice.GreaterThan(*s.MaxPrice) {
 		errs.Add("min_price", validation.CodeOutOfRange, "must not be greater than max_price")
 	}
 	s.Sort, s.Descending = parseSort(&errs, in.Sort)
@@ -106,8 +109,8 @@ func newSearch(in SearchInput, errs validation.Errors) (Search, error) {
 	switch {
 	case s.Page == 0:
 		s.Page = 1
-	case s.Page < 0:
-		errs.Add("page", validation.CodeOutOfRange, "must be at least 1")
+	case s.Page < 0 || s.Page > maxPage:
+		errs.Add("page", validation.CodeOutOfRange, "must be between 1 and 100000")
 	}
 	switch {
 	case s.PageSize == 0:
@@ -151,8 +154,12 @@ func parsePositive(errs *validation.Errors, field, raw string) int {
 	if raw == "" {
 		return 0
 	}
-	n, err := strconv.Atoi(raw)
+	n, err := strconv.ParseInt(raw, 10, 32)
+	var numErr *strconv.NumError
 	switch {
+	case errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange):
+		errs.Add(field, validation.CodeOutOfRange, "is too large")
+		return 1
 	case err != nil:
 		errs.Add(field, validation.CodeInvalidFormat, "must be an integer")
 		return 1
@@ -160,11 +167,15 @@ func parsePositive(errs *validation.Errors, field, raw string) int {
 		errs.Add(field, validation.CodeOutOfRange, "must be at least 1")
 		return 1
 	}
-	return n
+	return int(n)
 }
 
 func checkBound(errs *validation.Errors, field string, d *decimal.Decimal) {
-	if d != nil && d.IsNegative() {
+	switch {
+	case d == nil:
+	case d.IsNegative():
 		errs.Add(field, validation.CodeOutOfRange, "must not be negative")
+	case d.GreaterThan(maxPrice):
+		errs.Add(field, validation.CodeOutOfRange, "must be at most 9999999999.99")
 	}
 }

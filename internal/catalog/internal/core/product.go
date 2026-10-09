@@ -62,7 +62,7 @@ type Changes struct {
 }
 
 func (c Changes) Empty() bool {
-	return c.Name == nil && c.Description == nil && c.Category == nil &&
+	return c.SKU == nil && c.Name == nil && c.Description == nil && c.Category == nil &&
 		c.Price == nil && c.Stock == nil && c.WeightKg == nil
 }
 

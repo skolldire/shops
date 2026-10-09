@@ -74,6 +74,11 @@ func TestParseSearchErrors(t *testing.T) {
 		"page zero":           {url.Values{"page": {"0"}}, "page", "out_of_range"},
 		"page size zero":      {url.Values{"page_size": {"0"}}, "page_size", "out_of_range"},
 		"page size above 100": {url.Values{"page_size": {"101"}}, "page_size", "out_of_range"},
+		"page beyond int64":   {url.Values{"page": {"9223372036854775807"}}, "page", "out_of_range"},
+		"page above maximum":  {url.Values{"page": {"100001"}}, "page", "out_of_range"},
+		"min price too large": {url.Values{"min_price": {"10000000000"}}, "min_price", "out_of_range"},
+		"max price too large": {url.Values{"max_price": {"1e1000"}}, "max_price", "out_of_range"},
+		"huge min above max":  {url.Values{"min_price": {"1e20"}, "max_price": {"10"}}, "min_price", "out_of_range"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -99,4 +104,11 @@ func TestNewSearchUsesDefaultsForZeroValues(t *testing.T) {
 
 	_, err = core.NewSearch(core.SearchInput{Page: -1, PageSize: 101})
 	require.Equal(t, map[string]string{"page": "out_of_range", "page_size": "out_of_range"}, fieldCodes(t, err))
+
+	_, err = core.NewSearch(core.SearchInput{Page: 100001})
+	require.Equal(t, map[string]string{"page": "out_of_range"}, fieldCodes(t, err))
+
+	s, err = core.NewSearch(core.SearchInput{Page: 100000, PageSize: 100})
+	require.NoError(t, err)
+	require.Equal(t, 9999900, s.Offset())
 }

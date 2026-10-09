@@ -6,10 +6,10 @@
 <form class="filters" action="/" method="get" role="search"
       hx-get="/" hx-target="#results" hx-push-url="true"
       hx-trigger="submit, change, input changed delay:300ms from:#q">
-<div class="field{{if .Errors.q}} invalid{{end}}">
+<div class="field">
 <label for="q">Search</label>
 <input id="q" name="q" type="search" value="{{.Filters.Q}}" maxlength="100" placeholder="Name, SKU or description">
-{{with .Errors.q}}<p class="field-error">{{.}}</p>{{end}}
+<p id="error-q" class="field-error">{{.Errors.q}}</p>
 </div>
 <div class="field">
 <label for="category">Category</label>
@@ -18,22 +18,22 @@
 {{range .Categories}}<option value="{{.}}"{{if eq . $.Filters.Category}} selected{{end}}>{{.}}</option>{{end}}
 </select>
 </div>
-<div class="field{{if .Errors.min_price}} invalid{{end}}">
+<div class="field">
 <label for="min_price">Min price</label>
 <input id="min_price" name="min_price" type="text" inputmode="decimal" value="{{.Filters.MinPrice}}">
-{{with .Errors.min_price}}<p class="field-error">{{.}}</p>{{end}}
+<p id="error-min_price" class="field-error">{{.Errors.min_price}}</p>
 </div>
-<div class="field{{if .Errors.max_price}} invalid{{end}}">
+<div class="field">
 <label for="max_price">Max price</label>
 <input id="max_price" name="max_price" type="text" inputmode="decimal" value="{{.Filters.MaxPrice}}">
-{{with .Errors.max_price}}<p class="field-error">{{.}}</p>{{end}}
+<p id="error-max_price" class="field-error">{{.Errors.max_price}}</p>
 </div>
-<div class="field{{if .Errors.sort}} invalid{{end}}">
+<div class="field">
 <label for="sort">Sort by</label>
 <select id="sort" name="sort">
 {{range .SortOptions}}<option value="{{.Value}}"{{if eq .Value $.Filters.Sort}} selected{{end}}>{{.Label}}</option>{{end}}
 </select>
-{{with .Errors.sort}}<p class="field-error">{{.}}</p>{{end}}
+<p id="error-sort" class="field-error">{{.Errors.sort}}</p>
 </div>
 <div class="field checkbox">
 <input id="in_stock" name="in_stock" type="checkbox" value="true"{{if .Filters.InStock}} checked{{end}}>
@@ -67,4 +67,11 @@
 {{else}}
 <p class="results-summary">No products match your search.</p>
 {{end}}
+{{end}}
+{{define "partial"}}
+{{template "results" .}}
+<p id="error-q" class="field-error" hx-swap-oob="true">{{.Errors.q}}</p>
+<p id="error-min_price" class="field-error" hx-swap-oob="true">{{.Errors.min_price}}</p>
+<p id="error-max_price" class="field-error" hx-swap-oob="true">{{.Errors.max_price}}</p>
+<p id="error-sort" class="field-error" hx-swap-oob="true">{{.Errors.sort}}</p>
 {{end}}

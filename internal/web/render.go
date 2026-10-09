@@ -38,7 +38,7 @@ func newRenderer() (*renderer, error) {
 	}
 	r := &renderer{pages: make(map[string]*template.Template, len(pages))}
 	for _, page := range pages {
-		files := append([]string{page}, partials...)
+		files := append(append([]string{}, partials...), page)
 		t, err := template.New("").Funcs(funcs).ParseFS(templateFS, files...)
 		if err != nil {
 			return nil, fmt.Errorf("web: parse %s: %w", page, err)
