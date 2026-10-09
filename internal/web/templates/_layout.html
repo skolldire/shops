@@ -1,0 +1,23 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false}'>
+<title>{{block "title" .}}Shops{{end}} · Shops</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="site-header">
+<a class="brand" href="/">Shops</a>
+<nav>
+<a href="/">Store</a>
+<a href="/admin/products">Admin</a>
+</nav>
+</header>
+<main class="container">
+{{block "content" .}}{{end}}
+</main>
+</body>
+</html>{{end}}

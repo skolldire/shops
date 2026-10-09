@@ -6,7 +6,7 @@ SCHEMA := db/init/001_schema.sql
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION ?= v1.8.0
 
-.PHONY: build run test test-integration coverage lint lint-comments tidy-check vuln up up-debug down schema logs
+.PHONY: build run test test-integration coverage lint lint-comments lint-arch tidy-check vuln up up-debug down schema logs
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/api
@@ -26,13 +26,19 @@ coverage:
 	$(GO) test -race -covermode=atomic -coverprofile=coverage.out ./...
 	$(GO) tool cover -func=coverage.out | tail -1
 
-lint: lint-comments tidy-check
+lint: lint-comments lint-arch tidy-check
 	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 
 lint-comments:
-	@! grep -rnE '(^|[[:space:]])//([[:space:]]|$$)|/[*]' --include='*.go' . || { echo "Go comments are not allowed"; exit 1; }
+	@! grep -rnE '(^|[[:space:]])(//([[:space:]]|$$)|/[*])' --include='*.go' . || { echo "Go comments are not allowed"; exit 1; }
 	@! grep -rn -- '--' db/init || { echo "SQL comments are not allowed"; exit 1; }
 	@! grep -rnE '^[[:space:]]*#' Makefile Dockerfile .gitignore .dockerignore .golangci.yml .coderabbit.yaml osv-scanner.toml compose*.yaml config deploy .github --include='*' --exclude='*.md' || { echo "# comments are not allowed"; exit 1; }
+	@! grep -rn '<!--' --include='*.html' internal || { echo "HTML comments are not allowed"; exit 1; }
+	@! grep -rn '/[*]' --include='*.css' internal || { echo "CSS comments are not allowed"; exit 1; }
+
+lint-arch:
+	@! $(GO) list -deps ./internal/catalog/internal/core | grep -E '^(github.com/jackc/pgx|net/http$$|github.com/go-chi|go.opentelemetry.io|github.com/skolldire/shops/internal/platform/(httpx|telemetry|database))' || { echo "catalog core must not depend on transport, persistence or telemetry"; exit 1; }
+	@! $(GO) list -deps ./internal/platform/... | grep -E '^github.com/skolldire/shops/internal/(catalog|web|ordering|payment)' || { echo "platform must not depend on business modules"; exit 1; }
 
 tidy-check:
 	$(GO) mod tidy -diff

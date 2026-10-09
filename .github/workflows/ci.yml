@@ -34,6 +34,8 @@ jobs:
           args: --timeout=10m ./...
       - name: No comments in code and config
         run: make lint-comments
+      - name: Module boundaries
+        run: make lint-arch
       - name: go.mod and go.sum are tidy
         run: make tidy-check
       - name: Dockerfile style
