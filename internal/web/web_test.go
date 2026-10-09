@@ -19,6 +19,7 @@ type fakeCatalog struct {
 	products   map[string]catalog.Product
 	categories []string
 	err        error
+	writeErr   error
 	total      int
 	searched   bool
 	query      catalog.SearchQuery
@@ -53,17 +54,17 @@ func (f *fakeCatalog) Get(_ context.Context, id string) (catalog.Product, error)
 
 func (f *fakeCatalog) Create(_ context.Context, in catalog.CreateInput) (catalog.Product, error) {
 	f.created = in
-	return catalog.Product{ID: "new-id", SKU: in.SKU}, f.err
+	return catalog.Product{ID: "new-id", SKU: in.SKU}, f.writeErr
 }
 
 func (f *fakeCatalog) Update(_ context.Context, id string, in catalog.UpdateInput) (catalog.Product, error) {
 	f.updated = in
-	return catalog.Product{ID: id}, f.err
+	return catalog.Product{ID: id}, f.writeErr
 }
 
 func (f *fakeCatalog) Delete(_ context.Context, _ string, version int) error {
 	f.deleted = version
-	return f.err
+	return f.writeErr
 }
 
 func (f *fakeCatalog) Categories(context.Context) ([]string, error) {

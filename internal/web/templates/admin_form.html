@@ -1,0 +1,56 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}
+<p><a href="/admin/products">← Back to products</a></p>
+<h1>{{.Title}}</h1>
+{{if .Conflict}}
+<div class="notice warning" role="alert">
+<p>This product was changed by someone else after you opened it, so your changes were not saved.</p>
+<p><a class="button secondary" href="/admin/products/{{.ID}}/edit">Reload the latest version</a></p>
+</div>
+{{end}}
+{{if .Errors}}<p class="notice error" role="alert">Please fix the highlighted fields.</p>{{end}}
+<form class="form-card" action="{{.Action}}" method="post" novalidate>
+{{if .Editing}}<input type="hidden" name="version" value="{{.Version}}">{{end}}
+<div class="field{{if .Errors.sku}} invalid{{end}}">
+<label for="sku">SKU</label>
+<input id="sku" name="sku" value="{{.Values.SKU}}" maxlength="64"{{if .Editing}} readonly{{else}} required{{end}}>
+{{with .Errors.sku}}<p class="field-error">{{.}}</p>{{end}}
+</div>
+<div class="field{{if .Errors.name}} invalid{{end}}">
+<label for="name">Name</label>
+<input id="name" name="name" value="{{.Values.Name}}" maxlength="200" required>
+{{with .Errors.name}}<p class="field-error">{{.}}</p>{{end}}
+</div>
+<div class="field{{if .Errors.description}} invalid{{end}}">
+<label for="description">Description</label>
+<textarea id="description" name="description" rows="4" maxlength="2000">{{.Values.Description}}</textarea>
+{{with .Errors.description}}<p class="field-error">{{.}}</p>{{end}}
+</div>
+<div class="field{{if .Errors.category}} invalid{{end}}">
+<label for="category">Category</label>
+<input id="category" name="category" value="{{.Values.Category}}" maxlength="100" required>
+{{with .Errors.category}}<p class="field-error">{{.}}</p>{{end}}
+</div>
+<div class="form-grid">
+<div class="field{{if .Errors.price}} invalid{{end}}">
+<label for="price">Price (USD)</label>
+<input id="price" name="price" value="{{.Values.Price}}" inputmode="decimal" required>
+{{with .Errors.price}}<p class="field-error">{{.}}</p>{{end}}
+</div>
+<div class="field{{if .Errors.stock}} invalid{{end}}">
+<label for="stock">Stock</label>
+<input id="stock" name="stock" value="{{.Values.Stock}}" inputmode="numeric" required>
+{{with .Errors.stock}}<p class="field-error">{{.}}</p>{{end}}
+</div>
+<div class="field{{if .Errors.weight_kg}} invalid{{end}}">
+<label for="weight_kg">Weight (kg)</label>
+<input id="weight_kg" name="weight_kg" value="{{.Values.WeightKg}}" inputmode="decimal" required>
+{{with .Errors.weight_kg}}<p class="field-error">{{.}}</p>{{end}}
+</div>
+</div>
+<div class="actions">
+<button type="submit">{{.Submit}}</button>
+<a class="button secondary" href="/admin/products">Cancel</a>
+</div>
+</form>
+{{end}}

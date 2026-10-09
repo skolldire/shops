@@ -1,0 +1,52 @@
+{{define "title"}}Admin · Products{{end}}
+{{define "content"}}
+<div class="page-header">
+<h1>Manage products</h1>
+<a class="button" href="/admin/products/new">New product</a>
+</div>
+{{with .Notice}}<p class="notice" role="status">{{.}}</p>{{end}}
+<form class="filters" action="/admin/products" method="get" role="search"
+      hx-get="/admin/products" hx-target="#results" hx-push-url="true"
+      hx-trigger="submit, input changed delay:300ms from:#q">
+<div class="field{{if .Errors.q}} invalid{{end}}">
+<label for="q">Search</label>
+<input id="q" name="q" type="search" value="{{.Filters.Q}}" maxlength="100" placeholder="Name, SKU or description">
+{{with .Errors.q}}<p class="field-error">{{.}}</p>{{end}}
+</div>
+<div class="field">
+<button type="submit">Search</button>
+</div>
+</form>
+<div id="results" class="results-area">
+{{template "results" .}}
+</div>
+{{end}}
+{{define "results"}}
+{{if .Errors}}
+<p class="notice error">Some filters are not valid.</p>
+{{else if .Page.Items}}
+<p class="results-summary">Showing {{.First}}–{{.Last}} of {{.Page.Total}} products</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>SKU</th><th>Name</th><th class="optional">Category</th><th class="numeric">Price</th><th class="numeric">Stock</th><th>Actions</th></tr>
+</thead>
+<tbody>
+{{range .Page.Items}}
+<tr>
+<td>{{.SKU}}</td>
+<td><a href="/products/{{.ID}}">{{.Name}}</a></td>
+<td class="optional">{{.Category}}</td>
+<td class="numeric">${{money .Price}}</td>
+<td class="numeric">{{.Stock}}</td>
+<td class="actions"><a href="/admin/products/{{.ID}}/edit">Edit</a> <a href="/admin/products/{{.ID}}/delete">Delete</a></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{template "pagination" .}}
+{{else}}
+<p class="results-summary">No products found.</p>
+{{end}}
+{{end}}

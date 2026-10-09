@@ -70,6 +70,15 @@ func (ui *UI) Routes() http.Handler {
 	r.Handle("/static/*", ui.static)
 	r.Get("/", ui.store)
 	r.Get("/products/{id}", ui.product)
+	r.Route(adminProducts, func(r chi.Router) {
+		r.Get("/", ui.adminList)
+		r.Post("/", ui.createProduct)
+		r.Get("/new", ui.newProduct)
+		r.Get("/{id}/edit", ui.editProduct)
+		r.Post("/{id}", ui.updateProduct)
+		r.Get("/{id}/delete", ui.confirmDelete)
+		r.Post("/{id}/delete", ui.deleteProduct)
+	})
 	return r
 }
 
