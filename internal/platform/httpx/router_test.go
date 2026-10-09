@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -90,4 +92,31 @@ func TestRouterNamesSpanAfterRoute(t *testing.T) {
 	require.Len(t, spans, 1)
 	require.Equal(t, "GET /api/v1/products/{id}", spans[0].Name)
 	require.Contains(t, spans[0].Attributes, attribute.String("http.route", "/api/v1/products/{id}"))
+}
+
+func TestRouterLabelsMetricsWithRoute(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	r, _ := newTestRouter(t)
+	h := otelhttp.NewHandler(r, "http.server", otelhttp.WithMeterProvider(mp))
+
+	serve(h, http.MethodGet, "/api/v1/products/42")
+	serve(h, http.MethodGet, "/api/v1/products/43")
+	serve(h, http.MethodGet, "/no-existe")
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+	routes := map[string]uint64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "http.server.request.duration" {
+				continue
+			}
+			for _, dp := range m.Data.(metricdata.Histogram[float64]).DataPoints {
+				route, _ := dp.Attributes.Value("http.route")
+				routes[route.AsString()] += dp.Count
+			}
+		}
+	}
+	require.Equal(t, map[string]uint64{"/api/v1/products/{id}": 2, "": 1}, routes)
 }

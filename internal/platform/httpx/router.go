@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
@@ -18,7 +19,7 @@ var standardMethods = []string{
 
 func NewRouter(log logger.Service) *chi.Mux {
 	r := chi.NewRouter()
-	r.Use(RequestID, Recover(log), Logging(log), nameSpanAfterRoute)
+	r.Use(RequestID, Recover(log), Logging(log), annotateRoute)
 	r.NotFound(notFound)
 	r.MethodNotAllowed(methodNotAllowed(r))
 	return r
@@ -49,13 +50,19 @@ func methodNotAllowed(root *chi.Mux) http.HandlerFunc {
 	}
 }
 
-func nameSpanAfterRoute(next http.Handler) http.Handler {
+func annotateRoute(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
-		if pattern := routePattern(r); pattern != "" {
-			span := trace.SpanFromContext(r.Context())
-			span.SetName(r.Method + " " + pattern)
-			span.SetAttributes(semconv.HTTPRoute(pattern))
+		pattern := routePattern(r)
+		if pattern == "" {
+			return
+		}
+		route := semconv.HTTPRoute(pattern)
+		span := trace.SpanFromContext(r.Context())
+		span.SetName(r.Method + " " + pattern)
+		span.SetAttributes(route)
+		if labeler, ok := otelhttp.LabelerFromContext(r.Context()); ok {
+			labeler.Add(route)
 		}
 	})
 }

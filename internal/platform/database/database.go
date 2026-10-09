@@ -37,7 +37,7 @@ func Open(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("database: ping: %w", err)
+		return nil, safeError("ping", err)
 	}
 	return pool, nil
 }

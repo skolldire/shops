@@ -81,6 +81,17 @@ func TestDatabase(t *testing.T) {
 		require.Equal(t, 4, n)
 	})
 
+	t.Run("wrong password hides connection details", func(t *testing.T) {
+		cfg := database.Config{
+			Host: pool.Config().ConnConfig.Host, Port: int(pool.Config().ConnConfig.Port), Name: "shop", User: "shop",
+			Password: secret.New("wrong-password"), SSLMode: "disable", MaxConns: 1, ConnectTimeout: 10 * time.Second,
+		}
+		_, err := database.Open(ctx, cfg)
+		require.EqualError(t, err, "database: ping: authentication failed (SQLSTATE 28P01)")
+		var pgErr *pgconn.PgError
+		require.ErrorAs(t, err, &pgErr)
+	})
+
 	t.Run("checker", func(t *testing.T) {
 		c, err := database.NewChecker(pool)
 		require.NoError(t, err)

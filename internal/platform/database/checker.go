@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -21,7 +20,7 @@ func NewChecker(pool *pgxpool.Pool) (*Checker, error) {
 
 func (c *Checker) Check(ctx context.Context) error {
 	if err := c.pool.Ping(ctx); err != nil {
-		return fmt.Errorf("database: ping: %w", err)
+		return safeError("ping", err)
 	}
 	return nil
 }
