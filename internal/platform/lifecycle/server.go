@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -48,12 +49,16 @@ func (l *Lifecycle) shutdown(parent context.Context, timeout time.Duration, serv
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
 	defer cancel()
 
-	var errs []error
-	for _, srv := range servers {
-		if err := srv.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("lifecycle: shutdown %s: %w", srv.Addr, err))
-		}
+	errs := make([]error, len(servers), len(servers)+1)
+	var wg sync.WaitGroup
+	for i, srv := range servers {
+		wg.Go(func() {
+			if err := srv.Shutdown(ctx); err != nil {
+				errs[i] = fmt.Errorf("lifecycle: shutdown %s: %w", srv.Addr, err)
+			}
+		})
 	}
+	wg.Wait()
 	errs = append(errs, l.Close(ctx))
 	err := errors.Join(errs...)
 	if err == nil {

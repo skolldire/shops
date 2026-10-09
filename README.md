@@ -101,11 +101,11 @@ A value can be a literal or exactly one placeholder:
 | `${VAR:-default}` | Environment variable, or `default` |
 | `${file:/path}` | File contents without the trailing newline |
 
-Secret fields (the database password) must be a placeholder. Unknown keys, invalid values and every failed check are reported together, with the YAML path and without the resolved value.
+Secret fields (the database password) must be a placeholder without a default, so a password can never be written in the file. Unknown keys, invalid values and every failed check are reported together, with the YAML path and without the resolved value.
 
 | Variable | Default in `config.yaml` |
 |---|---|
-| `HTTP_ADDR` | `:8080` |
+| `HTTP_ADDR` | `:8080`. The container healthcheck (`/api healthcheck`) probes `/health/live` on this address, or on the URL given with `-url` |
 | `METRICS_ADDR` | `:9100` |
 | `DB_HOST` / `DB_PORT` | `db` / `5432` |
 | `LOG_LEVEL` | `info` |

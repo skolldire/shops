@@ -16,6 +16,11 @@ func isPlaceholder(value string) bool {
 	return strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}")
 }
 
+func hasDefault(value string) bool {
+	m := placeholderPattern.FindStringSubmatch(value)
+	return m != nil && m[2] != ""
+}
+
 func resolve(ctx context.Context, value string, resolvers Resolvers) (string, error) {
 	if !isPlaceholder(value) {
 		return value, nil

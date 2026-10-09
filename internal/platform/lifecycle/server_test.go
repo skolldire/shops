@@ -110,3 +110,36 @@ func TestShutdownTimeoutBoundsSlowRequests(t *testing.T) {
 	require.ErrorIs(t, <-done, context.DeadlineExceeded)
 	require.Less(t, time.Since(start), 2*time.Second)
 }
+
+func TestShutdownStopsAllServersTogether(t *testing.T) {
+	lc, _ := newLifecycle(t)
+	apiAddr, metricsAddr := freeAddr(t), freeAddr(t)
+	inFlight := make(chan struct{}, 2)
+	slow := func(addr string) *http.Server {
+		return &http.Server{Addr: addr, ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/slow" {
+				inFlight <- struct{}{}
+				time.Sleep(2 * time.Second)
+			}
+		})}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- lc.Serve(ctx, 500*time.Millisecond, slow(apiAddr), slow(metricsAddr)) }()
+	for _, addr := range []string{apiAddr, metricsAddr} {
+		get(t, addr)
+		go func() { _, _ = http.Get("http://" + addr + "/slow") }()
+	}
+	<-inFlight
+	<-inFlight
+
+	start := time.Now()
+	cancel()
+	require.Eventually(t, func() bool {
+		_, err := net.DialTimeout("tcp", metricsAddr, 50*time.Millisecond)
+		return err != nil
+	}, 200*time.Millisecond, 10*time.Millisecond, "metrics server kept accepting connections while the API drained")
+
+	require.ErrorIs(t, <-done, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 900*time.Millisecond)
+}

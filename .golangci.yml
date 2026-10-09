@@ -28,6 +28,9 @@ linters:
         text: "(G101|G104|G304|G115)"
       - path: "_test\\.go"
         linters: [errorlint, noctx, bodyclose]
+      - path: "cmd/api/healthcheck\\.go"
+        linters: [gosec]
+        text: "G704"
 
 formatters:
   enable:

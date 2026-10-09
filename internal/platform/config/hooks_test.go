@@ -53,6 +53,12 @@ func TestPlaceholderHookSecretRules(t *testing.T) {
 		require.ErrorContains(t, err, "'password' secret values must come from a placeholder", value)
 	}
 
+	for _, value := range []string{"${DB_PASSWORD:-hunter2}", "${DB_PASSWORD:-}"} {
+		_, err := decodeWithPlaceholders(map[string]any{"password": value})
+		require.ErrorContains(t, err, "'password' secret placeholders cannot have a default", value)
+		require.NotContains(t, err.Error(), "hunter2", value)
+	}
+
 	_, err := decodeWithPlaceholders(map[string]any{"password": "${MISSING}"})
 	require.ErrorContains(t, err, "${MISSING} is not set")
 }

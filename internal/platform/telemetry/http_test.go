@@ -39,3 +39,27 @@ func TestHTTPMiddleware(t *testing.T) {
 func TestTraceFieldsWithoutSpan(t *testing.T) {
 	require.Empty(t, TraceFields(context.Background()))
 }
+
+func TestHTTPMetricsIgnoreClientHost(t *testing.T) {
+	p, _ := newTestProvider(t, nil)
+	h := p.HTTPMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for _, host := range []string{"a.example", "b.example:8443", "c.example:65000"} {
+		req := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+		req.Host = host
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	for _, method := range []string{"BREW", "PROPFIND-X"} {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, "/health/live", nil))
+	}
+
+	body := scrape(t, p)
+	require.Contains(t, body, `http_request_method="_OTHER"`)
+	for _, leak := range []string{"a.example", "b.example", "c.example", "8443", "65000", "server_address", "server_port", "BREW", "PROPFIND"} {
+		require.NotContains(t, body, leak)
+	}
+	require.Contains(t, body, `http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="204",network_protocol_name="http",network_protocol_version="1.1",url_scheme="http"} 3`)
+}

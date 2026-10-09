@@ -41,6 +41,13 @@ func TestLoadSecretFromFile(t *testing.T) {
 	require.Equal(t, leaked, cfg.Database.Password.Reveal())
 }
 
+func TestLoadRejectsSecretDefaults(t *testing.T) {
+	_, err := loadDB(t, "database:\n  password: ${DB_PASSWORD:-hunter2}\n")
+
+	require.ErrorContains(t, err, "'database.password' secret placeholders cannot have a default")
+	require.NotContains(t, err.Error(), "hunter2")
+}
+
 func TestLoadErrors(t *testing.T) {
 	tests := map[string]string{
 		"database:\n  host: db\n  bogus: 1\n": "'database' has invalid keys: bogus",

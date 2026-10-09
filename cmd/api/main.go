@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,20 +22,36 @@ import (
 const defaultConfigPath = "/etc/shop/config.yaml"
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if err := run(os.Args[1:], os.Stdout); err != nil {
+		report(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
-		return runHealthcheck(os.Args[2:])
+type loggedError struct {
+	err error
+}
+
+func (e *loggedError) Error() string { return e.err.Error() }
+
+func (e *loggedError) Unwrap() error { return e.err }
+
+func report(w io.Writer, err error) {
+	var logged *loggedError
+	if errors.As(err, &logged) {
+		return
+	}
+	_, _ = fmt.Fprintln(w, err)
+}
+
+func run(args []string, stdout io.Writer) error {
+	if len(args) > 0 && args[0] == "healthcheck" {
+		return runHealthcheck(args[1:])
 	}
 
 	flags := flag.NewFlagSet("api", flag.ContinueOnError)
 	configFlag := flags.String("config", "", "path to the YAML configuration file")
-	if err := flags.Parse(os.Args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -53,7 +70,7 @@ func run() error {
 		return err
 	}
 
-	log, err := logger.New(cfg.Log, os.Stdout, logger.WithContextExtractor(contextFields))
+	log, err := logger.New(cfg.Log, stdout, logger.WithContextExtractor(contextFields))
 	if err != nil {
 		return err
 	}
@@ -65,7 +82,7 @@ func run() error {
 	}
 	if err := start(ctx, cfg, log, lc); err != nil {
 		log.Error(ctx, err, nil)
-		return errors.Join(err, lc.Close(context.WithoutCancel(ctx)))
+		return &loggedError{err: errors.Join(err, lc.Close(context.WithoutCancel(ctx)))}
 	}
 	return nil
 }

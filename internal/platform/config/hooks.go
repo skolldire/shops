@@ -34,6 +34,9 @@ func placeholderHook(ctx context.Context, resolvers Resolvers) mapstructure.Deco
 			if !isString || !isPlaceholder(s) {
 				return nil, errors.New("secret values must come from a placeholder")
 			}
+			if hasDefault(s) {
+				return nil, errors.New("secret placeholders cannot have a default")
+			}
 			v, err := resolve(ctx, s, resolvers)
 			if err != nil {
 				return nil, err

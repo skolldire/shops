@@ -83,7 +83,17 @@ func newProvider(cfg Config, log logger.Service, exporter sdktrace.SpanExporter)
 	if err != nil {
 		return nil, fmt.Errorf("telemetry: create prometheus exporter: %w", err)
 	}
-	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithResource(res))
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(reader),
+		sdkmetric.WithResource(res),
+		sdkmetric.WithView(sdkmetric.NewView(
+			sdkmetric.Instrument{Name: "http.server.*"},
+			sdkmetric.Stream{AttributeFilter: attribute.NewDenyKeysFilter(
+				semconv.ServerAddressKey,
+				semconv.ServerPortKey,
+			)},
+		)),
+	)
 
 	tpOpts := []sdktrace.TracerProviderOption{sdktrace.WithResource(res)}
 	if exporter != nil {

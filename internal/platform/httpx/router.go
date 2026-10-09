@@ -19,7 +19,7 @@ var standardMethods = []string{
 
 func NewRouter(log logger.Service) *chi.Mux {
 	r := chi.NewRouter()
-	r.Use(RequestID, Recover(log), Logging(log), annotateRoute)
+	r.Use(RequestID, Logging(log), Recover(log), annotateRoute)
 	r.NotFound(notFound)
 	r.MethodNotAllowed(methodNotAllowed(r))
 	return r

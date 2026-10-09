@@ -2,6 +2,8 @@ package httpx_test
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/skolldire/shops/internal/platform/httpx"
+	"github.com/skolldire/shops/internal/platform/logger"
 )
 
 func newTestRouter(t *testing.T) (*chi.Mux, *bytes.Buffer) {
@@ -119,4 +122,36 @@ func TestRouterLabelsMetricsWithRoute(t *testing.T) {
 		}
 	}
 	require.Equal(t, map[string]uint64{"/api/v1/products/{id}": 2, "": 1}, routes)
+}
+
+func TestRouterLogsPanickingRequests(t *testing.T) {
+	var logs bytes.Buffer
+	log, err := logger.New(logger.Config{Level: "info"}, &logs, logger.WithContextExtractor(func(ctx context.Context) map[string]any {
+		return map[string]any{"request_id": httpx.RequestIDFrom(ctx)}
+	}))
+	require.NoError(t, err)
+	r := httpx.NewRouter(log)
+	r.Get("/api/v1/explode/{id}", func(http.ResponseWriter, *http.Request) { panic("boom") })
+
+	rec := serve(r, http.MethodGet, "/api/v1/explode/7")
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	var access map[string]any
+	panicked := false
+	for dec := json.NewDecoder(&logs); dec.More(); {
+		var line map[string]any
+		require.NoError(t, dec.Decode(&line))
+		switch line["message"] {
+		case "http request":
+			access = line
+		case "panic recovered: boom":
+			panicked = true
+		}
+	}
+	require.True(t, panicked, "missing panic log line")
+	require.NotNil(t, access, "missing access log line")
+	require.EqualValues(t, 500, access["status"])
+	require.Equal(t, "/api/v1/explode/{id}", access["route"])
+	require.NotEmpty(t, rec.Header().Get("X-Request-ID"))
+	require.Equal(t, rec.Header().Get("X-Request-ID"), access["request_id"])
 }
