@@ -23,7 +23,7 @@ services:
     volumes:
       - secrets:/run/secrets:ro
       - ./db/init:/docker-entrypoint-initdb.d:ro
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     depends_on:
       secrets-init:
         condition: service_completed_successfully

@@ -27,7 +27,7 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 	schema, err := filepath.Abs(filepath.Join("..", "..", "..", "db", "init", "001_schema.sql"))
 	require.NoError(t, err)
 
-	ctr, err := tcpostgres.Run(ctx, "postgres:16-alpine",
+	ctr, err := tcpostgres.Run(ctx, "postgres:18-alpine",
 		tcpostgres.WithDatabase("shop"),
 		tcpostgres.WithUsername("shop"),
 		tcpostgres.WithPassword("integration-password"),
