@@ -80,9 +80,10 @@ func run(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := start(ctx, cfg, log, lc); err != nil {
+	err = errors.Join(start(ctx, cfg, log, lc), lc.Close(context.WithoutCancel(ctx)))
+	if err != nil {
 		log.Error(ctx, err, nil)
-		return &loggedError{err: errors.Join(err, lc.Close(context.WithoutCancel(ctx)))}
+		return &loggedError{err: err}
 	}
 	return nil
 }

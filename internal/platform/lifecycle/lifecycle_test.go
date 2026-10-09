@@ -39,7 +39,7 @@ func TestCloseRunsInReverseOrder(t *testing.T) {
 }
 
 func TestCloseAggregatesErrorsAndContinues(t *testing.T) {
-	lc, _ := newLifecycle(t)
+	lc, logs := newLifecycle(t)
 	e1, e2 := errors.New("e1"), errors.New("e2")
 	ran := false
 	require.NoError(t, lc.OnClose("a", func(context.Context) error { ran = true; return nil }))
@@ -52,6 +52,7 @@ func TestCloseAggregatesErrorsAndContinues(t *testing.T) {
 	require.ErrorIs(t, err, e2)
 	require.ErrorContains(t, err, "lifecycle: close b: e1")
 	require.True(t, ran)
+	require.NotContains(t, logs.String(), `"severity":"ERROR"`, "errors are returned, not logged")
 }
 
 func TestCloseIsIdempotentAndRejectsLateRegistrations(t *testing.T) {

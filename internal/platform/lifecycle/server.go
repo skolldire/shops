@@ -40,7 +40,6 @@ func (l *Lifecycle) Serve(ctx context.Context, shutdownTimeout time.Duration, se
 	case <-ctx.Done():
 		l.log.Info(ctx, "shutdown requested", nil)
 	case runErr = <-serveErr:
-		l.log.Error(ctx, runErr, nil)
 	}
 	return errors.Join(runErr, l.shutdown(ctx, shutdownTimeout, servers))
 }

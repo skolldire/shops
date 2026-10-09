@@ -2,6 +2,7 @@ package lifecycle_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -142,4 +143,21 @@ func TestShutdownStopsAllServersTogether(t *testing.T) {
 
 	require.ErrorIs(t, <-done, context.DeadlineExceeded)
 	require.Less(t, time.Since(start), 900*time.Millisecond)
+}
+
+func TestServeReturnsShutdownErrorsWithoutLoggingThem(t *testing.T) {
+	lc, logs := newLifecycle(t)
+	boom := errors.New("flush failed")
+	require.NoError(t, lc.OnClose("telemetry", func(context.Context) error { return boom }))
+	addr := freeAddr(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- lc.Serve(ctx, time.Second, server(addr, "ok")) }()
+	require.Equal(t, "ok", get(t, addr))
+
+	cancel()
+
+	require.ErrorIs(t, <-done, boom)
+	require.NotContains(t, logs.String(), `"severity":"ERROR"`)
+	require.NotContains(t, logs.String(), "shutdown complete")
 }

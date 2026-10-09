@@ -59,7 +59,6 @@ func (l *Lifecycle) Close(ctx context.Context) error {
 		c := closers[i]
 		if err := c.close(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("lifecycle: close %s: %w", c.name, err))
-			l.log.Error(ctx, err, map[string]any{"component": c.name})
 			continue
 		}
 		l.log.Info(ctx, "component closed", map[string]any{"component": c.name})
