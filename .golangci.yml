@@ -1,0 +1,42 @@
+version: "2"
+
+run:
+  timeout: 10m
+  modules-download-mode: readonly
+  build-tags:
+    - integration
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - unused
+    - gosec
+    - errorlint
+    - bodyclose
+    - noctx
+    - misspell
+    - unconvert
+  exclusions:
+    rules:
+      - path: "_test\\.go"
+        linters: [errcheck]
+      - path: "_test\\.go"
+        linters: [gosec]
+        text: "(G101|G104|G304|G115)"
+      - path: "_test\\.go"
+        linters: [errorlint, noctx, bodyclose]
+      - path: "cmd/api/healthcheck\\.go"
+        linters: [gosec]
+        text: "G704"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/skolldire/shops

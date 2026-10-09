@@ -1,17 +1,11 @@
-/bin/
-/api
+.git
+bin/
+api
 *.exe
-*.exe~
-*.dll
-*.so
-*.dylib
 *.test
 *.out
 coverage.*
 *.coverprofile
-profile.cov
-go.work
-go.work.sum
 .env
 .env.*
 secrets/
@@ -19,5 +13,3 @@ secrets/
 .vscode/
 *.swp
 .DS_Store
-
-docs/prompts/

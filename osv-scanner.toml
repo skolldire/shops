@@ -1,0 +1,4 @@
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+ignoreUntil = 2027-04-09
+reason = "Advisory covers only golang.org/x/crypto/openpgp, which nothing in this module imports. x/crypto arrives through testcontainers (ssh) in tests, and govulncheck reports no reachable vulnerability."
