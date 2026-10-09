@@ -186,6 +186,13 @@ func TestRepository(t *testing.T) {
 		f.create(t, "TV-1", "Smart TV", "TV", "450.00", 2)
 		deleted := f.create(t, "AUD-3", "Studio Monitor", "Audio", "120.00", 1)
 		require.NoError(t, f.repo.Delete(ctx, deleted.ID, deleted.Version))
+		_, err := f.pool.Exec(ctx, `UPDATE products SET created_at = CASE sku
+			WHEN 'AUD-1' THEN timestamptz '2026-01-01 10:00:00+00'
+			WHEN 'AUD-2' THEN timestamptz '2026-01-01 10:00:01+00'
+			WHEN 'BOK-1' THEN timestamptz '2026-01-01 10:00:02+00'
+			WHEN 'TV-1'  THEN timestamptz '2026-01-01 10:00:03+00'
+			ELSE created_at END`)
+		require.NoError(t, err)
 
 		tests := map[string]struct {
 			in    core.SearchInput

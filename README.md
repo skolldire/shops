@@ -32,7 +32,7 @@ Open `http://localhost:8080` for the store and `http://localhost:8080/admin/prod
 
 ### Upgrading an existing stack
 
-There are no migrations: `db/init/001_schema.sql` only runs when the data volume is created. Phase 2 adds the `version` column to `products`, so a stack created before it must be recreated:
+There are no data migrations: `db/init/001_schema.sql` only runs when the data volume is created. Phase 2 adds the `version` column to `products` and moves to PostgreSQL 18, so a stack created before it must be recreated:
 
 ```sh
 make down && make up
@@ -204,7 +204,7 @@ The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it 
 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
 - **No CSRF protection.** There is no authentication and no session cookie yet, so there are no credentials another site could ride on. CSRF tokens become necessary as soon as authentication is added.
-- **No migrations.** Schema changes need `make down && make up`, which also deletes the data.
+- **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
 
 ## Configuration
 
