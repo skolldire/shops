@@ -154,8 +154,12 @@ func (p *Provider) Span(ctx context.Context, name string, fn func(ctx context.Co
 	defer span.End()
 
 	if err := fn(ctx); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		msg := logger.Sanitize(err.Error())
+		span.AddEvent(semconv.ExceptionEventName, trace.WithAttributes(
+			semconv.ExceptionTypeKey.String(fmt.Sprintf("%T", err)),
+			semconv.ExceptionMessageKey.String(msg),
+		))
+		span.SetStatus(codes.Error, msg)
 		return err
 	}
 	span.SetStatus(codes.Ok, "")

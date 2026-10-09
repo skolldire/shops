@@ -79,7 +79,7 @@ func (s *service) write(ctx context.Context, level slog.Level, msg string, field
 	if s.extract != nil {
 		args = toArgs(s.extract(ctx))
 	}
-	s.log.Log(ctx, level, sanitizeString(msg), append(args, toArgs(fields)...)...)
+	s.log.Log(ctx, level, Sanitize(msg), append(args, toArgs(fields)...)...)
 }
 
 func toArgs(fields map[string]any) []any {

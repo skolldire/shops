@@ -67,7 +67,7 @@ func TestInvalidInstrumentIsLoggedNotPanicking(t *testing.T) {
 func TestSpans(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	p, _ := newTestProvider(t, exporter)
-	boom := errors.New("declined")
+	boom := errors.New("declined: token=abc123")
 
 	require.NoError(t, p.Span(t.Context(), "ok-span", func(context.Context) error { return nil }, attribute.String("k", "v")))
 	require.ErrorIs(t, p.Span(t.Context(), "failed-span", func(context.Context) error { return boom }), boom)
@@ -79,6 +79,10 @@ func TestSpans(t *testing.T) {
 	require.Equal(t, codes.Ok, spans[0].Status.Code)
 	require.Contains(t, spans[0].Attributes, attribute.String("k", "v"))
 	require.Equal(t, codes.Error, spans[1].Status.Code)
+	require.Equal(t, "declined: token=[REDACTED]", spans[1].Status.Description)
+	require.Len(t, spans[1].Events, 1)
+	require.Contains(t, spans[1].Events[0].Attributes, attribute.String("exception.message", "declined: token=[REDACTED]"))
+	require.Contains(t, spans[1].Events[0].Attributes, attribute.String("exception.type", "*errors.errorString"))
 }
 
 func TestTracingDisabledStillRunsSpans(t *testing.T) {

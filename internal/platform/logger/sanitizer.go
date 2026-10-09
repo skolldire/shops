@@ -26,12 +26,12 @@ func sanitizeValue(key string, v any) any {
 		return redacted
 	}
 	if s, ok := v.(string); ok {
-		return sanitizeString(s)
+		return Sanitize(s)
 	}
 	return v
 }
 
-func sanitizeString(s string) string {
+func Sanitize(s string) string {
 	for _, p := range sensitivePatterns {
 		s = p.ReplaceAllString(s, "${1}${2}"+redacted)
 	}
