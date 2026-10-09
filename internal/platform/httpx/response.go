@@ -3,6 +3,8 @@ package httpx
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/skolldire/shops/internal/platform/validation"
 )
 
 const (
@@ -15,16 +17,18 @@ type ErrorResponse struct {
 	Code   string
 	Title  string
 	Detail string
+	Errors []validation.FieldError
 }
 
 type problem struct {
-	Type      string `json:"type"`
-	Title     string `json:"title"`
-	Status    int    `json:"status"`
-	Detail    string `json:"detail,omitempty"`
-	Code      string `json:"code,omitempty"`
-	Instance  string `json:"instance"`
-	RequestID string `json:"request_id,omitempty"`
+	Type      string                  `json:"type"`
+	Title     string                  `json:"title"`
+	Status    int                     `json:"status"`
+	Detail    string                  `json:"detail,omitempty"`
+	Code      string                  `json:"code,omitempty"`
+	Instance  string                  `json:"instance"`
+	RequestID string                  `json:"request_id,omitempty"`
+	Errors    []validation.FieldError `json:"errors,omitempty"`
 }
 
 func WriteJSON(w http.ResponseWriter, status int, v any) {
@@ -48,6 +52,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, e ErrorResponse) {
 		Code:      e.Code,
 		Instance:  r.URL.Path,
 		RequestID: RequestIDFrom(r.Context()),
+		Errors:    e.Errors,
 	})
 }
 

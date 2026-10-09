@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/platform/httpx"
+	"github.com/skolldire/shops/internal/platform/validation"
 )
 
 type problem struct {
@@ -52,6 +53,31 @@ func TestWriteError(t *testing.T) {
 		Code: "conflict", Instance: "/api/v1/products/42",
 	}, decodeProblem(t, rec))
 	require.NotContains(t, rec.Body.String(), "request_id")
+	require.NotContains(t, rec.Body.String(), `"errors"`)
+}
+
+func TestWriteErrorWithFieldErrors(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/products", nil)
+
+	httpx.WriteError(rec, req, httpx.ErrorResponse{
+		Status: http.StatusUnprocessableEntity,
+		Code:   "validation_failed",
+		Errors: []validation.FieldError{
+			{Field: "sku", Code: "required", Message: "is required"},
+			{Field: "price", Code: "not_positive", Message: "must be greater than 0"},
+		},
+	})
+
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	require.JSONEq(t, `{
+		"type": "about:blank", "title": "Unprocessable Entity", "status": 422,
+		"code": "validation_failed", "instance": "/api/v1/products",
+		"errors": [
+			{"field": "sku", "code": "required", "message": "is required"},
+			{"field": "price", "code": "not_positive", "message": "must be greater than 0"}
+		]
+	}`, rec.Body.String())
 }
 
 func TestWriteErrorFallsBackTo500(t *testing.T) {
