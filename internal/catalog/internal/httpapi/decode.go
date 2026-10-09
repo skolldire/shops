@@ -120,7 +120,7 @@ func intField(errs *validation.Errors, field string, raw json.RawMessage) *int64
 	if raw == nil {
 		return nil
 	}
-	n, err := strconv.ParseInt(string(raw), 10, 64)
+	n, err := strconv.ParseInt(string(raw), 10, 32)
 	var numErr *strconv.NumError
 	switch {
 	case errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange):

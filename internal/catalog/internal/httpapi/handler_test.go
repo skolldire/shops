@@ -280,11 +280,21 @@ func TestValidationReportsEveryFieldOnce(t *testing.T) {
 }
 
 func TestStockOverflowIsOutOfRange(t *testing.T) {
-	h, _ := newServer(t, &fakeService{})
+	for _, stock := range []string{"2147483648", "-2147483649", "99999999999999999999"} {
+		svc := &fakeService{}
+		h, _ := newServer(t, svc)
 
-	rec := do(h, http.MethodPost, "/api/v1/products", `{"sku":"a","name":"n","category":"c","price":1,"weight_kg":0,"stock":99999999999999999999}`)
+		rec := do(h, http.MethodPost, "/api/v1/products", `{"sku":"a","name":"n","category":"c","price":1,"weight_kg":0,"stock":`+stock+`}`)
 
-	require.Equal(t, map[string]string{"stock": "out_of_range"}, fieldCodes(decodeProblem(t, rec)))
+		require.Equal(t, map[string]string{"stock": "out_of_range"}, fieldCodes(decodeProblem(t, rec)), stock)
+		require.Nil(t, svc.created.Stock, stock)
+	}
+
+	svc := &fakeService{}
+	h, _ := newServer(t, svc)
+	rec := do(h, http.MethodPost, "/api/v1/products", `{"sku":"a","name":"n","category":"c","price":1,"weight_kg":0,"stock":2147483647}`)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	require.EqualValues(t, 2147483647, *svc.created.Stock)
 }
 
 func TestPatchPassesSKUToTheDomain(t *testing.T) {
