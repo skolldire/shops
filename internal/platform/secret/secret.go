@@ -1,8 +1,10 @@
 package secret
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 )
 
 const redacted = "[REDACTED]"
@@ -33,4 +35,12 @@ func (s Secret) GoString() string {
 
 func (s Secret) Format(f fmt.State, _ rune) {
 	_, _ = io.WriteString(f, redacted)
+}
+
+func (s Secret) LogValue() slog.Value {
+	return slog.StringValue(redacted)
+}
+
+func (s Secret) MarshalJSON() ([]byte, error) {
+	return json.Marshal(redacted)
 }

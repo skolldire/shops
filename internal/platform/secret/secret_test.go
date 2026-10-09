@@ -1,7 +1,11 @@
 package secret_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -49,4 +53,29 @@ func TestFormattingNeverLeaks(t *testing.T) {
 			assert.Contains(t, out, "[REDACTED]")
 		})
 	}
+}
+
+func TestSlogJSONHandler(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	logger.Info("connecting",
+		slog.Any("password", secret.New(value)),
+		slog.Group("db", slog.Any("password", secret.New(value))),
+	)
+
+	require.NotContains(t, buf.String(), value)
+	require.Equal(t, 2, strings.Count(buf.String(), `"password":"[REDACTED]"`))
+}
+
+func TestJSONMarshalStruct(t *testing.T) {
+	cfg := struct {
+		User     string        `json:"user"`
+		Password secret.Secret `json:"password"`
+	}{User: "shop", Password: secret.New(value)}
+
+	b, err := json.Marshal(cfg)
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"user":"shop","password":"[REDACTED]"}`, string(b))
 }
