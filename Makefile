@@ -32,7 +32,7 @@ lint: lint-comments tidy-check
 lint-comments:
 	@! grep -rnE '(^|[[:space:]])//([[:space:]]|$$)|/[*]' --include='*.go' . || { echo "Go comments are not allowed"; exit 1; }
 	@! grep -rn -- '--' db/init || { echo "SQL comments are not allowed"; exit 1; }
-	@! grep -rnE '^[[:space:]]*#' Makefile Dockerfile .gitignore .dockerignore .golangci.yml .coderabbit.yaml compose*.yaml config deploy .github --include='*' --exclude='*.md' || { echo "# comments are not allowed"; exit 1; }
+	@! grep -rnE '^[[:space:]]*#' Makefile Dockerfile .gitignore .dockerignore .golangci.yml .coderabbit.yaml osv-scanner.toml compose*.yaml config deploy .github --include='*' --exclude='*.md' || { echo "# comments are not allowed"; exit 1; }
 
 tidy-check:
 	$(GO) mod tidy -diff

@@ -75,7 +75,7 @@ Every pull request to `master` runs:
 | Integration tests | Repositories and transactions against PostgreSQL |
 | govulncheck | Known vulnerabilities in reachable code |
 | Image scan and end-to-end smoke | Trivy on the image, then the compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
-| Dependency review | New dependencies with high-severity advisories |
+| Dependency review | OSV-Scanner compares the base branch with the pull request and fails on newly introduced vulnerable dependencies. Accepted exceptions live in `osv-scanner.toml` with a reason and an expiry date |
 | CodeQL | Static security analysis, also weekly |
 
 CodeRabbit reviews every pull request with the rules in `.coderabbit.yaml` and approves it once its findings are resolved. Dependabot keeps Go modules, actions and base images up to date.

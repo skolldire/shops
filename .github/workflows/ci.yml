@@ -136,15 +136,16 @@ jobs:
         run: docker compose down -v
 
   dependency-review:
-    name: Dependency review
+    name: Dependency review (OSV-Scanner)
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/dependency-review-action@v5
-        with:
-          fail-on-severity: high
-          comment-summary-in-pr: on-failure
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.6.0
+    with:
+      fail-on-vuln: true
+      scan-args: |-
+        --no-call-analysis=go
+        -r
+        ./
