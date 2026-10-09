@@ -42,21 +42,27 @@ jobs:
           dockerfile: Dockerfile
 
   test:
-    name: Unit tests (Go ${{ matrix.go }})
+    name: Unit tests (Go ${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.26.x", stable]
+        include:
+          - name: go.mod
+            go-version-file: go.mod
+          - name: stable
+            go-version: stable
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: ${{ matrix.go }}
+          go-version: ${{ matrix.go-version }}
+          go-version-file: ${{ matrix.go-version-file }}
+          check-latest: true
       - name: Test with race detector and coverage
         run: make coverage
       - name: Upload coverage
-        if: matrix.go == 'stable'
+        if: matrix.name == 'go.mod'
         uses: actions/upload-artifact@v7
         with:
           name: coverage
@@ -83,6 +89,8 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
+      - name: go.mod and the Dockerfile use the same Go release
+        run: grep -q "^FROM golang:$(go env GOVERSION | sed -E 's/^go([0-9]+\.[0-9]+).*/\1/')-alpine " Dockerfile
       - name: govulncheck
         run: make vuln GOVULNCHECK_VERSION=${{ env.GOVULNCHECK_VERSION }}
 

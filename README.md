@@ -7,7 +7,7 @@ This is phase 1: the platform layer (`internal/platform`) and the runnable skele
 ## Requirements
 
 - Docker with the Compose v2 and Buildx plugins (Docker Desktop includes both)
-- Go 1.26 or newer, only to run tests or the binary outside Docker
+- Go as declared in `go.mod` (currently 1.27.2), only to run tests or the binary outside Docker
 - `make`
 
 ## Run with Docker
@@ -71,7 +71,7 @@ Every pull request to `master` runs:
 | Check | What it enforces |
 |---|---|
 | Lint and style | golangci-lint, no comments, tidy modules, hadolint on the Dockerfile |
-| Unit tests | Race detector on the `go.mod` floor and on the latest stable Go |
+| Unit tests | Race detector on the `go.mod` version and on the latest stable Go |
 | Integration tests | Repositories and transactions against PostgreSQL |
 | govulncheck | Known vulnerabilities in reachable code |
 | Image scan and end-to-end smoke | Trivy on the image, then the compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
