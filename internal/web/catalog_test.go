@@ -84,6 +84,19 @@ func TestStoreForwardsFiltersToTheCatalog(t *testing.T) {
 	require.Contains(t, body, `id="in_stock" name="in_stock" type="checkbox" value="true" checked`)
 }
 
+func TestStoreKeepsInStockCheckedForEveryAcceptedValue(t *testing.T) {
+	h, _ := newTestUI(t, withProducts(shoes()))
+
+	for _, value := range []string{"true", "1", "t", "TRUE"} {
+		body := get(h, "/?in_stock="+value).Body.String()
+		require.Contains(t, body, `id="in_stock" name="in_stock" type="checkbox" value="true" checked`, value)
+	}
+	for _, value := range []string{"false", "0", ""} {
+		body := get(h, "/?in_stock="+value).Body.String()
+		require.NotContains(t, body, `value="true" checked`, value)
+	}
+}
+
 func TestStorePaginationKeepsFilters(t *testing.T) {
 	cat := withProducts(shoes())
 	cat.total = 45

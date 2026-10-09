@@ -70,11 +70,12 @@ func (ui *UI) product(w http.ResponseWriter, r *http.Request) {
 
 func (ui *UI) listing(r *http.Request, path string) (listing, error) {
 	values := r.URL.Query()
+	inStock, _ := strconv.ParseBool(values.Get("in_stock"))
 	data := listing{
 		Path: path,
 		Filters: filters{
 			Q: values.Get("q"), Category: values.Get("category"), MinPrice: values.Get("min_price"),
-			MaxPrice: values.Get("max_price"), Sort: values.Get("sort"), InStock: values.Get("in_stock") == "true",
+			MaxPrice: values.Get("max_price"), Sort: values.Get("sort"), InStock: inStock,
 		},
 		SortOptions: sortOptions,
 		Notice:      notices[values.Get("notice")],
