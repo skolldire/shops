@@ -1,37 +1,46 @@
 package config
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 )
 
-var (
-	namePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	schemePattern = regexp.MustCompile(`^[a-z]+$`)
-)
+const envScheme = "env"
 
-type placeholder struct {
-	raw        string
-	scheme     string
-	ref        string
-	def        string
-	hasDefault bool
+var placeholderPattern = regexp.MustCompile(`^\$\{(?:([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?|([a-z]+):([^}]+))\}$`)
+
+func isPlaceholder(value string) bool {
+	return strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}")
 }
 
-func parseBody(raw string) (*placeholder, error) {
-	body := raw[2 : len(raw)-1]
-	if name, def, ok := strings.Cut(body, ":-"); ok && namePattern.MatchString(name) {
-		return &placeholder{raw: raw, ref: name, def: def, hasDefault: true}, nil
+func resolve(ctx context.Context, value string, resolvers Resolvers) (string, error) {
+	if !isPlaceholder(value) {
+		return value, nil
 	}
-	if namePattern.MatchString(body) {
-		return &placeholder{raw: raw, ref: body}, nil
+	m := placeholderPattern.FindStringSubmatch(value)
+	if m == nil {
+		return "", fmt.Errorf("invalid placeholder %s", value)
 	}
-	if scheme, ref, ok := strings.Cut(body, ":"); ok && schemePattern.MatchString(scheme) {
-		if ref == "" {
-			return nil, fmt.Errorf("placeholder %s has an empty reference", raw)
-		}
-		return &placeholder{raw: raw, scheme: scheme, ref: ref}, nil
+	scheme, ref := envScheme, m[1]
+	if m[4] != "" {
+		scheme, ref = m[4], m[5]
 	}
-	return nil, fmt.Errorf("invalid placeholder %s", raw)
+	r, ok := resolvers[scheme]
+	if !ok {
+		return "", fmt.Errorf("%s: unknown scheme %q", value, scheme)
+	}
+
+	v, err := r.Resolve(ctx, ref)
+	switch {
+	case errors.Is(err, ErrNotFound) && m[2] != "":
+		return m[3], nil
+	case errors.Is(err, ErrNotFound):
+		return "", fmt.Errorf("%s is not set", value)
+	case err != nil:
+		return "", fmt.Errorf("%s: %w", value, err)
+	}
+	return v, nil
 }
