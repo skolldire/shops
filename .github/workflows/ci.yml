@@ -77,6 +77,7 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
+      - uses: ./.github/actions/docker-hub-mirror
       - name: Test against PostgreSQL with testcontainers
         run: make test-integration
 
@@ -101,6 +102,7 @@ jobs:
       COMPOSE_PROJECT_NAME: shops
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/docker-hub-mirror
       - name: Build image
         run: docker compose build app
       - name: Scan image (Trivy)
