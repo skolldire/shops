@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/stretchr/testify/require"
@@ -15,6 +16,7 @@ type hookTarget struct {
 	Port     int           `mapstructure:"port"`
 	Seed     bool          `mapstructure:"seed"`
 	Password secret.Secret `mapstructure:"password"`
+	Timeout  time.Duration `mapstructure:"timeout"`
 }
 
 func decodeWithPlaceholders(input map[string]any) (hookTarget, error) {
@@ -22,7 +24,7 @@ func decodeWithPlaceholders(input map[string]any) (hookTarget, error) {
 	dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result:           &out,
 		WeaklyTypedInput: true,
-		DecodeHook:       placeholderHook(context.Background(), fakeResolvers()),
+		DecodeHook:       decodeHook(context.Background(), fakeResolvers()),
 	})
 	if err != nil {
 		return out, err
@@ -53,4 +55,17 @@ func TestPlaceholderHookSecretRules(t *testing.T) {
 
 	_, err := decodeWithPlaceholders(map[string]any{"password": "${MISSING}"})
 	require.ErrorContains(t, err, "${MISSING} is not set")
+}
+
+func TestDurationHooks(t *testing.T) {
+	for _, value := range []any{"15s", "${TIMEOUT:-15s}"} {
+		out, err := decodeWithPlaceholders(map[string]any{"timeout": value})
+		require.NoError(t, err, value)
+		require.Equal(t, 15*time.Second, out.Timeout, value)
+	}
+
+	for _, value := range []any{10, 1.5, "${TIMEOUT:-10}", "soon"} {
+		_, err := decodeWithPlaceholders(map[string]any{"timeout": value})
+		require.ErrorContains(t, err, "'timeout'", value)
+	}
 }
