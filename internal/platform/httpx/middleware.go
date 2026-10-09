@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -26,7 +27,7 @@ func Recover(log logger.Service) func(http.Handler) http.Handler {
 				log.Error(r.Context(), fmt.Errorf("panic recovered: %v", v), map[string]any{
 					"method": r.Method,
 					"path":   r.URL.Path,
-					"stack":  string(debug.Stack()),
+					"stack":  strings.Split(strings.TrimSpace(string(debug.Stack())), "\n"),
 				})
 				WriteError(w, r, ErrorResponse{
 					Status: http.StatusInternalServerError,

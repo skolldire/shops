@@ -40,7 +40,12 @@ func TestRecover(t *testing.T) {
 	require.Equal(t, "req123", p.RequestID)
 	require.NotContains(t, rec.Body.String(), "boom")
 	require.Contains(t, logs.String(), "panic recovered: boom: internal detail")
-	require.Contains(t, logs.String(), "goroutine")
+	var line struct {
+		Stack []string `json:"stack"`
+	}
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &line))
+	require.Greater(t, len(line.Stack), 1)
+	require.Contains(t, line.Stack[0], "goroutine")
 }
 
 func TestRecoverRepanicsAbortHandler(t *testing.T) {

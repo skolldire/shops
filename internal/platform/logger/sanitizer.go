@@ -35,5 +35,7 @@ func Sanitize(s string) string {
 	for _, p := range sensitivePatterns {
 		s = p.ReplaceAllString(s, "${1}${2}"+redacted)
 	}
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
 	return s
 }

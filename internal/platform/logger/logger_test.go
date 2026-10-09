@@ -111,6 +111,19 @@ func TestSanitizer(t *testing.T) {
 	require.Equal(t, "dial: api_key=[REDACTED] refused", got[1]["message"])
 }
 
+func TestSanitizerNeutralizesLineBreaks(t *testing.T) {
+	log, read := newLogger(t, "info")
+
+	log.Info(t.Context(), "GET /x\n{\"severity\":\"ERROR\"}", map[string]any{"path": "/a\r\nforged"})
+	log.Error(t.Context(), errors.Join(errors.New("first"), errors.New("second")), nil)
+
+	got := read()
+	require.Len(t, got, 2)
+	require.Equal(t, `GET /x {"severity":"ERROR"}`, got[0]["message"])
+	require.Equal(t, "/a  forged", got[0]["path"])
+	require.Equal(t, "first second", got[1]["message"])
+}
+
 func TestNewRejectsInvalidLevel(t *testing.T) {
 	_, err := logger.New(logger.Config{Level: "verbose"}, &bytes.Buffer{})
 	require.EqualError(t, err, `logger: invalid level "verbose"`)
