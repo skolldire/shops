@@ -129,7 +129,7 @@ func TestLayoutConfiguresHTMXForTheCSP(t *testing.T) {
 
 	body := get(h, "/no-existe").Body.String()
 
-	require.Contains(t, body, `<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false}'>`)
+	require.Contains(t, body, `<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"historyCacheSize":0}'>`)
 	require.Contains(t, body, `<script src="/static/htmx.min.js" defer></script>`)
 	require.Contains(t, body, `<link rel="stylesheet" href="/static/app.css">`)
 }

@@ -119,7 +119,10 @@ jobs:
           set -eu
           ready="$(curl -fsS localhost:8080/health/ready)"
           test "$ready" = '{"status":"up","checks":{"postgres":"up"}}'
-          test "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' localhost:8080/no-existe)" = "404 application/problem+json"
+          test "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' localhost:8080/api/v1/no-existe)" = "404 application/problem+json"
+          test "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' localhost:8080/no-existe)" = "404 text/html; charset=utf-8"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' localhost:8080/api/v1/products)" = "200 application/json"
           curl -s -D - -o /dev/null -X DELETE localhost:8080/health/live | grep -qi '^allow: GET'
           test "$(docker compose exec -T db psql -U shop -d shop -tAc "select count(*) from information_schema.tables where table_schema = 'public'")" = "4"
           password="$(docker compose exec -T db cat /run/secrets/db_password)"

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,10 +43,13 @@ func TestBuildAppRoutes(t *testing.T) {
 	}{
 		{http.MethodGet, "/health/live", "application/json", 200},
 		{http.MethodGet, "/health/ready", "application/json", 503},
-		{http.MethodGet, "/no-existe", "application/problem+json", 404},
-		{http.MethodGet, "/api/v1/nothing", "application/problem+json", 404},
 		{http.MethodDelete, "/health/live", "application/problem+json", 405},
-		{http.MethodGet, "/metrics", "application/problem+json", 404},
+		{http.MethodGet, "/health/nothing", "application/problem+json", 404},
+		{http.MethodGet, "/api/v1/nothing", "application/problem+json", 404},
+		{http.MethodPut, "/api/v1/categories", "application/problem+json", 405},
+		{http.MethodGet, "/no-existe", "text/html; charset=utf-8", 404},
+		{http.MethodGet, "/metrics", "text/html; charset=utf-8", 404},
+		{http.MethodGet, "/static/app.css", "text/css; charset=utf-8", 200},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
@@ -55,12 +59,18 @@ func TestBuildAppRoutes(t *testing.T) {
 			require.Equal(t, tt.status, rec.Code)
 			require.Equal(t, tt.contentType, rec.Header().Get("Content-Type"))
 			require.NotEmpty(t, rec.Header().Get("X-Request-ID"))
-			require.True(t, json.Valid(rec.Body.Bytes()), rec.Body.String())
+			if strings.HasPrefix(tt.contentType, "application/") {
+				require.True(t, json.Valid(rec.Body.Bytes()), rec.Body.String())
+			}
 		})
 	}
 	rec := httptest.NewRecorder()
 	a.api.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/health/live", nil))
 	require.Equal(t, "GET", rec.Header().Get("Allow"))
+
+	rec = httptest.NewRecorder()
+	a.api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/no-existe", nil))
+	require.NotEmpty(t, rec.Header().Get("Content-Security-Policy"))
 }
 
 func TestMetricsServedSeparately(t *testing.T) {
