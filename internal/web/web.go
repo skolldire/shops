@@ -17,6 +17,12 @@ import (
 
 const maxFormBytes = 1 << 20
 
+var notices = map[string]string{
+	"created": "Product created.",
+	"updated": "Product updated.",
+	"deleted": "Product deleted.",
+}
+
 type Catalog interface {
 	Search(ctx context.Context, q catalog.SearchQuery) (catalog.Page, error)
 	Get(ctx context.Context, id string) (catalog.Product, error)
@@ -62,6 +68,8 @@ func (ui *UI) Routes() http.Handler {
 	r.NotFound(ui.notFound)
 	r.MethodNotAllowed(ui.notFound)
 	r.Handle("/static/*", ui.static)
+	r.Get("/", ui.store)
+	r.Get("/products/{id}", ui.product)
 	return r
 }
 
@@ -75,6 +83,14 @@ func (ui *UI) notFound(w http.ResponseWriter, r *http.Request) {
 	ui.page(w, r, http.StatusNotFound, "error", errorPage{
 		Title: "Not found", Status: http.StatusNotFound,
 		Message: "The page or product you are looking for does not exist.",
+	})
+}
+
+func (ui *UI) serverError(w http.ResponseWriter, r *http.Request, err error) {
+	ui.log.Error(r.Context(), err, map[string]any{"component": "web"})
+	ui.page(w, r, http.StatusInternalServerError, "error", errorPage{
+		Title: "Something went wrong", Status: http.StatusInternalServerError,
+		Message: "An unexpected error occurred. Please try again.",
 	})
 }
 

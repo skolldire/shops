@@ -19,6 +19,8 @@ type fakeCatalog struct {
 	products   map[string]catalog.Product
 	categories []string
 	err        error
+	total      int
+	searched   bool
 	query      catalog.SearchQuery
 	created    catalog.CreateInput
 	updated    catalog.UpdateInput
@@ -26,12 +28,16 @@ type fakeCatalog struct {
 }
 
 func (f *fakeCatalog) Search(_ context.Context, q catalog.SearchQuery) (catalog.Page, error) {
-	f.query = q
+	f.query, f.searched = q, true
 	var items []catalog.Product
 	for _, p := range f.products {
 		items = append(items, p)
 	}
-	return catalog.Page{Items: items, Page: q.Page, PageSize: q.PageSize, Total: len(items)}, f.err
+	total := len(items)
+	if f.total > 0 {
+		total = f.total
+	}
+	return catalog.Page{Items: items, Page: q.Page, PageSize: q.PageSize, Total: total}, f.err
 }
 
 func (f *fakeCatalog) Get(_ context.Context, id string) (catalog.Product, error) {
@@ -89,7 +95,7 @@ func get(h http.Handler, path string, headers ...string) *httptest.ResponseRecor
 
 var (
 	inlineScript = regexp.MustCompile(`<script(?:\s[^>]*)?>`)
-	inlineStyle  = regexp.MustCompile(`(?i)(<style|\sstyle=|\son[a-z]+=)`)
+	inlineStyle  = regexp.MustCompile(`(?i)(<style|<[^>]*\s(style|on[a-z]+)=)`)
 )
 
 func requireSafeHTML(t *testing.T, rec *httptest.ResponseRecorder) {

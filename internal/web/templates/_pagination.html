@@ -1,0 +1,9 @@
+{{define "pagination"}}
+{{if or .PrevURL .NextURL}}
+<nav class="pagination" aria-label="Pagination">
+{{if .PrevURL}}<a class="button secondary" href="{{.PrevURL}}" hx-get="{{.PrevURL}}" hx-target="#results" hx-push-url="true">Previous</a>{{end}}
+<span>Page {{.Page.Page}}</span>
+{{if .NextURL}}<a class="button secondary" href="{{.NextURL}}" hx-get="{{.NextURL}}" hx-target="#results" hx-push-url="true">Next</a>{{end}}
+</nav>
+{{end}}
+{{end}}
