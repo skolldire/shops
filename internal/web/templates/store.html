@@ -1,0 +1,77 @@
+{{define "title"}}Store{{end}}
+{{define "content"}}
+<div class="page-header">
+<h1>Products</h1>
+</div>
+<form class="filters" action="/" method="get" role="search"
+      hx-get="/" hx-target="#results" hx-push-url="true"
+      hx-trigger="submit, change, input changed delay:300ms from:#q">
+<div class="field">
+<label for="q">Search</label>
+<input id="q" name="q" type="search" value="{{.Filters.Q}}" maxlength="100" placeholder="Name, SKU or description">
+<p id="error-q" class="field-error">{{.Errors.q}}</p>
+</div>
+<div class="field">
+<label for="category">Category</label>
+<select id="category" name="category">
+<option value="">All categories</option>
+{{range .Categories}}<option value="{{.}}"{{if eq . $.Filters.Category}} selected{{end}}>{{.}}</option>{{end}}
+</select>
+</div>
+<div class="field">
+<label for="min_price">Min price</label>
+<input id="min_price" name="min_price" type="text" inputmode="decimal" value="{{.Filters.MinPrice}}">
+<p id="error-min_price" class="field-error">{{.Errors.min_price}}</p>
+</div>
+<div class="field">
+<label for="max_price">Max price</label>
+<input id="max_price" name="max_price" type="text" inputmode="decimal" value="{{.Filters.MaxPrice}}">
+<p id="error-max_price" class="field-error">{{.Errors.max_price}}</p>
+</div>
+<div class="field">
+<label for="sort">Sort by</label>
+<select id="sort" name="sort">
+{{range .SortOptions}}<option value="{{.Value}}"{{if eq .Value $.Filters.Sort}} selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+<p id="error-sort" class="field-error">{{.Errors.sort}}</p>
+</div>
+<div class="field checkbox">
+<input id="in_stock" name="in_stock" type="checkbox" value="true"{{if .Filters.InStock}} checked{{end}}>
+<label for="in_stock">Only in stock</label>
+</div>
+<div class="field">
+<button type="submit">Search</button>
+</div>
+</form>
+<div id="results" class="results-area">
+{{template "results" .}}
+</div>
+{{end}}
+{{define "results"}}
+{{if .Errors}}
+<p class="notice error">Some filters are not valid. Fix them to see results.</p>
+{{range $field, $message := .Errors}}{{if or (eq $field "page") (eq $field "page_size") (eq $field "in_stock")}}<p class="field-error">{{$field}}: {{$message}}</p>{{end}}{{end}}
+{{else if .Page.Items}}
+<p class="results-summary">Showing {{.First}}–{{.Last}} of {{.Page.Total}} products</p>
+<ul class="product-grid">
+{{range .Page.Items}}
+<li class="product-card">
+<h2><a href="/products/{{.ID}}">{{.Name}}</a></h2>
+<span class="category">{{.Category}}</span>
+<span class="price">${{money .Price}}</span>
+{{if gt .Stock 0}}<span class="stock">{{.Stock}} in stock</span>{{else}}<span class="stock out">Out of stock</span>{{end}}
+</li>
+{{end}}
+</ul>
+{{template "pagination" .}}
+{{else}}
+<p class="results-summary">No products match your search.</p>
+{{end}}
+{{end}}
+{{define "partial"}}
+{{template "results" .}}
+<p id="error-q" class="field-error" hx-swap-oob="true">{{.Errors.q}}</p>
+<p id="error-min_price" class="field-error" hx-swap-oob="true">{{.Errors.min_price}}</p>
+<p id="error-max_price" class="field-error" hx-swap-oob="true">{{.Errors.max_price}}</p>
+<p id="error-sort" class="field-error" hx-swap-oob="true">{{.Errors.sort}}</p>
+{{end}}

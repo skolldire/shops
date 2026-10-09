@@ -1,0 +1,16 @@
+{{define "title"}}Delete {{.Product.Name}}{{end}}
+{{define "content"}}
+<p><a href="/admin/products">← Back to products</a></p>
+<h1>Delete product</h1>
+{{if .Conflict}}
+<p class="notice warning" role="alert">This product changed after you opened this page. Review it again before deleting.</p>
+{{end}}
+<div class="form-card">
+<p>You are about to delete <strong>{{.Product.Name}}</strong> (SKU {{.Product.SKU}}). It will disappear from the store and its SKU cannot be reused.</p>
+<form action="/admin/products/{{.Product.ID}}/delete" method="post" class="actions">
+<input type="hidden" name="version" value="{{.Product.Version}}">
+<button class="danger" type="submit">Delete product</button>
+<a class="button secondary" href="/admin/products">Cancel</a>
+</form>
+</div>
+{{end}}

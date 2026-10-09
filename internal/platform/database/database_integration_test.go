@@ -5,54 +5,17 @@ package database_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
-	"strconv"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/skolldire/shops/internal/platform/database"
+	"github.com/skolldire/shops/internal/platform/database/dbtest"
 	"github.com/skolldire/shops/internal/platform/secret"
 )
-
-func startPostgres(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	ctx := context.Background()
-	schema, err := filepath.Abs(filepath.Join("..", "..", "..", "db", "init", "001_schema.sql"))
-	require.NoError(t, err)
-
-	ctr, err := tcpostgres.Run(ctx, "postgres:18-alpine",
-		tcpostgres.WithDatabase("shop"),
-		tcpostgres.WithUsername("shop"),
-		tcpostgres.WithPassword("integration-password"),
-		tcpostgres.WithInitScripts(schema),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	testcontainers.CleanupContainer(t, ctr)
-	require.NoError(t, err)
-
-	host, err := ctr.Host(ctx)
-	require.NoError(t, err)
-	port, err := ctr.MappedPort(ctx, "5432/tcp")
-	require.NoError(t, err)
-	portNum, err := strconv.Atoi(port.Port())
-	require.NoError(t, err)
-
-	pool, err := database.Open(ctx, database.Config{
-		Host: host, Port: portNum, Name: "shop", User: "shop",
-		Password: secret.New("integration-password"), SSLMode: "disable",
-		MaxConns: 4, ConnectTimeout: 10 * time.Second,
-	})
-	require.NoError(t, err)
-	t.Cleanup(pool.Close)
-	return pool
-}
 
 func insertProduct(ctx context.Context, q database.Querier, sku string, stock int) error {
 	_, err := q.Exec(ctx,
@@ -69,7 +32,7 @@ func countProducts(t *testing.T, pool *pgxpool.Pool, sku string) int {
 }
 
 func TestDatabase(t *testing.T) {
-	pool := startPostgres(t)
+	pool, cfg := dbtest.Start(t)
 	tm, err := database.NewTxManager(pool)
 	require.NoError(t, err)
 	ctx := context.Background()
@@ -82,11 +45,9 @@ func TestDatabase(t *testing.T) {
 	})
 
 	t.Run("wrong password hides connection details", func(t *testing.T) {
-		cfg := database.Config{
-			Host: pool.Config().ConnConfig.Host, Port: int(pool.Config().ConnConfig.Port), Name: "shop", User: "shop",
-			Password: secret.New("wrong-password"), SSLMode: "disable", MaxConns: 1, ConnectTimeout: 10 * time.Second,
-		}
-		_, err := database.Open(ctx, cfg)
+		wrong := cfg
+		wrong.Password = secret.New("wrong-password")
+		_, err := database.Open(ctx, wrong)
 		require.EqualError(t, err, "database: ping: authentication failed (SQLSTATE 28P01)")
 		var pgErr *pgconn.PgError
 		require.ErrorAs(t, err, &pgErr)
@@ -149,6 +110,23 @@ func TestDatabase(t *testing.T) {
 			require.Implements(t, (*pgx.Tx)(nil), database.Q(ctx, pool))
 			return nil
 		}))
+	})
+
+	t.Run("products schema enforces version and sku constraint", func(t *testing.T) {
+		var version int
+		require.NoError(t, pool.QueryRow(ctx, `INSERT INTO products (sku, name, category, price, stock, weight_kg)
+			VALUES ('VERSION-1', 'v', 'test', 1, 1, 0) RETURNING version`).Scan(&version))
+		require.Equal(t, 1, version)
+
+		_, err := pool.Exec(ctx, `UPDATE products SET version = 0 WHERE sku = 'VERSION-1'`)
+		var pgErr *pgconn.PgError
+		require.ErrorAs(t, err, &pgErr)
+		require.Equal(t, "23514", pgErr.Code)
+
+		err = insertProduct(ctx, pool, "VERSION-1", 1)
+		require.ErrorAs(t, err, &pgErr)
+		require.Equal(t, "23505", pgErr.Code)
+		require.Equal(t, "products_sku_key", pgErr.ConstraintName)
 	})
 
 	t.Run("stock check constraint", func(t *testing.T) {

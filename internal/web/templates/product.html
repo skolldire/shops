@@ -1,0 +1,15 @@
+{{define "title"}}{{.Name}}{{end}}
+{{define "content"}}
+<p><a href="/">← Back to the store</a></p>
+<article class="product-detail">
+<h1>{{.Name}}</h1>
+<p class="price">${{money .Price}}</p>
+{{if .Description}}<p>{{.Description}}</p>{{end}}
+<dl>
+<dt>SKU</dt><dd>{{.SKU}}</dd>
+<dt>Category</dt><dd>{{.Category}}</dd>
+<dt>Availability</dt><dd>{{if gt .Stock 0}}{{.Stock}} in stock{{else}}<span class="stock out">Out of stock</span>{{end}}</dd>
+<dt>Weight</dt><dd>{{weight .WeightKg}} kg</dd>
+</dl>
+</article>
+{{end}}

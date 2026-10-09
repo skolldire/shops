@@ -7,12 +7,16 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/skolldire/shops/internal/catalog"
 	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/health"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
+	"github.com/skolldire/shops/internal/web"
 )
+
+const maxRequestBytes = 1 << 20
 
 type app struct {
 	api     http.Handler
@@ -30,10 +34,25 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	}
 	healthSvc.Register("postgres", dbChecker)
 
+	products, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: log})
+	if err != nil {
+		return nil, err
+	}
+	ui, err := web.New(web.Deps{Catalog: products, Log: log})
+	if err != nil {
+		return nil, err
+	}
+
 	router := httpx.NewRouter(log)
-	router.Get("/health/live", healthSvc.Live)
-	router.Get("/health/ready", healthSvc.Ready)
-	router.Mount("/api", chi.NewRouter())
+	router.Route("/health", func(r chi.Router) {
+		r.Get("/live", healthSvc.Live)
+		r.Get("/ready", healthSvc.Ready)
+	})
+	router.Route("/api", func(api chi.Router) {
+		api.Use(httpx.MaxBodyBytes(maxRequestBytes))
+		api.Route("/v1", products.RegisterRoutes)
+	})
+	router.Mount("/", ui.Routes())
 
 	metrics := http.NewServeMux()
 	metrics.Handle("GET /metrics", tel.MetricsHandler())
