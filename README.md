@@ -97,6 +97,7 @@ CodeRabbit reviews every pull request with the rules in `.coderabbit.yaml` and a
 | 8080 | `GET /health/live` | `200 {"status":"up"}` while the process responds |
 | 8080 | `GET /health/ready` | `200` or `503` with `{"status":"up\|down","checks":{"postgres":"up\|down"}}` |
 | 8080 | `/api/v1/...` | The product API, described below. Unknown routes answer `404` or `405` as `application/problem+json` (RFC 9457), with `Allow` on 405 |
+| 8080 | `/health/...` | Unknown health routes answer `404` as `application/problem+json` |
 | 8080 | anything else | The web UI. Unknown pages answer an HTML `404` |
 | 9100 | `GET /metrics` | Prometheus metrics: HTTP server, Go runtime and process |
 
@@ -203,7 +204,8 @@ The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it 
 ## Known limitations
 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
-- **No CSRF protection.** There is no authentication and no session cookie yet, so there are no credentials another site could ride on. CSRF tokens become necessary as soon as authentication is added.
+- **No authentication.** Anyone who can reach port 8080 can create, edit and delete products through `/api/v1/products` and `/admin/products`. Do not expose the published listener to untrusted clients without access control in front of it, such as an authenticating reverse proxy or a private network.
+- **No CSRF protection.** There is no session cookie yet, so there are no credentials another site could ride on. CSRF tokens become necessary as soon as authentication is added.
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
 
 ## Configuration

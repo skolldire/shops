@@ -49,6 +49,10 @@ func (ui *UI) store(w http.ResponseWriter, r *http.Request) {
 		ui.serverError(w, r, err)
 		return
 	}
+	if data.Categories, err = ui.catalog.Categories(r.Context()); err != nil {
+		ui.serverError(w, r, err)
+		return
+	}
 	ui.listingPage(w, r, "store", data)
 }
 
@@ -75,12 +79,6 @@ func (ui *UI) listing(r *http.Request, path string) (listing, error) {
 		SortOptions: sortOptions,
 		Notice:      notices[values.Get("notice")],
 	}
-	categories, err := ui.catalog.Categories(r.Context())
-	if err != nil {
-		return listing{}, err
-	}
-	data.Categories = categories
-
 	query, err := catalog.ParseSearchQuery(values)
 	var fieldErrs validation.Errors
 	if errors.As(err, &fieldErrs) {

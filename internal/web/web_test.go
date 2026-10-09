@@ -19,6 +19,7 @@ type fakeCatalog struct {
 	products   map[string]catalog.Product
 	categories []string
 	err        error
+	catErr     error
 	writeErr   error
 	total      int
 	searched   bool
@@ -68,6 +69,9 @@ func (f *fakeCatalog) Delete(_ context.Context, _ string, version int) error {
 }
 
 func (f *fakeCatalog) Categories(context.Context) ([]string, error) {
+	if f.catErr != nil {
+		return nil, f.catErr
+	}
 	return f.categories, f.err
 }
 

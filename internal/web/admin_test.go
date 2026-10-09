@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -53,6 +54,18 @@ func TestAdminListShowsActions(t *testing.T) {
 	partial := get(h, "/admin/products?q=run", "HX-Request", "true")
 	require.NotContains(t, partial.Body.String(), "<html")
 	require.Contains(t, partial.Body.String(), "<table>")
+}
+
+func TestAdminListDoesNotDependOnCategories(t *testing.T) {
+	cat := withProducts(shoes())
+	cat.catErr = errors.New("categories unavailable")
+	h, _ := newTestUI(t, cat)
+
+	rec := get(h, "/admin/products")
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "Running Shoes")
+	require.Equal(t, http.StatusInternalServerError, get(h, "/").Code, "the storefront still needs its category filter")
 }
 
 func TestCreateProduct(t *testing.T) {
