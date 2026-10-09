@@ -22,15 +22,15 @@ func resolve(ctx context.Context, value string, resolvers Resolvers) (string, er
 	}
 	m := placeholderPattern.FindStringSubmatch(value)
 	if m == nil {
-		return "", fmt.Errorf("invalid placeholder %s", value)
+		return "", errors.New("invalid placeholder syntax")
 	}
-	scheme, ref := envScheme, m[1]
+	scheme, ref, label := envScheme, m[1], "${"+m[1]+"}"
 	if m[4] != "" {
-		scheme, ref = m[4], m[5]
+		scheme, ref, label = m[4], m[5], "${"+m[4]+":"+m[5]+"}"
 	}
 	r, ok := resolvers[scheme]
 	if !ok {
-		return "", fmt.Errorf("%s: unknown scheme %q", value, scheme)
+		return "", fmt.Errorf("unknown placeholder scheme %q", scheme)
 	}
 
 	v, err := r.Resolve(ctx, ref)
@@ -38,9 +38,9 @@ func resolve(ctx context.Context, value string, resolvers Resolvers) (string, er
 	case errors.Is(err, ErrNotFound) && m[2] != "":
 		return m[3], nil
 	case errors.Is(err, ErrNotFound):
-		return "", fmt.Errorf("%s is not set", value)
+		return "", fmt.Errorf("%s is not set", label)
 	case err != nil:
-		return "", fmt.Errorf("%s: %w", value, err)
+		return "", fmt.Errorf("%s: %w", label, err)
 	}
 	return v, nil
 }

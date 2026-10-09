@@ -69,3 +69,21 @@ func TestDurationHooks(t *testing.T) {
 		require.ErrorContains(t, err, "'timeout'", value)
 	}
 }
+
+func TestPlaceholderHookPointerSecret(t *testing.T) {
+	var out struct {
+		Password *secret.Secret `mapstructure:"password"`
+	}
+	decode := func(value any) error {
+		dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+			Result:     &out,
+			DecodeHook: decodeHook(context.Background(), fakeResolvers()),
+		})
+		require.NoError(t, err)
+		return dec.Decode(map[string]any{"password": value})
+	}
+
+	require.NoError(t, decode("${file:/run/secrets/db}"))
+	require.Equal(t, "s3cr3t", out.Password.Reveal())
+	require.ErrorContains(t, decode("hunter2"), "secret values must come from a placeholder")
+}

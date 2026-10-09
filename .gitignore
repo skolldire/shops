@@ -19,3 +19,5 @@ secrets/
 .vscode/
 *.swp
 .DS_Store
+
+docs/prompts/

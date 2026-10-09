@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"testing"
 
@@ -48,17 +49,28 @@ func TestResolve(t *testing.T) {
 
 func TestResolveErrors(t *testing.T) {
 	tests := map[string]string{
-		"${MISSING}":     "${MISSING} is not set",
-		"${EMPTY}":       "${EMPTY} is not set",
-		"${vault:db/pw}": `${vault:db/pw}: unknown scheme "vault"`,
-		"${file:/nope}":  "${file:/nope}: read file /nope: file does not exist",
-		"${1ABC}":        "invalid placeholder ${1ABC}",
-		"${FILE:/x}":     "invalid placeholder ${FILE:/x}",
-		"${file:}":       "invalid placeholder ${file:}",
-		"${A B}":         "invalid placeholder ${A B}",
+		"${MISSING}":         "${MISSING} is not set",
+		"${EMPTY}":           "${EMPTY} is not set",
+		"${vault:db/pw}":     `unknown placeholder scheme "vault"`,
+		"${file:/nope}":      "${file:/nope}: read file /nope: file does not exist",
+		"${1ABC}":            "invalid placeholder syntax",
+		"${FILE:/x}":         "invalid placeholder syntax",
+		"${file:}":           "invalid placeholder syntax",
+		"${A B}":             "invalid placeholder syntax",
+		"${DB PASS:-s3cret}": "invalid placeholder syntax",
 	}
 	for value, want := range tests {
 		_, err := resolve(context.Background(), value, fakeResolvers())
 		require.EqualError(t, err, want, value)
 	}
+}
+
+func TestResolveErrorsNeverIncludeDefaults(t *testing.T) {
+	failing := Resolvers{"env": resolverFunc(func(context.Context, string) (string, error) {
+		return "", errors.New("lookup failed")
+	})}
+
+	_, err := resolve(context.Background(), "${DB_PASSWORD:-s3cret}", failing)
+
+	require.EqualError(t, err, "${DB_PASSWORD}: lookup failed")
 }

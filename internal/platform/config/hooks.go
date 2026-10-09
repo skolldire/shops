@@ -26,6 +26,9 @@ func decodeHook(ctx context.Context, resolvers Resolvers) mapstructure.DecodeHoo
 
 func placeholderHook(ctx context.Context, resolvers Resolvers) mapstructure.DecodeHookFuncType {
 	return func(_ reflect.Type, to reflect.Type, data any) (any, error) {
+		if to.Kind() == reflect.Pointer && to.Elem() == secretType {
+			return data, nil
+		}
 		s, isString := data.(string)
 		if to == secretType {
 			if !isString || !isPlaceholder(s) {
