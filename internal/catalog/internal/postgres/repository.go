@@ -118,7 +118,8 @@ func (r *Repository) Delete(ctx context.Context, id string, version int) error {
 
 func (r *Repository) Categories(ctx context.Context) ([]string, error) {
 	rows, err := database.Q(ctx, r.pool).Query(ctx,
-		`SELECT DISTINCT category FROM products WHERE status = 'ACTIVE' ORDER BY category`)
+		`SELECT min(category COLLATE "C") FROM products WHERE status = 'ACTIVE'
+		 GROUP BY lower(category) ORDER BY lower(category)`)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list categories: %w", err)
 	}
