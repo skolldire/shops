@@ -142,9 +142,9 @@ func parseDecimal(errs *validation.Errors, field, raw string) *decimal.Decimal {
 	if raw == "" {
 		return nil
 	}
-	d, err := decimal.NewFromString(raw)
+	d, err := ParseDecimal(raw)
 	if err != nil {
-		errs.Add(field, validation.CodeInvalidFormat, "must be a decimal number")
+		errs.Add(field, validation.CodeInvalidFormat, err.Error())
 		return nil
 	}
 	return &d

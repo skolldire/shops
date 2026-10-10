@@ -36,6 +36,8 @@ jobs:
         run: make lint-comments
       - name: Module boundaries
         run: make lint-arch
+      - name: Decimals are parsed with the shared parser
+        run: make lint-decimals
       - name: go.mod and go.sum are tidy
         run: make tidy-check
       - name: Dockerfile style

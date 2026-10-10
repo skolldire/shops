@@ -6,7 +6,7 @@ SCHEMA := db/init/001_schema.sql
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION ?= v1.8.0
 
-.PHONY: build run test test-integration coverage lint lint-comments lint-arch tidy-check vuln up up-debug down schema logs
+.PHONY: build run test test-integration coverage lint lint-comments lint-arch lint-decimals tidy-check vuln up up-debug down schema logs
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/api
@@ -26,7 +26,7 @@ coverage:
 	$(GO) test -race -covermode=atomic -coverprofile=coverage.out ./...
 	$(GO) tool cover -func=coverage.out | tail -1
 
-lint: lint-comments lint-arch tidy-check
+lint: lint-comments lint-arch lint-decimals tidy-check
 	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 
 lint-comments:
@@ -41,6 +41,9 @@ lint-arch:
 	! printf '%s\n' "$$deps" | grep -E '^(github.com/jackc/pgx|net/http$$|database/sql$$|github.com/go-chi|go.opentelemetry.io|github.com/skolldire/shops/internal/platform/(httpx|telemetry|database))' || { echo "catalog core must not depend on transport, persistence or telemetry"; exit 1; }
 	@deps="$$($(GO) list -deps ./internal/platform/...)" || { echo "go list failed for platform"; exit 1; }; \
 	! printf '%s\n' "$$deps" | grep -E '^github.com/skolldire/shops/internal/(catalog|web|ordering|payment)' || { echo "platform must not depend on business modules"; exit 1; }
+
+lint-decimals:
+	@! grep -rln --include='*.go' 'decimal.NewFromString' internal | grep -vE '^internal/catalog/internal/(core/decimal\.go|postgres/)' || { echo "parse decimals with catalog.ParseDecimal or core.ParseDecimal, not decimal.NewFromString"; exit 1; }
 
 tidy-check:
 	$(GO) mod tidy -diff

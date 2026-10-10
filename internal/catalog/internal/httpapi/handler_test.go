@@ -142,12 +142,12 @@ func TestCreate(t *testing.T) {
 func TestCreateDecimalsNeverPassThroughFloat(t *testing.T) {
 	svc := &fakeService{}
 	h, _ := newServer(t, svc)
-	body := `{"sku":"x","name":"n","category":"c","price":0.1000000000000000055511151231257827,"stock":1,"weight_kg":"123456.789"}`
+	body := `{"sku":"x","name":"n","category":"c","price":1234567890123.123456,"stock":1,"weight_kg":"123456.789"}`
 
 	rec := do(h, http.MethodPost, "/api/v1/products", body)
 
 	require.Equal(t, http.StatusCreated, rec.Code)
-	require.Equal(t, "0.1000000000000000055511151231257827", svc.created.Price.String())
+	require.Equal(t, "1234567890123.123456", svc.created.Price.String())
 	require.Equal(t, "123456.789", svc.created.WeightKg.String())
 }
 
@@ -327,4 +327,46 @@ func TestUnexpectedErrorsAreLogged(t *testing.T) {
 	do(h, http.MethodGet, "/api/v1/categories", "")
 
 	require.Contains(t, logs.String(), `"message":"boom"`)
+}
+
+func TestDecimalsMustBePlain(t *testing.T) {
+	bodies := map[string]string{
+		"string exponent":      `{"sku":"a","name":"n","category":"c","stock":1,"weight_kg":"1","price":"1e100000000"}`,
+		"number exponent":      `{"sku":"a","name":"n","category":"c","stock":1,"weight_kg":"1","price":1e100000000}`,
+		"small number exp":     `{"sku":"a","name":"n","category":"c","stock":1,"weight_kg":"1","price":2.999e1}`,
+		"weight with exponent": `{"sku":"a","name":"n","category":"c","stock":1,"price":"1","weight_kg":"1E3"}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			svc := &fakeService{}
+			h, _ := newServer(t, svc)
+
+			rec := within(t, func() *httptest.ResponseRecorder { return do(h, http.MethodPost, "/api/v1/products", body) })
+
+			require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+			decodeProblem(t, rec)
+			require.Contains(t, rec.Body.String(), "must be a plain decimal number such as 29.99")
+			require.Nil(t, svc.created.Price)
+		})
+	}
+
+	h, _ := newServer(t, &fakeService{})
+	rec := within(t, func() *httptest.ResponseRecorder {
+		return do(h, http.MethodGet, "/api/v1/products?min_price=1e100000000", "")
+	})
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	require.Equal(t, map[string]string{"min_price": "invalid_format"}, fieldCodes(decodeProblem(t, rec)))
+}
+
+func within(t *testing.T, fn func() *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+	t.Helper()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- fn() }()
+	select {
+	case rec := <-done:
+		return rec
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("request took longer than 100ms")
+		return nil
+	}
 }
