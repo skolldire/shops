@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/platform/database/dbtest"
@@ -20,6 +21,7 @@ import (
 type client struct {
 	t    *testing.T
 	base string
+	pool *pgxpool.Pool
 }
 
 func (c client) do(method, path, body string, headers ...string) (*http.Response, string) {
@@ -53,7 +55,7 @@ func startApp(t *testing.T) client {
 	require.NoError(t, err)
 	srv := httptest.NewServer(a.api)
 	t.Cleanup(srv.Close)
-	return client{t: t, base: srv.URL}
+	return client{t: t, base: srv.URL, pool: pool}
 }
 
 func errorCodes(t *testing.T, body string) (string, map[string]string) {
@@ -167,4 +169,32 @@ func TestValidationAndSearchOverHTTP(t *testing.T) {
 	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 	code, _ = errorCodes(t, body)
 	require.Equal(t, "request_too_large", code)
+}
+
+func TestWeakIfMatchDoesNotModifyTheProduct(t *testing.T) {
+	c := startApp(t)
+	resp, _ := c.do(http.MethodPost, "/api/v1/products", `{"sku":"wk-001","name":"Kettle","category":"Home","price":"19.90","stock":4,"weight_kg":"1.200"}`)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	location := resp.Header.Get("Location")
+	require.Equal(t, `"1"`, resp.Header.Get("ETag"))
+
+	stored := func() (version, stock int, status string) {
+		require.NoError(t, c.pool.QueryRow(t.Context(),
+			`SELECT version, stock, status FROM products WHERE id = $1::uuid`,
+			location[strings.LastIndex(location, "/")+1:]).Scan(&version, &stock, &status))
+		return version, stock, status
+	}
+
+	for _, method := range []string{http.MethodPatch, http.MethodDelete} {
+		resp, body := c.do(method, location, `{"stock":99}`, "If-Match", `W/"1"`)
+
+		require.Equal(t, http.StatusPreconditionFailed, resp.StatusCode, body)
+		code, _ := errorCodes(t, body)
+		require.Equal(t, "precondition_failed", code)
+		require.Contains(t, body, "weak entity tags are not accepted")
+		version, stock, status := stored()
+		require.Equal(t, 1, version, method)
+		require.Equal(t, 4, stock, method)
+		require.Equal(t, "ACTIVE", status, method)
+	}
 }

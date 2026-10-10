@@ -36,6 +36,7 @@ func sample() core.Product {
 
 type fakeService struct {
 	err     error
+	creates int
 	created core.NewProductInput
 	version int
 	changes core.Changes
@@ -44,6 +45,7 @@ type fakeService struct {
 }
 
 func (f *fakeService) Create(_ context.Context, in core.NewProductInput) (core.Product, error) {
+	f.creates++
 	f.created = in
 	p := sample()
 	p.Version = 1
@@ -142,12 +144,12 @@ func TestCreate(t *testing.T) {
 func TestCreateDecimalsNeverPassThroughFloat(t *testing.T) {
 	svc := &fakeService{}
 	h, _ := newServer(t, svc)
-	body := `{"sku":"x","name":"n","category":"c","price":0.1000000000000000055511151231257827,"stock":1,"weight_kg":"123456.789"}`
+	body := `{"sku":"x","name":"n","category":"c","price":1234567890123.123456,"stock":1,"weight_kg":"123456.789"}`
 
 	rec := do(h, http.MethodPost, "/api/v1/products", body)
 
 	require.Equal(t, http.StatusCreated, rec.Code)
-	require.Equal(t, "0.1000000000000000055511151231257827", svc.created.Price.String())
+	require.Equal(t, "1234567890123.123456", svc.created.Price.String())
 	require.Equal(t, "123456.789", svc.created.WeightKg.String())
 }
 
@@ -172,10 +174,22 @@ func TestUpdate(t *testing.T) {
 	require.Equal(t, "12.5", svc.changes.Price.String())
 	require.EqualValues(t, 0, *svc.changes.Stock)
 	require.Nil(t, svc.changes.Name)
+}
 
-	rec = do(h, http.MethodPatch, "/api/v1/products/"+id, `{}`, "If-Match", `W/"7"`)
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, 7, svc.version)
+func TestWeakIfMatchNeverMatches(t *testing.T) {
+	for _, method := range []string{http.MethodPatch, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			svc := &fakeService{}
+			h, _ := newServer(t, svc)
+
+			rec := do(h, method, "/api/v1/products/"+id, `{"stock":1}`, "If-Match", `W/"3"`)
+
+			require.Equal(t, http.StatusPreconditionFailed, rec.Code, rec.Body.String())
+			require.Equal(t, "precondition_failed", decodeProblem(t, rec).Code)
+			require.Contains(t, rec.Body.String(), "weak entity tags are not accepted")
+			require.Zero(t, svc.version, "a weak tag must not reach the catalog")
+		})
+	}
 }
 
 func TestDelete(t *testing.T) {
@@ -246,6 +260,7 @@ func TestErrorTable(t *testing.T) {
 		"delete without if-match": {nil, http.MethodDelete, "/api/v1/products/" + id, "", nil, 428, "precondition_required"},
 		"if-match wildcard":       {nil, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", "*"}, 428, "precondition_required"},
 		"if-match malformed":      {nil, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", "3"}, 400, "invalid_request"},
+		"if-match weak malformed": {nil, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", "W/3"}, 400, "invalid_request"},
 		"unexpected failure":      {errors.New("db exploded: host=10.0.0.5"), http.MethodGet, "/api/v1/products/" + id, "", nil, 500, "internal_error"},
 	}
 	for name, tt := range tests {
@@ -327,4 +342,46 @@ func TestUnexpectedErrorsAreLogged(t *testing.T) {
 	do(h, http.MethodGet, "/api/v1/categories", "")
 
 	require.Contains(t, logs.String(), `"message":"boom"`)
+}
+
+func TestDecimalsMustBePlain(t *testing.T) {
+	bodies := map[string]string{
+		"string exponent":      `{"sku":"a","name":"n","category":"c","stock":1,"weight_kg":"1","price":"1e100000000"}`,
+		"number exponent":      `{"sku":"a","name":"n","category":"c","stock":1,"weight_kg":"1","price":1e100000000}`,
+		"small number exp":     `{"sku":"a","name":"n","category":"c","stock":1,"weight_kg":"1","price":2.999e1}`,
+		"weight with exponent": `{"sku":"a","name":"n","category":"c","stock":1,"price":"1","weight_kg":"1E3"}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			svc := &fakeService{}
+			h, _ := newServer(t, svc)
+
+			rec := within(t, func() *httptest.ResponseRecorder { return do(h, http.MethodPost, "/api/v1/products", body) })
+
+			require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+			decodeProblem(t, rec)
+			require.Contains(t, rec.Body.String(), "must be a plain decimal number such as 29.99")
+			require.Zero(t, svc.creates, "a rejected decimal must not reach the catalog")
+		})
+	}
+
+	h, _ := newServer(t, &fakeService{})
+	rec := within(t, func() *httptest.ResponseRecorder {
+		return do(h, http.MethodGet, "/api/v1/products?min_price=1e100000000", "")
+	})
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	require.Equal(t, map[string]string{"min_price": "invalid_format"}, fieldCodes(decodeProblem(t, rec)))
+}
+
+func within(t *testing.T, fn func() *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+	t.Helper()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- fn() }()
+	select {
+	case rec := <-done:
+		return rec
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("request took longer than 100ms")
+		return nil
+	}
 }

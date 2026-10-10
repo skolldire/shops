@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -86,6 +87,19 @@ func newTestUI(t *testing.T, cat *fakeCatalog) (http.Handler, *bytes.Buffer) {
 	ui, err := New(Deps{Catalog: cat, Log: log})
 	require.NoError(t, err)
 	return ui.Routes(), &logs
+}
+
+func within(t *testing.T, fn func() *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+	t.Helper()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- fn() }()
+	select {
+	case rec := <-done:
+		return rec
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("request took longer than 100ms")
+		return nil
+	}
 }
 
 func get(h http.Handler, path string, headers ...string) *httptest.ResponseRecorder {

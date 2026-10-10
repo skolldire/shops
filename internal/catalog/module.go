@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"github.com/skolldire/shops/internal/catalog/internal/core"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
@@ -46,6 +47,10 @@ func newModule(repo core.Repository, log logger.Service) (*Module, error) {
 
 func (m *Module) RegisterRoutes(r chi.Router) {
 	m.http.Routes(r)
+}
+
+func ParseDecimal(raw string) (decimal.Decimal, error) {
+	return core.ParseDecimal(raw)
 }
 
 func ParseSearchQuery(values url.Values) (SearchQuery, error) {
