@@ -172,10 +172,22 @@ func TestUpdate(t *testing.T) {
 	require.Equal(t, "12.5", svc.changes.Price.String())
 	require.EqualValues(t, 0, *svc.changes.Stock)
 	require.Nil(t, svc.changes.Name)
+}
 
-	rec = do(h, http.MethodPatch, "/api/v1/products/"+id, `{}`, "If-Match", `W/"7"`)
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, 7, svc.version)
+func TestWeakIfMatchNeverMatches(t *testing.T) {
+	for _, method := range []string{http.MethodPatch, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			svc := &fakeService{}
+			h, _ := newServer(t, svc)
+
+			rec := do(h, method, "/api/v1/products/"+id, `{"stock":1}`, "If-Match", `W/"3"`)
+
+			require.Equal(t, http.StatusPreconditionFailed, rec.Code, rec.Body.String())
+			require.Equal(t, "precondition_failed", decodeProblem(t, rec).Code)
+			require.Contains(t, rec.Body.String(), "weak entity tags are not accepted")
+			require.Zero(t, svc.version, "a weak tag must not reach the catalog")
+		})
+	}
 }
 
 func TestDelete(t *testing.T) {
@@ -246,6 +258,7 @@ func TestErrorTable(t *testing.T) {
 		"delete without if-match": {nil, http.MethodDelete, "/api/v1/products/" + id, "", nil, 428, "precondition_required"},
 		"if-match wildcard":       {nil, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", "*"}, 428, "precondition_required"},
 		"if-match malformed":      {nil, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", "3"}, 400, "invalid_request"},
+		"if-match weak malformed": {nil, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", "W/3"}, 400, "invalid_request"},
 		"unexpected failure":      {errors.New("db exploded: host=10.0.0.5"), http.MethodGet, "/api/v1/products/" + id, "", nil, 500, "internal_error"},
 	}
 	for name, tt := range tests {
