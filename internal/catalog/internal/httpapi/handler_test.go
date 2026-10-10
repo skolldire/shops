@@ -36,6 +36,7 @@ func sample() core.Product {
 
 type fakeService struct {
 	err     error
+	creates int
 	created core.NewProductInput
 	version int
 	changes core.Changes
@@ -44,6 +45,7 @@ type fakeService struct {
 }
 
 func (f *fakeService) Create(_ context.Context, in core.NewProductInput) (core.Product, error) {
+	f.creates++
 	f.created = in
 	p := sample()
 	p.Version = 1
@@ -359,7 +361,7 @@ func TestDecimalsMustBePlain(t *testing.T) {
 			require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 			decodeProblem(t, rec)
 			require.Contains(t, rec.Body.String(), "must be a plain decimal number such as 29.99")
-			require.Nil(t, svc.created.Price)
+			require.Zero(t, svc.creates, "a rejected decimal must not reach the catalog")
 		})
 	}
 

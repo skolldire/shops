@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -142,7 +143,7 @@ func TestStoreRejectsExponentFilters(t *testing.T) {
 	cat := withProducts(shoes())
 	h, _ := newTestUI(t, cat)
 
-	rec := get(h, "/?min_price=1e100000000")
+	rec := within(t, func() *httptest.ResponseRecorder { return get(h, "/?min_price=1e100000000") })
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.False(t, cat.searched)

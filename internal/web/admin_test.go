@@ -113,7 +113,7 @@ func TestCreateProductRejectsExponents(t *testing.T) {
 	form := validForm()
 	form.Set("price", "1e100000000")
 
-	rec := post(h, "/admin/products", form)
+	rec := within(t, func() *httptest.ResponseRecorder { return post(h, "/admin/products", form) })
 
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	require.Contains(t, fieldBlock(rec.Body.String(), "price"), "must be a plain decimal number such as 29.99")
