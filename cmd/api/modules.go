@@ -16,11 +16,15 @@ import (
 	"github.com/skolldire/shops/internal/web"
 )
 
-const maxRequestBytes = 1 << 20
+const (
+	maxRequestBytes        = 1 << 20
+	multipartOverheadBytes = 64 << 10
+)
 
 type app struct {
 	api     http.Handler
 	metrics http.Handler
+	catalog *catalog.Module
 }
 
 func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *telemetry.Provider) (*app, error) {
@@ -34,7 +38,10 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	}
 	healthSvc.Register("postgres", dbChecker)
 
-	products, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: log})
+	products, err := catalog.NewModule(catalog.Deps{
+		Pool: pool, Log: log, Metrics: tel,
+		Import: catalog.ImportLimits{MaxBytes: cfg.Import.MaxBytes, MaxRows: cfg.Import.MaxRows},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -48,16 +55,22 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 		r.Get("/live", healthSvc.Live)
 		r.Get("/ready", healthSvc.Ready)
 	})
-	router.Route("/api", func(api chi.Router) {
-		api.Use(httpx.MaxBodyBytes(maxRequestBytes))
-		api.Route("/v1", products.RegisterRoutes)
+	router.Route("/api/v1", func(api chi.Router) {
+		api.Group(func(r chi.Router) {
+			r.Use(httpx.MaxBodyBytes(maxRequestBytes))
+			products.RegisterRoutes(r)
+		})
+		api.Group(func(r chi.Router) {
+			r.Use(httpx.MaxBodyBytes(cfg.Import.MaxBytes + multipartOverheadBytes))
+			products.RegisterImportRoutes(r)
+		})
 	})
 	router.Mount("/", ui.Routes())
 
 	metrics := http.NewServeMux()
 	metrics.Handle("GET /metrics", tel.MetricsHandler())
 
-	return &app{api: tel.HTTPMiddleware()(router), metrics: metrics}, nil
+	return &app{api: tel.HTTPMiddleware()(router), metrics: metrics, catalog: products}, nil
 }
 
 func contextFields(ctx context.Context) map[string]any {
