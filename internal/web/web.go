@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -30,18 +31,21 @@ type Catalog interface {
 	Update(ctx context.Context, id string, in catalog.UpdateInput) (catalog.Product, error)
 	Delete(ctx context.Context, id string, version int) error
 	Categories(ctx context.Context) ([]string, error)
+	Import(ctx context.Context, r io.Reader, opts catalog.ImportOptions) (catalog.ImportReport, error)
 }
 
 type Deps struct {
 	Catalog Catalog
 	Log     logger.Service
+	Import  catalog.ImportLimits
 }
 
 type UI struct {
-	catalog Catalog
-	log     logger.Service
-	views   *renderer
-	static  http.Handler
+	catalog      Catalog
+	log          logger.Service
+	importLimits catalog.ImportLimits
+	views        *renderer
+	static       http.Handler
 }
 
 func New(d Deps) (*UI, error) {
@@ -51,6 +55,9 @@ func New(d Deps) (*UI, error) {
 	if d.Log == nil {
 		return nil, errors.New("web: logger is required")
 	}
+	if d.Import.MaxBytes <= 0 || d.Import.MaxRows <= 0 {
+		return nil, errors.New("web: import limits are required")
+	}
 	views, err := newRenderer()
 	if err != nil {
 		return nil, err
@@ -59,25 +66,33 @@ func New(d Deps) (*UI, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &UI{catalog: d.Catalog, log: d.Log, views: views, static: static}, nil
+	return &UI{catalog: d.Catalog, log: d.Log, importLimits: d.Import, views: views, static: static}, nil
 }
 
 func (ui *UI) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Use(securityHeaders, ui.recoverHTML, httpx.MaxBodyBytes(maxFormBytes))
+	r.Use(securityHeaders, ui.recoverHTML)
 	r.NotFound(ui.notFound)
 	r.MethodNotAllowed(ui.notFound)
-	r.Handle("/static/*", ui.static)
-	r.Get("/", ui.store)
-	r.Get("/products/{id}", ui.product)
-	r.Route(adminProducts, func(r chi.Router) {
-		r.Get("/", ui.adminList)
-		r.Post("/", ui.createProduct)
-		r.Get("/new", ui.newProduct)
-		r.Get("/{id}/edit", ui.editProduct)
-		r.Post("/{id}", ui.updateProduct)
-		r.Get("/{id}/delete", ui.confirmDelete)
-		r.Post("/{id}/delete", ui.deleteProduct)
+	r.Group(func(r chi.Router) {
+		r.Use(httpx.MaxBodyBytes(maxFormBytes))
+		r.Handle("/static/*", ui.static)
+		r.Get("/", ui.store)
+		r.Get("/products/{id}", ui.product)
+		r.Route(adminProducts, func(r chi.Router) {
+			r.Get("/", ui.adminList)
+			r.Post("/", ui.createProduct)
+			r.Get("/new", ui.newProduct)
+			r.Get("/{id}/edit", ui.editProduct)
+			r.Post("/{id}", ui.updateProduct)
+			r.Get("/{id}/delete", ui.confirmDelete)
+			r.Post("/{id}/delete", ui.deleteProduct)
+		})
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(httpx.MaxBodyBytes(ui.importLimits.MaxBytes + multipartOverheadBytes))
+		r.Get(adminImports, ui.importForm)
+		r.Post(adminImports, ui.importFile)
 	})
 	return r
 }

@@ -38,14 +38,12 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	}
 	healthSvc.Register("postgres", dbChecker)
 
-	products, err := catalog.NewModule(catalog.Deps{
-		Pool: pool, Log: log, Metrics: tel,
-		Import: catalog.ImportLimits{MaxBytes: cfg.Import.MaxBytes, MaxRows: cfg.Import.MaxRows},
-	})
+	limits := catalog.ImportLimits{MaxBytes: cfg.Import.MaxBytes, MaxRows: cfg.Import.MaxRows}
+	products, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: log, Metrics: tel, Import: limits})
 	if err != nil {
 		return nil, err
 	}
-	ui, err := web.New(web.Deps{Catalog: products, Log: log})
+	ui, err := web.New(web.Deps{Catalog: products, Log: log, Import: limits})
 	if err != nil {
 		return nil, err
 	}

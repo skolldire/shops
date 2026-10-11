@@ -3,6 +3,8 @@ package web
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -28,7 +30,25 @@ type fakeCatalog struct {
 	created    catalog.CreateInput
 	updated    catalog.UpdateInput
 	deleted    int
+	report     catalog.ImportReport
+	importErr  error
+	imports    int
+	importName string
+	importBody string
 }
+
+func (f *fakeCatalog) Import(_ context.Context, r io.Reader, opts catalog.ImportOptions) (catalog.ImportReport, error) {
+	f.imports++
+	f.importName = opts.FileName
+	body, err := io.ReadAll(r)
+	f.importBody = string(body)
+	if err != nil {
+		return catalog.ImportReport{}, fmt.Errorf("catalog: read import file: %w", err)
+	}
+	return f.report, f.importErr
+}
+
+var testImportLimits = catalog.ImportLimits{MaxBytes: 4096, MaxRows: 100}
 
 func (f *fakeCatalog) Search(_ context.Context, q catalog.SearchQuery) (catalog.Page, error) {
 	f.query, f.searched = q, true
@@ -76,17 +96,23 @@ func (f *fakeCatalog) Categories(context.Context) ([]string, error) {
 	return f.categories, f.err
 }
 
-func newTestUI(t *testing.T, cat *fakeCatalog) (http.Handler, *bytes.Buffer) {
+func newTestLogger(t *testing.T) (logger.Service, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
+	return log, &logs
+}
+
+func newTestUI(t *testing.T, cat *fakeCatalog) (http.Handler, *bytes.Buffer) {
+	t.Helper()
+	log, logs := newTestLogger(t)
 	if cat.products == nil {
 		cat.products = map[string]catalog.Product{}
 	}
-	ui, err := New(Deps{Catalog: cat, Log: log})
+	ui, err := New(Deps{Catalog: cat, Log: log, Import: testImportLimits})
 	require.NoError(t, err)
-	return ui.Routes(), &logs
+	return ui.Routes(), logs
 }
 
 func within(t *testing.T, fn func() *httptest.ResponseRecorder) *httptest.ResponseRecorder {
@@ -171,7 +197,7 @@ func TestPanicsRenderAnHTMLErrorPage(t *testing.T) {
 	var logs bytes.Buffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
-	ui, err := New(Deps{Catalog: cat, Log: log})
+	ui, err := New(Deps{Catalog: cat, Log: log, Import: testImportLimits})
 	require.NoError(t, err)
 	h := securityHeaders(ui.recoverHTML(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })))
 
@@ -189,4 +215,8 @@ func TestNewRequiresDependencies(t *testing.T) {
 	require.EqualError(t, err, "web: catalog is required")
 	_, err = New(Deps{Catalog: &fakeCatalog{}})
 	require.EqualError(t, err, "web: logger is required")
+	log, logErr := logger.New(logger.Config{Level: "info"}, io.Discard)
+	require.NoError(t, logErr)
+	_, err = New(Deps{Catalog: &fakeCatalog{}, Log: log})
+	require.EqualError(t, err, "web: import limits are required")
 }

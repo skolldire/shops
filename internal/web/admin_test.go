@@ -50,6 +50,7 @@ func TestAdminListShowsActions(t *testing.T) {
 	require.Contains(t, body, `<a href="/admin/products/`+productID+`/edit">Edit</a>`)
 	require.Contains(t, body, `<a href="/admin/products/`+productID+`/delete">Delete</a>`)
 	require.Contains(t, body, `<a class="button" href="/admin/products/new">New product</a>`)
+	require.Contains(t, body, `<a class="button secondary" href="/admin/imports">Import CSV</a>`)
 
 	partial := get(h, "/admin/products?q=run", "HX-Request", "true")
 	require.NotContains(t, partial.Body.String(), "<html")
