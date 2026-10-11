@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
-	"unicode"
 
 	"github.com/go-chi/chi/v5"
 
@@ -16,10 +14,7 @@ import (
 	"github.com/skolldire/shops/internal/platform/logger"
 )
 
-const (
-	importField       = "file"
-	maxFileNameLength = 255
-)
+const importField = "file"
 
 type Importer interface {
 	Import(ctx context.Context, r io.Reader, fileName string) (core.ImportReport, error)
@@ -84,7 +79,7 @@ func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
 		if part.FormName() != importField {
 			continue
 		}
-		report, err := h.importer.Import(r.Context(), part, fileName(part.FileName()))
+		report, err := h.importer.Import(r.Context(), part, core.CleanFileName(part.FileName()))
 		if err != nil {
 			h.writeError(w, r, err)
 			return
@@ -109,19 +104,6 @@ func reportJSON(report core.ImportReport) importReportJSON {
 		out.Errors[i] = rowErrorJSON{Line: e.Line, SKU: e.SKU, Field: e.Field, Code: e.Code, Message: e.Message}
 	}
 	return out
-}
-
-func fileName(raw string) string {
-	name := strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, strings.ToValidUTF8(raw, ""))
-	if runes := []rune(name); len(runes) > maxFileNameLength {
-		name = string(runes[:maxFileNameLength])
-	}
-	return name
 }
 
 func (h *ImportHandler) invalidRequest(w http.ResponseWriter, r *http.Request) {

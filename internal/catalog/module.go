@@ -82,7 +82,7 @@ func (m *Module) RegisterImportRoutes(r chi.Router) {
 }
 
 func (m *Module) Import(ctx context.Context, r io.Reader, opts ImportOptions) (ImportReport, error) {
-	report, err := m.importer.Import(ctx, r, opts.FileName)
+	report, err := m.importer.Import(ctx, r, core.CleanFileName(opts.FileName))
 	if err != nil {
 		return ImportReport{}, publicImportError(err)
 	}

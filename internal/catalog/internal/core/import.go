@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/shopspring/decimal"
 
@@ -36,8 +37,9 @@ const (
 	outcomeSkipped  = "skipped"
 	outcomeRejected = "rejected"
 
-	rowField        = "row"
-	importBatchSize = 500
+	rowField          = "row"
+	importBatchSize   = 500
+	maxFileNameLength = 255
 )
 
 var (
@@ -272,6 +274,19 @@ func newImportRow(row csvimport.Row) importRow {
 		WeightKg: decimalCell(&format, "weight_kg", f[6]),
 	})
 	return importRow{line: row.Line, sku: NormalizeSKU(f[1]), product: product, errs: mergeRowErrors(format, err)}
+}
+
+func CleanFileName(raw string) string {
+	name := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(raw, ""))
+	if runes := []rune(name); len(runes) > maxFileNameLength {
+		name = string(runes[:maxFileNameLength])
+	}
+	return name
 }
 
 func NormalizeSKU(raw string) string {

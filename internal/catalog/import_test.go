@@ -33,6 +33,15 @@ func TestModuleImport(t *testing.T) {
 	require.Contains(t, repo.products, "RS-1")
 }
 
+func TestModuleImportCleansTheFileName(t *testing.T) {
+	m, _ := newTestModule(t)
+
+	report, err := m.Import(context.Background(), strings.NewReader(importHeader), ImportOptions{FileName: "pro\tducts\x00.csv"})
+
+	require.NoError(t, err)
+	require.Equal(t, "products.csv", report.File.Name)
+}
+
 func TestModuleImportErrorsArePublic(t *testing.T) {
 	m, repo := newTestModule(t)
 	tests := map[string]struct {
