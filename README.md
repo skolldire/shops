@@ -26,7 +26,7 @@ make up
 curl -i localhost:8080/health/ready
 ```
 
-Open `http://localhost:8080` for the store and `http://localhost:8080/admin/products` to manage products.
+Open `http://localhost:8080` for the store and `http://localhost:8080/admin/products` to manage products. The first start loads the demo catalog, 82 products from the official CSV of the challenge (see [Demo data](#demo-data)).
 
 `make down` removes containers, data and the generated password together, so the next `make up` starts clean and the schema is applied again.
 
@@ -183,7 +183,7 @@ All errors are `application/problem+json` with a stable `code`:
 | Case | Status | `code` |
 |---|---|---|
 | Malformed JSON or unknown fields | 400 | `invalid_request` |
-| Body larger than 1 MB | 413 | `request_too_large` |
+| Body larger than 1 MB (`/api/v1/imports` has its own limit, see [CSV import](#csv-import)) | 413 | `request_too_large` |
 | Domain rules, with an `errors` list per field | 422 | `validation_failed` |
 | Unknown, deleted or malformed product id | 404 | `not_found` |
 | SKU already used | 409 | `sku_taken` |
@@ -191,7 +191,88 @@ All errors are `application/problem+json` with a stable `code`:
 | `If-Match` carries a weak entity tag such as `W/"3"` | 412 | `precondition_failed` |
 | `PATCH` or `DELETE` without `If-Match` | 428 | `precondition_required` |
 
-Field errors use stable codes: `required`, `too_long`, `not_positive`, `too_many_decimals`, `out_of_range`, `invalid_format` and `immutable`.
+Field errors use stable codes: `required`, `too_long`, `not_positive`, `too_many_decimals`, `out_of_range`, `invalid_format` and `immutable`. The import adds `wrong_field_count`, `duplicate_in_file`, `sku_deleted` and `rejected_by_database`.
+
+## CSV import
+
+Products can be loaded from a CSV file through the API or from `/admin/imports`:
+
+```sh
+curl -F file=@testdata/products.csv localhost:8080/api/v1/imports
+```
+
+The request is `multipart/form-data` with the file in a field named `file`. The file is read as a stream and is never written to disk. The import is synchronous: the response is the report, and nothing about an import is stored.
+
+### The file
+
+- The first line must be exactly `name,sku,description,category,price,stock,weight_kg`, in that order. A UTF-8 byte order mark before it is tolerated.
+- UTF-8, comma separated, RFC 4180: double quotes around fields that contain commas, quotes or line breaks.
+- At most 10 MB (`import.max_bytes`) and 10,000 data rows (`import.max_rows`).
+- Every row follows the same rules as the API and the admin forms (see [Rules](#rules)), with the same error codes. `price` and `weight_kg` are plain decimals such as `29.99`; `stock` is a whole number such as `25`.
+- Line numbers are the physical line where a record starts, counting the header as line 1, so they match what an editor shows even when a field spans several lines.
+
+| Situation | Result |
+|---|---|
+| Another header, invalid UTF-8, unbalanced quotes or a limit exceeded | The whole file is rejected with `400` or `413` and nothing is applied |
+| Row with every field empty after trimming | Ignored and counted in `skipped` |
+| Row with a number of fields other than 7 | Rejected with `field: "row"` and `code: "wrong_field_count"` |
+| Row that breaks the product rules | Rejected with every field error it has |
+| SKU repeated in the file, compared after trimming and upper-casing | Every row of the group is rejected with `code: "duplicate_in_file"`; the message names the other lines |
+| SKU of a deleted product | Rejected with `code: "sku_deleted"`; a deleted SKU is never reused |
+| SKU of an active product | Updated. `stock` replaces the current value; it is not added to it |
+| New SKU | Created |
+| Active product that is not in the file | Left as it is |
+
+The file is validated completely before anything is written. The valid rows are then applied in batches of 500, each in its own transaction, so a large file is not all-or-nothing. A row that is identical to the stored product is left untouched: its `version` and `updated_at` do not change, and importing the same file twice reports every row as `unchanged`.
+
+An import overrides whatever is stored: it does not use `If-Match`, and it increases `version` when it changes a product. An administrator who has that product open gets the usual conflict when saving.
+
+### The report
+
+`POST /api/v1/imports` answers `200` with the report, also when rows were rejected:
+
+```json
+{
+  "file": {"name": "products.csv", "bytes": 8930, "sha256": "6fc46b84badb1ac37b8b19a2d0741aa7728d6c93a9fe949b19f676892dc8fd24"},
+  "records": 97,
+  "skipped": 2,
+  "created": 82,
+  "updated": 0,
+  "unchanged": 0,
+  "rejected": 13,
+  "errors": [
+    {"line": 2, "sku": "RS-001", "field": "sku", "code": "duplicate_in_file", "message": "also used on line 36"},
+    {"line": 4, "sku": "WM-042", "field": "price", "code": "invalid_format", "message": "must be a plain decimal number such as 29.99"}
+  ]
+}
+```
+
+`records` is always `skipped + created + updated + unchanged + rejected`. `errors` is sorted by line and then by field. A row with several invalid fields appears once per field and counts once in `rejected`. `sku` is the normalized value, and it is empty for rows with the wrong number of fields. Messages never include the content of the row. The API returns every error; the admin page shows the first 200 and says how many more there are.
+
+Besides the field codes of the product rules, the import uses these codes:
+
+| `code` | `field` | Meaning |
+|---|---|---|
+| `wrong_field_count` | `row` | The row does not have 7 fields |
+| `duplicate_in_file` | `sku` | The SKU is used by more than one row of the file |
+| `sku_deleted` | `sku` | The SKU belongs to a deleted product |
+| `rejected_by_database` | `row` | The database refused the row. The cause is logged, not reported |
+
+When the whole file is rejected, the answer is `application/problem+json`:
+
+| Case | Status | `code` |
+|---|---|---|
+| The request is not multipart or has no `file` field | 400 | `invalid_request` |
+| Another header | 400 | `invalid_header` |
+| Invalid UTF-8 or malformed CSV, with the line in `detail` | 400 | `invalid_csv` |
+| More rows than `import.max_rows` | 400 | `too_many_rows` |
+| File larger than `import.max_bytes` | 413 | `request_too_large` |
+
+### Demo data
+
+`testdata/products.csv` is the official file of the challenge, unmodified. It was downloaded on October 7, 2026 and its SHA-256 is `6fc46b84badb1ac37b8b19a2d0741aa7728d6c93a9fe949b19f676892dc8fd24`. It has 97 records: 2 empty rows, 82 valid products and 13 rejected rows, among them the repeated SKUs `RS-001` (2 rows) and `BS-021` (3 rows). The acceptance tests import it and check those numbers.
+
+The image ships that file. When `demo.seed` is `true`, the app imports `demo.seed_file` at startup, before it starts serving, and only if the `products` table has no rows at all, deleted ones included. So `make down && make up` gives a populated store, while restarting the app neither imports again nor brings back products that were deleted. The seed goes through the same import as the API, and its summary is logged at `info` level as `demo seed imported`. Rejected rows are not a failure; a seed file that is missing or cannot be read stops the startup.
 
 ## Web UI
 
@@ -203,6 +284,7 @@ Field errors use stable codes: `required`, `too_long`, `not_positive`, `too_many
 | `/admin/products/new` | Create a product. Validation errors appear next to each field |
 | `/admin/products/{id}/edit` | Edit a product. The form sends the version it showed; if the product changed meanwhile, the page explains it and offers to reload |
 | `/admin/products/{id}/delete` | Server-rendered confirmation before deleting |
+| `/admin/imports` | Upload a CSV file. The page shows the counters of the import and a table with the rejected rows: line, SKU, field, code and message. A file that is rejected as a whole is explained on the same page |
 
 The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it works without internet access. Pages are served with a strict Content-Security-Policy (no inline scripts or styles), and htmx is configured so it does not inject inline styles.
 
@@ -210,7 +292,8 @@ The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it 
 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
 - **The search total is not transactionally consistent with the items.** They come from two separate queries, so with concurrent writes the `total` can differ from the items of a page.
-- **No authentication.** Anyone who can reach port 8080 can create, edit and delete products through `/api/v1/products` and `/admin/products`. Do not expose the published listener to untrusted clients without access control in front of it, such as an authenticating reverse proxy or a private network.
+- **An import sets stock to the value in the file.** Stock is absolute, not a delta: once purchases exist, an import can overwrite stock that recent sales had just reduced.
+- **No authentication.** Anyone who can reach port 8080 can create, edit, delete and import products through `/api/v1` and `/admin`. Do not expose the published listener to untrusted clients without access control in front of it, such as an authenticating reverse proxy or a private network.
 - **No CSRF protection.** There is no session cookie yet, so there are no credentials another site could ride on. CSRF tokens become necessary as soon as authentication is added.
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
 
@@ -236,10 +319,11 @@ Secret fields (the database password) must be a placeholder without a default, s
 | `LOG_LEVEL` | `info` |
 | `TRACING_ENABLED` / `OTLP_ENDPOINT` / `OTLP_INSECURE` | `false` / empty / `false` |
 | `APP_VERSION` | `dev` |
-| `SEED_DEMO` | `true` |
+| `SEED_DEMO` | `true`. Imports the demo catalog at startup when there are no products |
+| `SEED_FILE` | `/etc/shop/seed/products.csv`, the official CSV shipped in the image. `config.local.yaml` uses `testdata/products.csv` |
 
 ## Observability
 
 - **Logs:** JSON on stdout with `timestamp`, `severity` and `message`. Every request line carries `request_id`, `trace_id` and `span_id`. Sensitive fields and values (passwords, tokens, bearer credentials, card numbers) are redacted. The configuration is never logged.
-- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish.
+- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish. Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`.
 - **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route.
