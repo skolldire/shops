@@ -101,7 +101,7 @@ func (r *Repository) HasProducts(ctx context.Context) (bool, error) {
 
 type upsertInput struct {
 	skus, names, descriptions, categories, prices, weights []string
-	stocks                                                 []int32
+	stocks                                                 []int
 }
 
 func (in *upsertInput) add(p core.Product) {
@@ -110,7 +110,7 @@ func (in *upsertInput) add(p core.Product) {
 	in.descriptions = append(in.descriptions, p.Description)
 	in.categories = append(in.categories, p.Category)
 	in.prices = append(in.prices, p.Price.String())
-	in.stocks = append(in.stocks, int32(p.Stock))
+	in.stocks = append(in.stocks, p.Stock)
 	in.weights = append(in.weights, p.WeightKg.String())
 }
 
