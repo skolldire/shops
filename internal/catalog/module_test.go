@@ -14,6 +14,7 @@ import (
 
 	"github.com/skolldire/shops/internal/catalog/internal/core"
 	"github.com/skolldire/shops/internal/platform/logger"
+	"github.com/skolldire/shops/internal/platform/telemetry"
 	"github.com/skolldire/shops/internal/platform/validation"
 )
 
@@ -84,12 +85,30 @@ func (m *memoryRepo) Categories(context.Context) ([]string, error) {
 	return []string{"Sports"}, nil
 }
 
+func testDeps(log logger.Service) Deps {
+	return Deps{Log: log, Metrics: telemetry.Noop(), Import: ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}}
+}
+
+func (m *memoryRepo) Upsert(_ context.Context, products []core.Product) (map[string]core.UpsertOutcome, error) {
+	out := make(map[string]core.UpsertOutcome, len(products))
+	for _, p := range products {
+		out[p.SKU] = core.OutcomeCreated
+		p.ID, p.Version = p.SKU, 1
+		m.products[p.ID] = p
+	}
+	return out, nil
+}
+
+func (m *memoryRepo) HasProducts(context.Context) (bool, error) {
+	return len(m.products) > 0, nil
+}
+
 func newTestModule(t *testing.T) (*Module, *memoryRepo) {
 	t.Helper()
 	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
 	require.NoError(t, err)
 	repo := &memoryRepo{products: map[string]core.Product{}}
-	m, err := newModule(repo, log)
+	m, err := newModule(repo, testDeps(log))
 	require.NoError(t, err)
 	return m, repo
 }
@@ -202,6 +221,16 @@ func TestNewModuleRequiresDependencies(t *testing.T) {
 	_, err := NewModule(Deps{})
 	require.Error(t, err)
 
-	_, err = newModule(&memoryRepo{}, nil)
-	require.Error(t, err)
+	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
+	require.NoError(t, err)
+	for name, mutate := range map[string]func(*Deps){
+		"logger":  func(d *Deps) { d.Log = nil },
+		"metrics": func(d *Deps) { d.Metrics = nil },
+		"limits":  func(d *Deps) { d.Import = ImportLimits{} },
+	} {
+		deps := testDeps(log)
+		mutate(&deps)
+		_, err = newModule(&memoryRepo{}, deps)
+		require.Error(t, err, name)
+	}
 }
