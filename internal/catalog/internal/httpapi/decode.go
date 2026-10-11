@@ -108,9 +108,9 @@ func decimalField(errs *validation.Errors, field string, raw json.RawMessage) *d
 			literal = ""
 		}
 	}
-	d, err := decimal.NewFromString(literal)
+	d, err := core.ParseDecimal(literal)
 	if bytes.Equal(raw, null) || err != nil {
-		errs.Add(field, validation.CodeInvalidFormat, "must be a decimal number")
+		errs.Add(field, validation.CodeInvalidFormat, core.ErrInvalidDecimal.Error())
 		return nil
 	}
 	return &d

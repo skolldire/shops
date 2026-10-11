@@ -25,6 +25,8 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusRequestEntityTooLarge, Code: "request_too_large", Detail: "The request body must be at most 1 MB."})
 	case errors.Is(err, errPreconditionRequired):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusPreconditionRequired, Code: "precondition_required", Detail: err.Error()})
+	case errors.Is(err, errWeakPrecondition):
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusPreconditionFailed, Code: "precondition_failed", Detail: err.Error()})
 	case errors.Is(err, core.ErrNotFound):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusNotFound, Code: "not_found", Detail: "The product does not exist."})
 	case errors.Is(err, core.ErrSKUTaken):

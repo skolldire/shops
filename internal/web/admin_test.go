@@ -99,12 +99,25 @@ func TestCreateProductFormatErrorsStayNextToTheirFields(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	requireSafeHTML(t, rec)
 	body := rec.Body.String()
-	require.Contains(t, fieldBlock(body, "price"), "must be a decimal number")
+	require.Contains(t, fieldBlock(body, "price"), "must be a plain decimal number such as 29.99")
 	require.Contains(t, fieldBlock(body, "price"), `value="cheap"`)
 	require.Contains(t, fieldBlock(body, "stock"), "must be between 0 and 2147483647")
-	require.Contains(t, fieldBlock(body, "weight_kg"), "must be a decimal number")
+	require.Contains(t, fieldBlock(body, "weight_kg"), "must be a plain decimal number such as 29.99")
 	require.NotContains(t, fieldBlock(body, "name"), "field-error")
 	require.Empty(t, cat.created.SKU, "invalid forms must not reach the catalog")
+}
+
+func TestCreateProductRejectsExponents(t *testing.T) {
+	cat := withProducts()
+	h, _ := newTestUI(t, cat)
+	form := validForm()
+	form.Set("price", "1e100000000")
+
+	rec := within(t, func() *httptest.ResponseRecorder { return post(h, "/admin/products", form) })
+
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	require.Contains(t, fieldBlock(rec.Body.String(), "price"), "must be a plain decimal number such as 29.99")
+	require.Empty(t, cat.created.SKU)
 }
 
 func TestCreateProductDomainErrors(t *testing.T) {

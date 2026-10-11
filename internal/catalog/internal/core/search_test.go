@@ -65,6 +65,8 @@ func TestParseSearchErrors(t *testing.T) {
 	}{
 		"q too long":          {url.Values{"q": {strings.Repeat("q", 101)}}, "q", "too_long"},
 		"min price not a num": {url.Values{"min_price": {"cheap"}}, "min_price", "invalid_format"},
+		"min price exponent":  {url.Values{"min_price": {"1e3"}}, "min_price", "invalid_format"},
+		"max price huge exp":  {url.Values{"max_price": {"1e100000000"}}, "max_price", "invalid_format"},
 		"max price negative":  {url.Values{"max_price": {"-1"}}, "max_price", "out_of_range"},
 		"min above max":       {url.Values{"min_price": {"50"}, "max_price": {"10"}}, "min_price", "out_of_range"},
 		"in_stock not bool":   {url.Values{"in_stock": {"maybe"}}, "in_stock", "invalid_format"},
@@ -77,8 +79,8 @@ func TestParseSearchErrors(t *testing.T) {
 		"page beyond int64":   {url.Values{"page": {"9223372036854775807"}}, "page", "out_of_range"},
 		"page above maximum":  {url.Values{"page": {"100001"}}, "page", "out_of_range"},
 		"min price too large": {url.Values{"min_price": {"10000000000"}}, "min_price", "out_of_range"},
-		"max price too large": {url.Values{"max_price": {"1e1000"}}, "max_price", "out_of_range"},
-		"huge min above max":  {url.Values{"min_price": {"1e20"}, "max_price": {"10"}}, "min_price", "out_of_range"},
+		"max price too large": {url.Values{"max_price": {"10000000000"}}, "max_price", "out_of_range"},
+		"huge min above max":  {url.Values{"min_price": {"100000000000"}, "max_price": {"10"}}, "min_price", "out_of_range"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -230,9 +230,9 @@ func parseFormDecimal(errs map[string]string, field, raw string) *decimal.Decima
 	if raw == "" {
 		return nil
 	}
-	d, err := decimal.NewFromString(raw)
+	d, err := catalog.ParseDecimal(raw)
 	if err != nil {
-		errs[field] = "must be a decimal number"
+		errs[field] = err.Error()
 		return nil
 	}
 	return &d

@@ -267,6 +267,27 @@ func TestRepository(t *testing.T) {
 		require.Equal(t, []string{"Audio", "Books"}, categories)
 	})
 
+	t.Run("categories that differ only by case are listed once", func(t *testing.T) {
+		f.reset(t)
+		f.create(t, "K-1", "Football", "Sports", "1.00", 1)
+		f.create(t, "K-2", "Racket", "sports", "1.00", 1)
+		f.create(t, "K-3", "Novel", "Books", "1.00", 1)
+		f.create(t, "K-4", "Amplifier", "audio", "1.00", 1)
+
+		categories, err := f.repo.Categories(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []string{"audio", "Books", "Sports"}, categories)
+		again, err := f.repo.Categories(ctx)
+		require.NoError(t, err)
+		require.Equal(t, categories, again)
+
+		for _, form := range []string{"Sports", "sports", "SPORTS"} {
+			skus, total := search(t, f, core.SearchInput{Category: form})
+			require.Equal(t, 2, total, form)
+			require.ElementsMatch(t, []string{"K-1", "K-2"}, skus, form)
+		}
+	})
+
 	t.Run("participates in a shared transaction", func(t *testing.T) {
 		f.reset(t)
 		tm, err := database.NewTxManager(f.pool)

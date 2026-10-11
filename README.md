@@ -132,6 +132,8 @@ A product:
 
 `price` and `weight_kg` are returned as strings with a fixed scale (2 and 3 decimals). Requests accept them as strings or JSON numbers, and they are never converted to floating point.
 
+Every decimal the app reads (`price`, `weight_kg`, `min_price`, `max_price`, in the API and in the web forms) must be a plain decimal number such as `29.99`: an optional `-`, 1 to 13 integer digits and, optionally, a `.` followed by 1 to 6 decimals. Surrounding spaces are ignored. Exponents (`1e3`, `2.5E-1`), a leading `+`, `.5`, `5.`, thousands separators, `NaN` and `Infinity` are rejected with `invalid_format`. This also applies to JSON numbers, so `"price": 2.999e1` is rejected even though it is valid JSON.
+
 ### Rules
 
 | Field | Rule |
@@ -154,7 +156,7 @@ Every rule is checked at once and all field errors are returned together.
 |---|---|
 | `q` | Up to 100 characters, matched with `ILIKE` against name, SKU and description. `%`, `_` and `\` are literal, so `q=50%25` finds "50%" |
 | `category` | Case-insensitive equality |
-| `min_price`, `max_price` | Decimal bounds; `min_price` must not exceed `max_price` |
+| `min_price`, `max_price` | Plain decimal bounds; `min_price` must not exceed `max_price` |
 | `in_stock` | `true` returns only products with stock |
 | `sort` | `name` (default), `price` or `created_at`, prefixed with `-` for descending. Ties are broken by id so pages are stable |
 | `page`, `page_size` | `page` starts at 1; `page_size` is 1 to 100, 20 by default |
@@ -172,6 +174,8 @@ curl -i -X PATCH localhost:8080/api/v1/products/$ID \
 
 If someone changed the product in the meantime, the request fails with `412` instead of overwriting their change.
 
+`If-Match` is compared strongly, as RFC 9110 requires, so a weak entity tag such as `W/"3"` never matches and is rejected with `412`.
+
 ### Errors
 
 All errors are `application/problem+json` with a stable `code`:
@@ -184,6 +188,7 @@ All errors are `application/problem+json` with a stable `code`:
 | Unknown, deleted or malformed product id | 404 | `not_found` |
 | SKU already used | 409 | `sku_taken` |
 | `If-Match` does not match the current version | 412 | `version_conflict` |
+| `If-Match` carries a weak entity tag such as `W/"3"` | 412 | `precondition_failed` |
 | `PATCH` or `DELETE` without `If-Match` | 428 | `precondition_required` |
 
 Field errors use stable codes: `required`, `too_long`, `not_positive`, `too_many_decimals`, `out_of_range`, `invalid_format` and `immutable`.
@@ -204,6 +209,7 @@ The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it 
 ## Known limitations
 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
+- **The search total is not transactionally consistent with the items.** They come from two separate queries, so with concurrent writes the `total` can differ from the items of a page.
 - **No authentication.** Anyone who can reach port 8080 can create, edit and delete products through `/api/v1/products` and `/admin/products`. Do not expose the published listener to untrusted clients without access control in front of it, such as an authenticating reverse proxy or a private network.
 - **No CSRF protection.** There is no session cookie yet, so there are no credentials another site could ride on. CSRF tokens become necessary as soon as authentication is added.
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
