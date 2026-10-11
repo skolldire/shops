@@ -24,13 +24,18 @@ const (
 
 type Repository struct {
 	pool *pgxpool.Pool
+	tx   *database.TxManager
 }
 
 func NewRepository(pool *pgxpool.Pool) (*Repository, error) {
 	if pool == nil {
 		return nil, errors.New("catalog: postgres repository requires a pool")
 	}
-	return &Repository{pool: pool}, nil
+	tx, err := database.NewTxManager(pool)
+	if err != nil {
+		return nil, err
+	}
+	return &Repository{pool: pool, tx: tx}, nil
 }
 
 func (r *Repository) Create(ctx context.Context, p core.Product) (core.Product, error) {
