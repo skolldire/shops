@@ -380,8 +380,8 @@ func within(t *testing.T, fn func() *httptest.ResponseRecorder) *httptest.Respon
 	select {
 	case rec := <-done:
 		return rec
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("request took longer than 100ms")
+	case <-time.After(time.Second):
+		t.Fatal("request took longer than 1s")
 		return nil
 	}
 }

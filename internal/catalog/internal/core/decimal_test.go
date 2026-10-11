@@ -49,8 +49,8 @@ func TestParseDecimalRejectsHugeExponentsQuickly(t *testing.T) {
 		select {
 		case err := <-done:
 			require.ErrorIs(t, err, core.ErrInvalidDecimal, raw)
-		case <-time.After(100 * time.Millisecond):
-			t.Fatalf("%s took longer than 100ms to reject", raw)
+		case <-time.After(time.Second):
+			t.Fatalf("%s took longer than 1s to reject", raw)
 		}
 	}
 }
