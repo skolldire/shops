@@ -43,7 +43,8 @@ type ImportConfig struct {
 }
 
 type DemoConfig struct {
-	Seed bool `mapstructure:"seed"`
+	Seed     bool   `mapstructure:"seed"`
+	SeedFile string `mapstructure:"seed_file"`
 }
 
 var logLevels = []string{"debug", "info", "warn", "error"}
@@ -88,6 +89,8 @@ func (c AppConfig) Validate() error {
 
 	check(c.Import.MaxBytes > 0, "import.max_bytes must be greater than 0")
 	check(c.Import.MaxRows > 0, "import.max_rows must be greater than 0")
+
+	check(!c.Demo.Seed || c.Demo.SeedFile != "", "demo.seed_file is required when demo.seed is true")
 
 	return errors.Join(errs...)
 }

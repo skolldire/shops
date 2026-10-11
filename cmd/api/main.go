@@ -111,6 +111,11 @@ func start(ctx context.Context, cfg AppConfig, log logger.Service, lc *lifecycle
 	if err != nil {
 		return err
 	}
+	if cfg.Demo.Seed {
+		if err := seedDemo(ctx, log, a.catalog, cfg.Demo.SeedFile); err != nil {
+			return err
+		}
+	}
 
 	apiServer := &http.Server{
 		Addr:              cfg.HTTP.Addr,

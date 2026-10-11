@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io/fs"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -47,16 +48,18 @@ func TestShippedConfigDefaults(t *testing.T) {
 	require.Equal(t, "shops", cfg.Telemetry.ServiceName)
 	require.False(t, cfg.Telemetry.Tracing.Enabled)
 	require.True(t, cfg.Demo.Seed)
+	require.Equal(t, "/etc/shop/seed/products.csv", cfg.Demo.SeedFile)
 }
 
 func TestShippedConfigOverrides(t *testing.T) {
-	env := map[string]string{"DB_PORT": "6000", "SEED_DEMO": "false", "LOG_LEVEL": "debug", "TRACING_ENABLED": "true", "OTLP_ENDPOINT": "collector:4317"}
+	env := map[string]string{"DB_PORT": "6000", "SEED_DEMO": "false", "SEED_FILE": "/data/demo.csv", "LOG_LEVEL": "debug", "TRACING_ENABLED": "true", "OTLP_ENDPOINT": "collector:4317"}
 
 	cfg, err := loadConfig(t, "../../config/config.yaml", env, map[string]string{"/run/secrets/db_password": testPassword})
 
 	require.NoError(t, err)
 	require.Equal(t, 6000, cfg.Database.Port)
 	require.False(t, cfg.Demo.Seed)
+	require.Equal(t, "/data/demo.csv", cfg.Demo.SeedFile)
 	require.Equal(t, "debug", cfg.Log.Level)
 	require.True(t, cfg.Telemetry.Tracing.Enabled)
 	require.Equal(t, "collector:4317", cfg.Telemetry.Tracing.Endpoint)
@@ -74,6 +77,17 @@ func TestLocalConfigLoads(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", cfg.Database.Host)
 	require.Equal(t, "127.0.0.1:8080", cfg.HTTP.Addr)
+	require.Equal(t, "testdata/products.csv", cfg.Demo.SeedFile)
+	require.FileExists(t, filepath.Join("..", "..", cfg.Demo.SeedFile))
+}
+
+func TestSeedFileIsRequiredOnlyWhenSeeding(t *testing.T) {
+	cfg := shippedConfig(t)
+	cfg.Demo.SeedFile = ""
+	require.ErrorContains(t, cfg.Validate(), "demo.seed_file is required when demo.seed is true")
+
+	cfg.Demo.Seed = false
+	require.NoError(t, cfg.Validate())
 }
 
 func TestValidate(t *testing.T) {
