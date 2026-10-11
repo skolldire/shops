@@ -314,7 +314,7 @@ func wholeCell(errs *validation.Errors, field, raw string) *int64 {
 		errs.Add(field, validation.CodeInvalidFormat, "must be a whole number such as 25")
 		return nil
 	}
-	n, err := strconv.ParseInt(s, 10, 64)
+	n, err := strconv.ParseInt(s, 10, 32)
 	if err != nil {
 		errs.Add(field, validation.CodeOutOfRange, "must be between 0 and 2147483647")
 		return nil
