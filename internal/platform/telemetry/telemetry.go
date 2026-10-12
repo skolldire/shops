@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -36,26 +35,4 @@ func (noop) Shutdown(context.Context) error                                    {
 
 func (noop) Span(ctx context.Context, _ string, fn func(ctx context.Context) error, _ ...attribute.KeyValue) error {
 	return fn(ctx)
-}
-
-type Operation struct {
-	tel  Telemetry
-	name string
-}
-
-func NewOperation(tel Telemetry, name string) *Operation {
-	return &Operation{tel: tel, name: name}
-}
-
-func (o *Operation) Execute(ctx context.Context, fn func(ctx context.Context) error, attrs ...attribute.KeyValue) error {
-	start := time.Now()
-	return o.tel.Span(ctx, o.name, func(ctx context.Context) error {
-		err := fn(ctx)
-		o.tel.Counter(ctx, o.name+"_total", 1, attrs...)
-		o.tel.Histogram(ctx, o.name+"_duration_seconds", time.Since(start).Seconds(), attrs...)
-		if err != nil {
-			o.tel.Counter(ctx, o.name+"_errors_total", 1, attrs...)
-		}
-		return err
-	}, attrs...)
 }
