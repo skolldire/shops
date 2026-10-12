@@ -80,7 +80,7 @@ Every pull request to `master` runs:
 
 | Check | What it enforces |
 |---|---|
-| Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS), module boundaries, tidy modules, hadolint on the Dockerfile |
+| Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS), the dependency rules described in [Architecture](#architecture), tidy modules, hadolint on the Dockerfile |
 | Unit tests | Race detector on the `go.mod` version and on the latest stable Go |
 | Integration tests | Repositories, transactions and an HTTP acceptance test of the product lifecycle against PostgreSQL |
 | govulncheck | Known vulnerabilities in reachable code |
@@ -89,6 +89,23 @@ Every pull request to `master` runs:
 | CodeQL | Static security analysis, also weekly |
 
 CodeRabbit reviews every pull request with the rules in `.coderabbit.yaml` and approves it once its findings are resolved. Dependabot keeps Go modules, actions and base images up to date.
+
+## Architecture
+
+A modular monolith. Each business module is one directory under `internal/` with a public facade (`module.go` and `api.go`) and its own `internal/` packages, so the compiler keeps other modules out of its implementation.
+
+Inside the catalog module the dependencies point towards the business rules:
+
+| Package | Role | May import |
+|---|---|---|
+| `core` | Product rules, the search and import use cases, and the ports they need (`Repository`, `ProductUpserter`, `ImportRecorder`, `ImportFailureReporter`) | A closed list: a few standard packages, `shopspring/decimal` and `platform/validation` |
+| `httpapi`, `httpquery`, `csvimport` | Input adapters: JSON, query strings and CSV files are decoded here and handed to `core` as plain values | `core` and `platform` |
+| `postgres`, `metrics`, `importlog` | Output adapters: they implement the ports of `core` for PostgreSQL, metrics and operational logs | `core` and `platform` |
+| `module.go` | Composition: builds the adapters, wires them into the use cases and exposes the facade | Everything in the module |
+
+`core` does not read files, parse formats, log or call a telemetry SDK. The CSV adapter reads the upload, enforces the size and row limits, hashes the file and passes the rows on; when the import recovers from a failed batch or the database refuses a row, `core` reports it through `ImportFailureReporter` and the `importlog` adapter writes the log line.
+
+`make lint-arch` enforces this on every pull request: it fails if `core` imports anything outside its closed list, if it reaches transport, persistence or telemetry packages even indirectly, or if `internal/platform` imports a business module.
 
 ## Endpoints
 
@@ -295,7 +312,6 @@ The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
 - **The search total is not transactionally consistent with the items.** They come from two separate queries, so with concurrent writes the `total` can differ from the items of a page.
 - **An import sets stock to the value in the file.** Stock is absolute, not a delta: once purchases exist, an import can overwrite stock that recent sales had just reduced.
-- **The import use case reads the CSV itself.** `core`, the domain package of the catalog, depends on `csvimport`, which turns bytes into rows, and also measures and hashes the file. This is a deliberate shortcut: `csvimport` uses only the standard library and holds no business rule, and the rules stay in `core`. The stricter layering, where the module reads the file and `core` receives the rows, is left for the documentation and cleanup phase.
 - **No authentication.** Anyone who can reach port 8080 can create, edit, delete and import products through `/api/v1` and `/admin`. Do not expose the published listener to untrusted clients without access control in front of it, such as an authenticating reverse proxy or a private network.
 - **No CSRF protection.** There is no session cookie yet, so there are no credentials another site could ride on. CSRF tokens become necessary as soon as authentication is added.
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
