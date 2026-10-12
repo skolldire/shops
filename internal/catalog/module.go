@@ -17,16 +17,16 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/core"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
 	"github.com/skolldire/shops/internal/catalog/internal/httpquery"
+	"github.com/skolldire/shops/internal/catalog/internal/metrics"
 	"github.com/skolldire/shops/internal/catalog/internal/postgres"
-	"github.com/skolldire/shops/internal/catalog/internal/telemetry"
 	"github.com/skolldire/shops/internal/platform/logger"
-	platform "github.com/skolldire/shops/internal/platform/telemetry"
+	"github.com/skolldire/shops/internal/platform/telemetry"
 )
 
 type Deps struct {
 	Pool    *pgxpool.Pool
 	Log     logger.Service
-	Metrics platform.Metrics
+	Metrics telemetry.Metrics
 	Import  ImportLimits
 }
 
@@ -67,7 +67,7 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	recorder, err := telemetry.NewImportRecorder(d.Metrics)
+	recorder, err := metrics.NewImportRecorder(d.Metrics)
 	if err != nil {
 		return nil, err
 	}

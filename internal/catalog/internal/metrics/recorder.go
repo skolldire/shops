@@ -1,4 +1,4 @@
-package telemetry
+package metrics
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	platform "github.com/skolldire/shops/internal/platform/telemetry"
+	"github.com/skolldire/shops/internal/platform/telemetry"
 )
 
 const (
@@ -17,10 +17,10 @@ const (
 )
 
 type ImportRecorder struct {
-	metrics platform.Metrics
+	metrics telemetry.Metrics
 }
 
-func NewImportRecorder(metrics platform.Metrics) (*ImportRecorder, error) {
+func NewImportRecorder(metrics telemetry.Metrics) (*ImportRecorder, error) {
 	if metrics == nil {
 		return nil, errors.New("catalog: import recorder requires metrics")
 	}
