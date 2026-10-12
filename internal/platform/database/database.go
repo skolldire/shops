@@ -23,8 +23,8 @@ type Config struct {
 	ConnectTimeout time.Duration `mapstructure:"connect_timeout"`
 }
 
-func Open(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
-	pc, err := poolConfig(cfg)
+func Open(ctx context.Context, cfg Config, opts ...Option) (*pgxpool.Pool, error) {
+	pc, err := poolConfig(cfg, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func Open(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-func poolConfig(cfg Config) (*pgxpool.Config, error) {
+func poolConfig(cfg Config, opts ...Option) (*pgxpool.Config, error) {
 	switch {
 	case cfg.Host == "":
 		return nil, errors.New("database: host is required")
@@ -80,6 +80,9 @@ func poolConfig(cfg Config) (*pgxpool.Config, error) {
 	}
 
 	pc.MaxConns = cfg.MaxConns
+	for _, opt := range opts {
+		opt(pc)
+	}
 	return pc, nil
 }
 

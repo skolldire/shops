@@ -97,7 +97,7 @@ func start(ctx context.Context, cfg AppConfig, log logger.Service, lc *lifecycle
 		return err
 	}
 
-	pool, err := database.Open(ctx, cfg.Database)
+	pool, err := database.Open(ctx, cfg.Database, database.WithTracerProvider(tel.TracerProvider()))
 	if err != nil {
 		return err
 	}
