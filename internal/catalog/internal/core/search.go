@@ -1,9 +1,6 @@
 package core
 
 import (
-	"errors"
-	"net/url"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -61,31 +58,8 @@ type Page struct {
 	Total    int
 }
 
-func ParseSearch(values url.Values) (Search, error) {
-	var (
-		errs validation.Errors
-		in   = SearchInput{Q: values.Get("q"), Category: values.Get("category"), Sort: values.Get("sort")}
-	)
-	in.MinPrice = parseDecimal(&errs, "min_price", values.Get("min_price"))
-	in.MaxPrice = parseDecimal(&errs, "max_price", values.Get("max_price"))
-	if raw := values.Get("in_stock"); raw != "" {
-		v, err := strconv.ParseBool(raw)
-		if err != nil {
-			errs.Add("in_stock", validation.CodeInvalidFormat, "must be true or false")
-		}
-		in.InStock = v
-	}
-	in.Page = parsePositive(&errs, "page", values.Get("page"))
-	in.PageSize = parsePositive(&errs, "page_size", values.Get("page_size"))
-
-	return newSearch(in, errs)
-}
-
 func NewSearch(in SearchInput) (Search, error) {
-	return newSearch(in, nil)
-}
-
-func newSearch(in SearchInput, errs validation.Errors) (Search, error) {
+	var errs validation.Errors
 	s := Search{
 		Q:        strings.TrimSpace(in.Q),
 		Category: strings.Join(strings.Fields(in.Category), " "),
@@ -136,38 +110,6 @@ func parseSort(errs *validation.Errors, raw string) (SortField, bool) {
 	}
 	errs.Add("sort", validation.CodeInvalidFormat, "must be one of name, price or created_at, optionally prefixed with '-'")
 	return SortName, false
-}
-
-func parseDecimal(errs *validation.Errors, field, raw string) *decimal.Decimal {
-	if raw == "" {
-		return nil
-	}
-	d, err := ParseDecimal(raw)
-	if err != nil {
-		errs.Add(field, validation.CodeInvalidFormat, err.Error())
-		return nil
-	}
-	return &d
-}
-
-func parsePositive(errs *validation.Errors, field, raw string) int {
-	if raw == "" {
-		return 0
-	}
-	n, err := strconv.ParseInt(raw, 10, 32)
-	var numErr *strconv.NumError
-	switch {
-	case errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange):
-		errs.Add(field, validation.CodeOutOfRange, "is too large")
-		return 1
-	case err != nil:
-		errs.Add(field, validation.CodeInvalidFormat, "must be an integer")
-		return 1
-	case n < 1:
-		errs.Add(field, validation.CodeOutOfRange, "must be at least 1")
-		return 1
-	}
-	return int(n)
 }
 
 func checkBound(errs *validation.Errors, field string, d *decimal.Decimal) {

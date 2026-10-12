@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/httpquery"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
@@ -84,7 +85,7 @@ func toJSON(p core.Product) productJSON {
 }
 
 func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
-	s, err := core.ParseSearch(r.URL.Query())
+	s, err := httpquery.ParseSearch(r.URL.Query())
 	if err != nil {
 		h.writeError(w, r, err)
 		return

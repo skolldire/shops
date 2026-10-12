@@ -38,7 +38,7 @@ lint-comments:
 
 lint-arch:
 	@deps="$$($(GO) list -deps ./internal/catalog/internal/core)" || { echo "go list failed for catalog core"; exit 1; }; \
-	! printf '%s\n' "$$deps" | grep -E '^(github.com/jackc/pgx|net/http$$|database/sql$$|github.com/go-chi|go.opentelemetry.io|github.com/skolldire/shops/internal/platform/(httpx|telemetry|database))' || { echo "catalog core must not depend on transport, persistence or telemetry"; exit 1; }
+	! printf '%s\n' "$$deps" | grep -E '^(github.com/jackc/pgx|net/http$$|net/url$$|database/sql$$|github.com/go-chi|go.opentelemetry.io|github.com/skolldire/shops/internal/platform/(httpx|telemetry|database))' || { echo "catalog core must not depend on transport, persistence or telemetry"; exit 1; }
 	@deps="$$($(GO) list -deps ./internal/platform/...)" || { echo "go list failed for platform"; exit 1; }; \
 	! printf '%s\n' "$$deps" | grep -E '^github.com/skolldire/shops/internal/(catalog|web|ordering|payment)' || { echo "platform must not depend on business modules"; exit 1; }
 
