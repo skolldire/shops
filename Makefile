@@ -36,7 +36,7 @@ lint-comments:
 	@! grep -rn '<!--' --include='*.html' internal || { echo "HTML comments are not allowed"; exit 1; }
 	@! grep -rn '/[*]' --include='*.css' internal || { echo "CSS comments are not allowed"; exit 1; }
 
-CORE_IMPORTS := cmp|context|errors|fmt|regexp|slices|strconv|strings|time|unicode/utf8|github.com/shopspring/decimal|github.com/skolldire/shops/internal/platform/validation
+CORE_IMPORTS := cmp|context|errors|fmt|regexp|slices|strconv|strings|time|unicode/utf8|github[.]com/shopspring/decimal|github[.]com/skolldire/shops/internal/platform/validation
 
 lint-arch:
 	@imports="$$($(GO) list -f '{{join .Imports "\n"}}' ./internal/catalog/internal/core)" || { echo "go list failed for catalog core"; exit 1; }; \
