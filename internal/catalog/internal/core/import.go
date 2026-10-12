@@ -271,7 +271,7 @@ func newImportRow(row csvimport.Row) importRow {
 		Stock:    wholeCell(&format, "stock", f[5]),
 		WeightKg: decimalCell(&format, "weight_kg", f[6]),
 	})
-	return importRow{line: row.Line, sku: NormalizeSKU(f[1]), product: product, errs: mergeRowErrors(format, err)}
+	return importRow{line: row.Line, sku: NormalizeSKU(f[1]), product: product, errs: rowErrors(format, err)}
 }
 
 func CleanFileName(raw string) string {
@@ -315,16 +315,10 @@ func wholeCell(errs *validation.Errors, field, raw string) *int64 {
 	return &n
 }
 
-func mergeRowErrors(format validation.Errors, domain error) validation.Errors {
-	var domainErrs validation.Errors
-	errors.As(domain, &domainErrs)
-	merged := append(validation.Errors{}, format...)
-	for _, fe := range domainErrs {
-		if !slices.ContainsFunc(format, func(known validation.FieldError) bool { return known.Field == fe.Field }) {
-			merged = append(merged, fe)
-		}
-	}
-	return merged
+func rowErrors(format validation.Errors, domain error) validation.Errors {
+	var errs validation.Errors
+	errors.As(validation.Merge(format, domain), &errs)
+	return errs
 }
 
 func isEmpty(fields []string) bool {

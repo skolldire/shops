@@ -12,6 +12,7 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/httpquery"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
+	"github.com/skolldire/shops/internal/platform/validation"
 )
 
 type Service interface {
@@ -111,7 +112,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	in, formatErrs := body.createInput()
 	if len(formatErrs) > 0 {
 		_, domainErr := core.NewProduct(in)
-		h.writeError(w, r, merge(formatErrs, domainErr))
+		h.writeError(w, r, validation.Merge(formatErrs, domainErr))
 		return
 	}
 	p, err := h.svc.Create(r.Context(), in)
@@ -146,7 +147,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	changes, formatErrs := body.changes()
 	if len(formatErrs) > 0 {
 		_, domainErr := core.ValidateChanges(changes)
-		h.writeError(w, r, merge(formatErrs, domainErr))
+		h.writeError(w, r, validation.Merge(formatErrs, domainErr))
 		return
 	}
 	p, err := h.svc.Update(r.Context(), chi.URLParam(r, "id"), version, changes)

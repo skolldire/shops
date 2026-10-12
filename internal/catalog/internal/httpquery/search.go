@@ -1,9 +1,7 @@
 package httpquery
 
 import (
-	"errors"
 	"net/url"
-	"slices"
 	"strconv"
 
 	"github.com/shopspring/decimal"
@@ -25,7 +23,7 @@ func ParseSearch(values url.Values) (core.Search, error) {
 		PageSize: positiveParam(&format, "page_size", values.Get("page_size")),
 	}
 	search, err := core.NewSearch(in)
-	if merged := merge(format, err); merged != nil {
+	if merged := validation.Merge(format, err); merged != nil {
 		return core.Search{}, merged
 	}
 	return search, nil
@@ -68,18 +66,4 @@ func positiveParam(errs *validation.Errors, field, raw string) int {
 		return 1
 	}
 	return int(n)
-}
-
-func merge(format validation.Errors, domain error) error {
-	var domainErrs validation.Errors
-	if domain != nil && !errors.As(domain, &domainErrs) {
-		return domain
-	}
-	merged := append(validation.Errors{}, format...)
-	for _, fe := range domainErrs {
-		if !slices.ContainsFunc(format, func(known validation.FieldError) bool { return known.Field == fe.Field }) {
-			merged = append(merged, fe)
-		}
-	}
-	return merged.Err()
 }
