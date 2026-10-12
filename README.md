@@ -102,13 +102,15 @@ Inside the catalog module the dependencies point towards the business rules:
 | `app` | Use cases (product service, import) and the ports they need: `Repository`, `ProductUpserter`, `ImportRecorder`, `ImportFailureReporter` | A closed list: `domain`, a few standard packages and `platform/validation` |
 | `httpapi`, `httpquery`, `csvimport` | Input adapters: JSON, query strings and CSV files are decoded here and handed over as plain values | `app`, `domain` and `platform` |
 | `postgres`, `metrics`, `importlog` | Output adapters: they implement the ports of `app` for PostgreSQL, metrics and operational logs | `app`, `domain` and `platform` |
+| `metrics`, `tracing` | Decorators around the import: they time it and wrap it in spans without the use case knowing | `app` and `platform` |
 | `module.go` | Composition: builds the adapters, wires them into the use cases and exposes the facade | Everything in the module |
 
 `domain` and `app` do not read files, parse formats, log, measure time or call a telemetry SDK:
 
-- The CSV adapter reads the upload, enforces the size and row limits, hashes the file, maps the columns and reads the numbers. The import use case receives typed product values, together with the fields the adapter could not read, and never sees a CSV cell.
+- The CSV adapter reads the upload, enforces the size and row limits, hashes the file, maps the columns and reads the numbers. The import use case receives typed product values, together with the fields the adapter could not read, and never sees a CSV cell. The errors that reject a whole file (another header, malformed CSV, too many rows, too many bytes) belong to the CSV adapter; the HTTP handler and the facade translate them.
 - When the import recovers from a failed batch, or the database refuses a row, the use case reports it through `ImportFailureReporter` and the `importlog` adapter writes the log line.
 - The duration of an import is measured by a decorator in the `metrics` adapter around the whole operation, so it also covers files that are rejected before any row is applied.
+- Spans come from decorators in the `tracing` adapter and from the database package of the platform. `domain` and `app` do not import OpenTelemetry.
 - The facade takes search parameters as plain text and the seed as a reader; query strings stay in the HTTP adapters and the seed file is opened by `cmd/api`.
 
 `make lint-arch` enforces this on every pull request. It fails if `domain` or `app` import anything outside their closed lists (so `domain` cannot import `app`, and neither can import an adapter), if they reach transport, persistence, logging or telemetry packages even indirectly, or if `internal/platform` imports a business module.
@@ -351,4 +353,4 @@ Secret fields (the database password) must be a placeholder without a default, s
 
 - **Logs:** JSON on stdout with `timestamp`, `severity` and `message`. Every request line carries `request_id`, `trace_id` and `span_id`. Sensitive fields and values (passwords, tokens, bearer credentials, card numbers) are redacted. The configuration is never logged.
 - **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish. Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole.
-- **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route.
+- **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route. Under the request span, an import adds `catalog.import` for the whole operation and `catalog.import.apply` for validating and applying the rows, and every statement sent to PostgreSQL adds a `postgres <OPERATION>` span, such as `postgres SELECT` or `postgres COMMIT`. That separates the time spent reading the file, processing the rows and waiting for the database. Spans carry the operation and a row count; never the SQL text, its arguments, a file name or a product value. A file rejected as a whole is an expected answer and does not mark its span as failed.
