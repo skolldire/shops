@@ -1,0 +1,98 @@
+name,sku,description,category,price,stock,weight_kg
+Running Shoes,RS-001,Lightweight running shoes for daily training,Footwear,89.99,150,0.35
+Organic Coffee Beans,CB-010,"Single origin, medium roast, 1kg bag",Food & Beverage,18.75,500,1.0
+Wireless Mouse,WM-042,Ergonomic wireless mouse with USB receiver,Electronics,$29.99,75,0.12
+Leather Wallet,LW-019,"Genuine leather bifold wallet, RFID blocking",Accessories,39.99,180,0.15
+Camping Tent,CT-005,"4-person dome tent, waterproof 3000mm rating",Outdoors,199.99,25,4.5
+Yoga Mat,YM-015,"Premium non-slip yoga mat, 6mm thick",Sports,free,200,1.2
+Protein Powder,PP-012,"Whey protein isolate, chocolate flavor, 2kg",Food & Beverage,34.99,400,2.0
+Sunglasses,SG-027,Polarized UV400 protection sunglasses,Accessories,22.00,350,0.04
+Standing Desk,SD-004,"Electric height-adjustable desk, 140-160cm range",Home & Office,449.99,15,35.0
+Bluetooth Speaker,BS-021,"Portable waterproof speaker, 10W, 12hr battery",Electronics,59.99,110,0.8
+Cotton T-Shirt,TS-041,"100% organic cotton, unisex, available in black",Clothing,14.99,1000,0.2
+USB-C Cable,UC-003,"Braided USB-C to USB-C, 2m length, 100W PD",Accessories,4.99,500,0.05
+Fitness Tracker,FT-013,"Heart rate, steps, sleep tracking, IP68 waterproof",Electronics,79.99,180,0.03
+Cutting Board,CB-038,Large bamboo cutting board with juice groove,Kitchen,19.99,280,1.3
+Desk Lamp,DL-007,Adjustable LED desk lamp with dimmer,Home & Office,45.50,-5,2.1
+Backpack,BP-008,"Water-resistant laptop backpack, 30L capacity",Accessories,64.99,90,0.9
+Cookbook,CK-009,"Mediterranean diet recipes, hardcover, 300 pages",Books,27.50,100,0.85
+Jump Rope,JR-022,"Speed jump rope, adjustable length, ball bearing",Sports,9.99,400,0.2
+<script>alert('xss')</script>,XS-001,Totally normal product description,Electronics,19.99,100,0.1
+Essential Oils Set,EO-030,"Set of 6 aromatherapy oils, 10ml each",Beauty,24.99,160,0.12
+Resistance Bands,RB-018,"Set of 5 latex resistance bands, varying tension",Sports,19.99,600,0.4
+Plant Pot,PLT-006,"Ceramic plant pot with drainage hole, medium size",Home & Office,15.99,220,1.8
+Garden Hose,GH-035,"Expandable garden hose, 15m with spray nozzle",Outdoors,29.99,70,1.4
+,HD-099,Active noise canceling over-ear headphones,Electronics,149.99,30,0.25
+Scented Candle,SC-031,"Soy wax lavender candle, 200g, 40hr burn time",Home & Office,11.50,450,0.25
+Mechanical Pencil,MP-044,0.5mm mechanical pencil with full metal body,Stationery,8.99,750,0.03
+Hiking Boots,HB-002,Waterproof full-grain leather hiking boots,Footwear,159.99,40,1.6
+Robert'); DROP TABLE products;--,SQL-001,Classic SQL injection test product,Games,9.99,50,0.5
+Portable Charger,PB-016,"20000mAh power bank, USB-C + dual USB-A output",Electronics,37.99,250,0.35
+Water Bottle,WB-033,"Stainless steel, 1L — keeps drinks cold for 24hrs™",Sports,24.99,300,0.45
+Travel Mug,TM-029,"Insulated ceramic travel mug, 350ml, leak-proof",Food & Beverage,16.99,320,0.3
+Board Game,BG-017,"Strategic board game for 2-6 players, ages 12+",Games,39.99,85,1.8
+Dumbbells Set,DS-026,"Adjustable dumbbells, 2-20kg per hand, pair",Sports,149.99,35,20.0
+Laptop Stand,LS-040,"Aluminum adjustable laptop stand, fits up to 17in",Electronics,32.99,190,0.7
+Running Shoes,RS-001,Updated lightweight shoes — now with better arch support,Footwear,94.99,120,0.35
+Skateboard,SK-007,"Complete skateboard, Canadian maple deck, 31 inch",Sports,59.99,45,2.8
+Face Cream,FC-037,"Hydrating face cream, 50ml, all skin types, SPF 15",Beauty,42.00,200,0.08
+Chess Set,CS-020,Hand-carved wooden chess set with folding board,Games,54.99,55,1.5
+Reusable Bags,RB-036,"Set of 5 organic cotton shopping bags, washable",Accessories,7.99,500,0.3
+     ,WS-001,This product name is only whitespace,Misc,5.00,10,0.1
+LED Strip Lights,LS-039,"RGB LED strip, 5m, remote control, 16 colors",Home & Office,17.99,300,0.25
+Puzzle 1000pc,PZ-024,"Mountain landscape puzzle, 1000 pieces, 68x48cm",Games,13.99,200,0.6
+Hand Cream,HC-043,"Shea butter hand cream, 75ml, fast absorbing",Beauty,9.50,350,0.1
+Wireless Earbuds,WE-023,"Bluetooth 5.3, ANC, 30hr total battery life",Electronics,89.99,110,0.06
+Desk Organizer,DO-011,Bamboo desk organizer with 5 compartments,Home & Office,28.99,130,1.1
+Mystery Box,MB-001,Surprise assortment of random items from our catalog,Gifts,0.00,50,1.0
+Notebook,NB-100,"Ruled notebook, 200 pages, A5 size, lay-flat binding",Stationery,3.50,1000,0.3
+Phone Case,PC-001,Silicone protective case; fits all iPhone 15 models,Accessories,12.99,800,0.05
+Gaming Keyboard,GK-088,RGB mechanical keyboard with Cherry MX Red switches,Electronics,129.99,45,
+Vintage Clock,VC-001,"Antique-style wall clock, silent quartz movement",Home & Office,299.99,0,3.5
+Gift Card,GC-025,Digital gift card — redeemable online only,,25.00,99999,0
+"Comma, In Product Name",CI-001,This product has a comma in its name,Accessories,14.99,300,0.1
+Wool Blanket,WL-008,"Merino wool throw blanket, 150x200cm",Home & Office,79.99,60,1.5
+Running Shoes,RS-050,Budget running shoes for beginners,Footwear,49.99,200,0.30
+Bluetooth Speaker,BS-021,Same SKU different description and price,Electronics,49.99,200,0.75
+Yoga Block,YB-016,"High-density EVA foam yoga block, set of 2",Sports,12.99,400,0.4
+Electric Kettle,EK-003,"1.7L stainless steel electric kettle, auto shutoff",Kitchen,34.99,150,1.2
+"Quote ""Inside"" Name",QI-001,Product with escaped quotes in the name,Books,22.99,80,0.6
+Cycling Gloves,CG-014,"Padded half-finger cycling gloves, breathable",Sports,17.99,250,0.08
+Air Purifier,AP-002,"HEPA air purifier, covers 40sqm, quiet mode",Home & Office,189.99,20,5.2
+,,,,,,
+,,,,,,
+Desk Mat,DM-012,"Large PU leather desk mat, 80x40cm, waterproof",Home & Office,23.99,175,0.6
+Thermos Flask,TF-007,"Vacuum insulated flask, 750ml, keeps hot 12hrs",Food & Beverage,29.99,220,0.4
+Wall Art Print,WA-019,"Abstract geometric art print, 50x70cm, unframed",Home & Office,18.99,100,0.2
+Resistance Roller,RR-025,"Foam muscle roller, 45cm, medium density",Sports,16.99,180,0.5
+Bluetooth Speaker,BS-099,"Mini speaker, 5W output, clip-on design",Electronics,24.99,300,0.15
+Kitchen Scale,KS-011,"Digital kitchen scale, 0.1g precision, tare function",Kitchen,14.99,200,0.3
+Bamboo Toothbrush,BT-033,"Pack of 4, biodegradable bamboo toothbrushes",Beauty,6.99,600,0.05
+Wireless Charger,WC-028,"15W fast wireless charging pad, Qi compatible",Electronics,19.99,350,0.12
+Pepper Grinder,PG-005,"Ceramic burr pepper grinder, adjustable coarseness",Kitchen,24.99,140,0.4
+Soccer Ball,SB-020,"Official size 5, hand-stitched, FIFA approved",Sports,34.99,75,0.45
+Door Mat,DRM-009,"Coir welcome mat, non-slip rubber back, 60x40cm",Home & Office,12.99,250,0.8
+Paint Set,PS-015,"Acrylic paint set, 24 colors, includes 3 brushes",Stationery,21.99,120,0.7
+Insect Repellent,IR-004,"Natural DEET-free insect spray, 100ml",Outdoors,8.99,400,0.12
+Baby Monitor,BM-006,"WiFi baby monitor with 1080p camera, night vision",Electronics,69.99,55,0.3
+Hammock,HM-003,Double cotton hammock with steel frame stand,Outdoors,129.99,18,12.0
+Shower Speaker,SS-022,"Bluetooth shower speaker, suction cup mount, IPX7",Electronics,15.99,280,0.15
+Spice Rack,SR-010,Rotating spice rack with 16 glass jars,Kitchen,32.99,90,2.5
+Nail Clipper Set,NC-027,"Stainless steel nail clipper set, 3 pieces with case",Beauty,7.99,500,0.08
+Camping Chair,CC-008,"Foldable camping chair, cup holder, 120kg capacity",Outdoors,44.99,65,3.2
+USB Hub,UH-031,7-port USB 3.0 hub with individual switches,Electronics,22.99,200,0.2
+Coasters Set,CO-013,Set of 6 absorbent stone coasters with cork base,Home & Office,15.99,170,0.9
+Dog Leash,DL-045,"Retractable dog leash, 5m, for dogs up to 30kg",Pets,18.99,230,0.25
+Vitamin D3,VD-018,"Vitamin D3 1000IU, 365 tablets, one year supply",Health,11.99,300,0.15
+Bike Light Set,BL-009,"USB rechargeable front and rear bike lights, IPX5",Sports,19.99,160,0.12
+Picture Frame,PF-032,"Wooden picture frame, 20x25cm, with glass front",Home & Office,9.99,400,0.5
+Bluetooth Speaker,BS-021,"Portable waterproof speaker, 10W, 12hr battery",Electronics,59.99,110,0.8
+Tape Measure,TAP-014,"5m retractable tape measure, metric + imperial",Tools,6.99,500,0.2
+Umbrella,UM-006,"Windproof compact folding umbrella, auto open/close",Accessories,16.99,350,0.35
+Mouse Pad,MPD-021,"Extended mouse pad, 800x300mm, stitched edges",Electronics,11.99,400,0.3
+Herb Garden Kit,HG-011,"Indoor herb growing kit, 5 varieties, self-watering",Outdoors,27.99,80,1.5
+Phone Stand,PST-017,Adjustable aluminum phone/tablet stand,Electronics,13.99,250,0.2
+Tote Bag,TB-028,"Canvas tote bag with zipper, internal pocket",Accessories,11.99,450,0.3
+Sleep Mask,SM-034,Contoured silk sleep mask with adjustable strap,Beauty,8.99,300,0.04
+Pencil Case,PCL-040,"Leather pencil case, holds 20+ pens, zip closure",Stationery,14.99,200,0.12
+Mini Projector,PRJ-001,"Portable mini projector, 1080p, HDMI + WiFi",Electronics,199.99,30,0.9

@@ -33,3 +33,4 @@ import:
   max_rows: 10000
 demo:
   seed: ${SEED_DEMO:-true}
+  seed_file: ${SEED_FILE:-testdata/products.csv}

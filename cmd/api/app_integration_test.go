@@ -22,6 +22,9 @@ type client struct {
 	t    *testing.T
 	base string
 	pool *pgxpool.Pool
+	app  *app
+	cfg  AppConfig
+	log  logger.Service
 }
 
 func (c client) do(method, path, body string, headers ...string) (*http.Response, string) {
@@ -55,7 +58,7 @@ func startApp(t *testing.T) client {
 	require.NoError(t, err)
 	srv := httptest.NewServer(a.api)
 	t.Cleanup(srv.Close)
-	return client{t: t, base: srv.URL, pool: pool}
+	return client{t: t, base: srv.URL, pool: pool, app: a, cfg: cfg, log: log}
 }
 
 func errorCodes(t *testing.T, body string) (string, map[string]string) {

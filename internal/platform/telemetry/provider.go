@@ -24,6 +24,8 @@ import (
 	"github.com/skolldire/shops/internal/platform/logger"
 )
 
+var durationSecondsBuckets = []float64{0.05, 0.1, 0.5, 1, 2, 5, 10}
+
 type Config struct {
 	ServiceName    string        `mapstructure:"service_name"`
 	ServiceVersion string        `mapstructure:"service_version"`
@@ -86,6 +88,10 @@ func newProvider(cfg Config, log logger.Service, exporter sdktrace.SpanExporter)
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(reader),
 		sdkmetric.WithResource(res),
+		sdkmetric.WithView(sdkmetric.NewView(
+			sdkmetric.Instrument{Name: "*_duration_seconds", Kind: sdkmetric.InstrumentKindHistogram},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{Boundaries: durationSecondsBuckets}},
+		)),
 		sdkmetric.WithView(sdkmetric.NewView(
 			sdkmetric.Instrument{Name: "http.server.*"},
 			sdkmetric.Stream{AttributeFilter: attribute.NewDenyKeysFilter(

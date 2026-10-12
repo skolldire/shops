@@ -210,15 +210,11 @@ func parseNumbers(v formValues) (price *decimal.Decimal, stock *int64, weight *d
 	errs = map[string]string{}
 	price = parseFormDecimal(errs, "price", v.Price)
 	weight = parseFormDecimal(errs, "weight_kg", v.WeightKg)
-	if raw := strings.TrimSpace(v.Stock); raw != "" {
-		n, err := strconv.ParseInt(raw, 10, 32)
-		var numErr *strconv.NumError
-		switch {
-		case errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange):
-			errs["stock"] = "must be between 0 and 2147483647"
-		case err != nil:
-			errs["stock"] = "must be a whole number"
-		default:
+	if strings.TrimSpace(v.Stock) != "" {
+		n, err := catalog.ParseWholeNumber(v.Stock)
+		if err != nil {
+			errs["stock"] = err.Error()
+		} else {
 			stock = &n
 		}
 	}

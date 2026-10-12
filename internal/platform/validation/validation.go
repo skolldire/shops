@@ -1,6 +1,10 @@
 package validation
 
-import "strings"
+import (
+	"errors"
+	"slices"
+	"strings"
+)
 
 const (
 	CodeRequired        = "required"
@@ -37,4 +41,18 @@ func (e Errors) Err() error {
 		return nil
 	}
 	return e
+}
+
+func Merge(format Errors, domain error) error {
+	var domainErrs Errors
+	if domain != nil && !errors.As(domain, &domainErrs) {
+		return domain
+	}
+	merged := append(Errors{}, format...)
+	for _, fe := range domainErrs {
+		if !slices.ContainsFunc(format, func(known FieldError) bool { return known.Field == fe.Field }) {
+			merged = append(merged, fe)
+		}
+	}
+	return merged.Err()
 }
