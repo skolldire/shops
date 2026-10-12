@@ -267,7 +267,8 @@ func TestDemoSeed(t *testing.T) {
 
 	missing := filepath.Join(t.TempDir(), "missing.csv")
 	err = seedDemo(ctx, c.log, c.app.catalog, missing)
-	require.ErrorContains(t, err, "demo seed: catalog: open seed file "+missing)
+	require.EqualError(t, err, "demo seed: catalog: open seed file: no such file or directory")
+	require.NotContains(t, err.Error(), missing)
 }
 
 func TestStartSeedsBeforeServingAndFailsWithoutTheFile(t *testing.T) {
@@ -288,7 +289,7 @@ func TestStartSeedsBeforeServingAndFailsWithoutTheFile(t *testing.T) {
 
 		err = start(t.Context(), failing, log, lc)
 
-		require.ErrorContains(t, err, "demo seed: catalog: open seed file "+failing.Demo.SeedFile)
+		require.EqualError(t, err, "demo seed: catalog: open seed file: no such file or directory")
 		require.NoError(t, lc.Close(context.Background()))
 		total, _, _ := c.products()
 		require.Zero(t, total)
@@ -319,5 +320,6 @@ func TestStartSeedsBeforeServingAndFailsWithoutTheFile(t *testing.T) {
 		require.Contains(t, logs.String(), `"created":82`)
 		require.Contains(t, logs.String(), `"rejected":13`)
 		require.Contains(t, logs.String(), `"skipped":2`)
+		require.NotContains(t, logs.String(), "products.csv", "the configured path is never logged")
 	})
 }

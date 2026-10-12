@@ -70,7 +70,7 @@ func TestModuleImportErrorsArePublic(t *testing.T) {
 }
 
 func TestModuleSeed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "seed.csv")
+	path := filepath.Join(t.TempDir(), "demo-products.csv")
 	require.NoError(t, os.WriteFile(path, []byte(importHeader+"Shoes,RS-1,,Sports,9.99,1,0.3\nBad,BAD-1,,Sports,free,1,0.3\n"), 0o600))
 	ctx := context.Background()
 
@@ -82,6 +82,7 @@ func TestModuleSeed(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, seeded)
 		require.Equal(t, "seed.csv", report.File.Name)
+		require.NotEqual(t, "seed.csv", filepath.Base(path), "the report does not carry the configured file name")
 		require.Equal(t, 1, report.Created)
 		require.Equal(t, 1, report.Rejected, "rejected rows are not a failure")
 		require.Len(t, repo.products, 1)
@@ -107,7 +108,8 @@ func TestModuleSeed(t *testing.T) {
 		_, seeded, err := m.Seed(ctx, missing)
 
 		require.ErrorIs(t, err, fs.ErrNotExist)
-		require.ErrorContains(t, err, "catalog: open seed file "+missing)
+		require.EqualError(t, err, "catalog: open seed file: no such file or directory")
+		require.NotContains(t, err.Error(), "nope.csv", "the configured path stays out of the error")
 		require.False(t, seeded)
 	})
 
@@ -119,6 +121,7 @@ func TestModuleSeed(t *testing.T) {
 		_, seeded, err := m.Seed(ctx, broken)
 
 		require.ErrorIs(t, err, ErrInvalidHeader)
+		require.NotContains(t, err.Error(), "broken.csv")
 		require.False(t, seeded)
 	})
 }

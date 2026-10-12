@@ -18,11 +18,10 @@ func seedDemo(ctx context.Context, log logger.Service, s seeder, path string) er
 		return fmt.Errorf("demo seed: %w", err)
 	}
 	if !seeded {
-		log.Info(ctx, "demo seed skipped, the catalog already has products", map[string]any{"file": path})
+		log.Info(ctx, "demo seed skipped, the catalog already has products", nil)
 		return nil
 	}
 	log.Info(ctx, "demo seed imported", map[string]any{
-		"file":      path,
 		"sha256":    report.File.SHA256,
 		"records":   report.Records,
 		"created":   report.Created,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -27,6 +28,8 @@ type Deps struct {
 	Metrics platform.Metrics
 	Import  ImportLimits
 }
+
+const seedFileName = "seed.csv"
 
 type store interface {
 	core.Repository
@@ -92,7 +95,7 @@ func (m *Module) Import(ctx context.Context, r io.Reader, opts ImportOptions) (I
 func (m *Module) Seed(ctx context.Context, path string) (ImportReport, bool, error) {
 	file, err := os.DirFS(filepath.Dir(path)).Open(filepath.Base(path))
 	if err != nil {
-		return ImportReport{}, false, fmt.Errorf("catalog: open seed file %s: %w", path, err)
+		return ImportReport{}, false, fmt.Errorf("catalog: open seed file: %w", withoutPath(err))
 	}
 	defer func() { _ = file.Close() }()
 
@@ -103,11 +106,19 @@ func (m *Module) Seed(ctx context.Context, path string) (ImportReport, bool, err
 	if has {
 		return ImportReport{}, false, nil
 	}
-	report, err := m.Import(ctx, file, ImportOptions{FileName: filepath.Base(path)})
+	report, err := m.Import(ctx, file, ImportOptions{FileName: seedFileName})
 	if err != nil {
-		return ImportReport{}, false, fmt.Errorf("catalog: seed from %s: %w", path, err)
+		return ImportReport{}, false, fmt.Errorf("catalog: import seed file: %w", withoutPath(err))
 	}
 	return report, true, nil
+}
+
+func withoutPath(err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	return err
 }
 
 func ParseDecimal(raw string) (decimal.Decimal, error) {

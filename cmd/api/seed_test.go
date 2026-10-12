@@ -45,7 +45,7 @@ func TestSeedDemoLogsTheSummary(t *testing.T) {
 	require.Contains(t, logs, `"created":82`)
 	require.Contains(t, logs, `"rejected":13`)
 	require.Contains(t, logs, `"skipped":2`)
-	require.Contains(t, logs, `"file":"/etc/shop/seed/products.csv"`)
+	require.NotContains(t, logs, "/etc/shop/seed", "the configured path is never logged")
 }
 
 func TestSeedDemoSaysWhenItDoesNothing(t *testing.T) {
@@ -53,11 +53,12 @@ func TestSeedDemoSaysWhenItDoesNothing(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Contains(t, logs, "demo seed skipped, the catalog already has products")
+	require.NotContains(t, logs, "/etc/shop/seed", "the configured path is never logged")
 	require.NotContains(t, logs, "demo seed imported")
 }
 
 func TestSeedDemoFailsWhenTheSeedFails(t *testing.T) {
-	boom := errors.New("catalog: open seed file /etc/shop/seed/products.csv: file does not exist")
+	boom := errors.New("catalog: open seed file: file does not exist")
 
 	logs, err := runSeed(t, &fakeSeeder{err: boom})
 
