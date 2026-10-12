@@ -206,7 +206,7 @@ The request is `multipart/form-data` with the file in a field named `file`. The 
 ### The file
 
 - The first line must be exactly `name,sku,description,category,price,stock,weight_kg`, in that order. A UTF-8 byte order mark before it is tolerated.
-- UTF-8, comma separated, RFC 4180: double quotes around fields that contain commas, quotes or line breaks.
+- UTF-8, comma-separated, RFC 4180: double quotes around fields that contain commas, quotes or line breaks.
 - At most 10 MB (`import.max_bytes`) and 10,000 data rows (`import.max_rows`).
 - Every row follows the same rules as the API and the admin forms (see [Rules](#rules)), with the same error codes. `price` and `weight_kg` are plain decimals such as `29.99`; `stock` is a whole number such as `25`.
 - Line numbers are the physical line where a record starts, counting the header as line 1, so they match what an editor shows even when a field spans several lines.
@@ -223,7 +223,7 @@ The request is `multipart/form-data` with the file in a field named `file`. The 
 | New SKU | Created |
 | Active product that is not in the file | Left as it is |
 
-The file is validated completely before anything is written. The valid rows are then applied in batches of 500, each in its own transaction, so a large file is not all-or-nothing. A row that is identical to the stored product is left untouched: its `version` and `updated_at` do not change, and importing the same file twice reports every row as `unchanged`.
+The file is validated completely before anything is written. The valid rows are then applied in batches of 500, each in its own transaction, so a large file is not all-or-nothing: if the request is cancelled halfway, the batches already committed stay applied. A row that is identical to the stored product is left untouched: its `version` and `updated_at` do not change, and importing the same file twice reports every row as `unchanged`.
 
 An import overrides whatever is stored: it does not use `If-Match`, and it increases `version` when it changes a product. An administrator who has that product open gets the usual conflict when saving.
 
