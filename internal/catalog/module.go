@@ -111,7 +111,7 @@ func (m *Module) Seed(ctx context.Context, path string) (ImportReport, bool, err
 	}
 	report, err := m.Import(ctx, file, ImportOptions{FileName: seedFileName})
 	if err != nil {
-		return ImportReport{}, false, fmt.Errorf("catalog: import seed file: %w", withoutPath(err))
+		return report, false, fmt.Errorf("catalog: import seed file: %w", withoutPath(err))
 	}
 	return report, true, nil
 }

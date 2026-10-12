@@ -57,6 +57,21 @@ func TestSeedDemoSaysWhenItDoesNothing(t *testing.T) {
 	require.NotContains(t, logs, "demo seed imported")
 }
 
+func TestSeedDemoLogsWhatWasAppliedWhenTheSeedIsInterrupted(t *testing.T) {
+	logs, err := runSeed(t, &fakeSeeder{err: context.Canceled, report: catalog.ImportReport{
+		File: catalog.ImportFile{SHA256: "6fc46b84"}, Records: 1200, Created: 500, Rejected: 3,
+	}})
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Contains(t, logs, `"message":"demo seed interrupted, part of the file was applied"`)
+	require.Contains(t, logs, `"severity":"WARN"`)
+	require.Contains(t, logs, `"records":1200`)
+	require.Contains(t, logs, `"created":500`)
+	require.Contains(t, logs, `"rejected":3`)
+	require.NotContains(t, logs, "demo seed imported")
+	require.NotContains(t, logs, "/etc/shop/seed", "the configured path is never logged")
+}
+
 func TestSeedDemoFailsWhenTheSeedFails(t *testing.T) {
 	boom := errors.New("catalog: open seed file: file does not exist")
 

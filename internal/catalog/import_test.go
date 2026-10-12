@@ -129,14 +129,30 @@ func TestModuleSeed(t *testing.T) {
 		require.False(t, seeded)
 	})
 
+	t.Run("returns what was applied when the import is interrupted", func(t *testing.T) {
+		m, repo := newTestModule(t)
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+
+		report, seeded, err := m.Seed(cancelled, path)
+
+		require.ErrorIs(t, err, context.Canceled)
+		require.ErrorContains(t, err, "catalog: import seed file: ")
+		require.False(t, seeded)
+		require.Equal(t, []int{2, 0, 1}, []int{report.Records, report.Created, report.Rejected})
+		require.Equal(t, "seed.csv", report.File.Name)
+		require.Empty(t, repo.products)
+	})
+
 	t.Run("fails when the file is not a valid import", func(t *testing.T) {
 		m, _ := newTestModule(t)
 		broken := filepath.Join(t.TempDir(), "broken.csv")
 		require.NoError(t, os.WriteFile(broken, []byte("sku,name\n"), 0o600))
 
-		_, seeded, err := m.Seed(ctx, broken)
+		report, seeded, err := m.Seed(ctx, broken)
 
 		require.ErrorIs(t, err, ErrInvalidHeader)
+		require.Equal(t, ImportReport{}, report, "a file rejected as a whole has no report")
 		require.NotContains(t, err.Error(), "broken.csv")
 		require.False(t, seeded)
 	})
