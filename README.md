@@ -2,7 +2,7 @@
 
 E-commerce application built as a modular monolith in Go.
 
-It currently ships the platform layer (`internal/platform`), the product catalog with its JSON API (`internal/catalog`) and a server-rendered UI to browse and manage products (`internal/web`). Ordering, payments and CSV import arrive in later phases.
+It currently ships the platform layer (`internal/platform`), the product catalog with its JSON API and CSV import (`internal/catalog`) and a server-rendered UI to browse and manage products (`internal/web`). Ordering and payments arrive in later phases.
 
 ## Requirements
 
@@ -223,7 +223,7 @@ The request is `multipart/form-data` with the file in a field named `file`. The 
 | New SKU | Created |
 | Active product that is not in the file | Left as it is |
 
-The file is validated completely before anything is written. The valid rows are then applied in batches of 500, each in its own transaction, so a large file is not all-or-nothing: if the request is cancelled halfway, the batches already committed stay applied. A row that is identical to the stored product is left untouched: its `version` and `updated_at` do not change, and importing the same file twice reports every row as `unchanged`.
+The file is validated completely before anything is written. The valid rows are then applied in batches of 500, each in its own transaction, so a large file is not all-or-nothing: if the request is cancelled halfway, the batches already committed stay applied. A row that is identical to the stored product is left untouched: its `version` and `updated_at` do not change. So importing the same file again reports as `unchanged` the rows that the first import created or updated, as long as nobody changed those products in between; rows that were skipped or rejected are skipped or rejected again.
 
 An import overrides whatever is stored: it does not use `If-Match`, and it increases `version` when it changes a product. An administrator who has that product open gets the usual conflict when saving.
 
