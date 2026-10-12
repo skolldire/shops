@@ -37,9 +37,9 @@ lint-comments:
 	@! grep -rn '/[*]' --include='*.css' internal || { echo "CSS comments are not allowed"; exit 1; }
 
 CATALOG := github[.]com/skolldire/shops/internal/catalog/internal
-SHARED_IMPORTS := github[.]com/shopspring/decimal|github[.]com/skolldire/shops/internal/platform/validation
-DOMAIN_IMPORTS := errors|regexp|strconv|strings|time|unicode/utf8|$(SHARED_IMPORTS)
-APP_IMPORTS := cmp|context|errors|fmt|regexp|slices|strconv|strings|$(SHARED_IMPORTS)|$(CATALOG)/domain
+VALIDATION := github[.]com/skolldire/shops/internal/platform/validation
+DOMAIN_IMPORTS := errors|regexp|strconv|strings|time|unicode/utf8|github[.]com/shopspring/decimal|$(VALIDATION)
+APP_IMPORTS := cmp|context|errors|fmt|regexp|slices|strconv|strings|$(VALIDATION)|$(CATALOG)/domain
 FORBIDDEN_DEPS := github[.]com/jackc/pgx|net/http$$|net/url$$|database/sql$$|github[.]com/go-chi|go[.]opentelemetry[.]io|github[.]com/skolldire/shops/internal/platform/(httpx|telemetry|database|logger)
 
 lint-arch:

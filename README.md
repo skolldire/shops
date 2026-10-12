@@ -99,14 +99,14 @@ Inside the catalog module the dependencies point towards the business rules:
 | Package | Role | May import |
 |---|---|---|
 | `domain` | Products, search criteria, the decimal and whole number grammars, and their invariants. No ports, no I/O | A closed list: a few standard packages, `shopspring/decimal` and `platform/validation` |
-| `app` | Use cases (product service, import) and the ports they need: `Repository`, `ProductUpserter`, `ImportRecorder`, `ImportFailureReporter` | A closed list: `domain`, a few standard packages, `shopspring/decimal` and `platform/validation` |
+| `app` | Use cases (product service, import) and the ports they need: `Repository`, `ProductUpserter`, `ImportRecorder`, `ImportFailureReporter` | A closed list: `domain`, a few standard packages and `platform/validation` |
 | `httpapi`, `httpquery`, `csvimport` | Input adapters: JSON, query strings and CSV files are decoded here and handed over as plain values | `app`, `domain` and `platform` |
 | `postgres`, `metrics`, `importlog` | Output adapters: they implement the ports of `app` for PostgreSQL, metrics and operational logs | `app`, `domain` and `platform` |
 | `module.go` | Composition: builds the adapters, wires them into the use cases and exposes the facade | Everything in the module |
 
 `domain` and `app` do not read files, parse formats, log, measure time or call a telemetry SDK:
 
-- The CSV adapter reads the upload, enforces the size and row limits, hashes the file and maps the columns to named fields. The import use case only sees rows with a name, a SKU, a price and so on.
+- The CSV adapter reads the upload, enforces the size and row limits, hashes the file, maps the columns and reads the numbers. The import use case receives typed product values, together with the fields the adapter could not read, and never sees a CSV cell.
 - When the import recovers from a failed batch, or the database refuses a row, the use case reports it through `ImportFailureReporter` and the `importlog` adapter writes the log line.
 - The duration of an import is measured by a decorator in the `metrics` adapter around the whole operation, so it also covers files that are rejected before any row is applied.
 - The facade takes search parameters as plain text and the seed as a reader; query strings stay in the HTTP adapters and the seed file is opened by `cmd/api`.
