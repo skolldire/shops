@@ -5,7 +5,6 @@ package postgres_test
 import (
 	"context"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -14,13 +13,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/core"
-	"github.com/skolldire/shops/internal/platform/logger"
+	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
 )
 
 type noRecorder struct{}
 
 func (noRecorder) RecordRows(context.Context, string, int)       {}
 func (noRecorder) RecordDuration(context.Context, time.Duration) {}
+
+type noFailures struct{}
+
+func (noFailures) BatchRetried(context.Context, int, error)        {}
+func (noFailures) RowRejected(context.Context, int, string, error) {}
 
 func item(sku, name, price string, stock int) core.Product {
 	return core.Product{SKU: sku, Name: name, Description: "about " + name, Category: "Imports", Price: d(price), Stock: stock, WeightKg: d("1.5")}
@@ -50,11 +54,11 @@ func (f fixture) count(t *testing.T) int {
 	return n
 }
 
-func (f fixture) importer(t *testing.T) *core.Importer {
+func (f fixture) importer(t *testing.T) *csvimport.Importer {
 	t.Helper()
-	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
+	rows, err := core.NewImporter(f.repo, noRecorder{}, noFailures{})
 	require.NoError(t, err)
-	importer, err := core.NewImporter(f.repo, noRecorder{}, log, core.ImportLimits{MaxBytes: 10 << 20, MaxRows: 10000})
+	importer, err := csvimport.NewImporter(rows, csvimport.Limits{MaxBytes: 10 << 20, MaxRows: 10000})
 	require.NoError(t, err)
 	return importer
 }

@@ -190,15 +190,13 @@ func TestImportBodyLargerThanTheRouteLimit(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }
 
-func TestImportCleansTheFileName(t *testing.T) {
+func TestImportPassesOnlyTheBaseNameOfTheFile(t *testing.T) {
 	importer := &fakeImporter{}
 	h, _ := newImportServer(t, importer, 1<<20)
 
-	upload(t, h, "file", "../../etc/pro\tducts.csv", "name\n")
-	require.Equal(t, "products.csv", importer.name)
+	upload(t, h, "file", "../../etc/products.csv", "name\n")
 
-	upload(t, h, "file", strings.Repeat("ñ", 400)+".csv", "name\n")
-	require.Len(t, []rune(importer.name), 255)
+	require.Equal(t, "products.csv", importer.name)
 }
 
 func TestNewImportsRequiresDependencies(t *testing.T) {

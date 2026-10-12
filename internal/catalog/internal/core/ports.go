@@ -9,6 +9,11 @@ type ProductUpserter interface {
 	Upsert(ctx context.Context, products []Product) (map[string]UpsertOutcome, error)
 }
 
+type ImportFailureReporter interface {
+	BatchRetried(ctx context.Context, rows int, cause error)
+	RowRejected(ctx context.Context, line int, sku string, cause error)
+}
+
 type ImportRecorder interface {
 	RecordRows(ctx context.Context, outcome string, n int)
 	RecordDuration(ctx context.Context, d time.Duration)

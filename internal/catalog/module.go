@@ -15,8 +15,10 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
 	"github.com/skolldire/shops/internal/catalog/internal/httpquery"
+	"github.com/skolldire/shops/internal/catalog/internal/importlog"
 	"github.com/skolldire/shops/internal/catalog/internal/metrics"
 	"github.com/skolldire/shops/internal/catalog/internal/postgres"
 	"github.com/skolldire/shops/internal/platform/logger"
@@ -44,7 +46,7 @@ type store interface {
 
 type Module struct {
 	svc      *core.Service
-	importer *core.Importer
+	importer *csvimport.Importer
 	seed     seedGuard
 	http     *httpapi.Handler
 	imports  *httpapi.ImportHandler
@@ -71,7 +73,15 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	importer, err := core.NewImporter(s, recorder, d.Log, core.ImportLimits{MaxBytes: d.Import.MaxBytes, MaxRows: d.Import.MaxRows})
+	failures, err := importlog.New(d.Log)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := core.NewImporter(s, recorder, failures)
+	if err != nil {
+		return nil, err
+	}
+	importer, err := csvimport.NewImporter(rows, csvimport.Limits{MaxBytes: d.Import.MaxBytes, MaxRows: d.Import.MaxRows})
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +101,7 @@ func (m *Module) RegisterImportRoutes(r chi.Router) {
 }
 
 func (m *Module) Import(ctx context.Context, r io.Reader, opts ImportOptions) (ImportReport, error) {
-	report, err := m.importer.Import(ctx, r, core.CleanFileName(opts.FileName))
+	report, err := m.importer.Import(ctx, r, opts.FileName)
 	switch {
 	case err == nil:
 		return fromReport(report), nil

@@ -38,10 +38,6 @@ func (e *FormatError) Is(target error) bool {
 	return target == ErrInvalidCSV
 }
 
-func Columns() int {
-	return len(header)
-}
-
 func Read(r io.Reader, maxRows int) ([]Row, error) {
 	buffered := bufio.NewReader(r)
 	if start, err := buffered.Peek(len(bom)); err == nil && bytes.Equal(start, bom) {

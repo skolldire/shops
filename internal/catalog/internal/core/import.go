@@ -3,22 +3,15 @@ package core
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
-	"io"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/shopspring/decimal"
 
-	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
-	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/validation"
 )
 
@@ -36,9 +29,9 @@ const (
 	outcomeSkipped  = "skipped"
 	outcomeRejected = "rejected"
 
-	rowField          = "row"
-	importBatchSize   = 500
-	maxFileNameLength = 255
+	rowField        = "row"
+	importBatchSize = 500
+	importColumns   = 7
 )
 
 var (
@@ -63,9 +56,9 @@ func (e *InvalidCSVError) Is(target error) bool {
 	return target == ErrInvalidCSV
 }
 
-type ImportLimits struct {
-	MaxBytes int64
-	MaxRows  int
+type ImportRow struct {
+	Line   int
+	Fields []string
 }
 
 type ImportFile struct {
@@ -94,24 +87,21 @@ type ImportReport struct {
 }
 
 type Importer struct {
-	store  ProductUpserter
-	rec    ImportRecorder
-	log    logger.Service
-	limits ImportLimits
+	store    ProductUpserter
+	rec      ImportRecorder
+	failures ImportFailureReporter
 }
 
-func NewImporter(store ProductUpserter, rec ImportRecorder, log logger.Service, limits ImportLimits) (*Importer, error) {
+func NewImporter(store ProductUpserter, rec ImportRecorder, failures ImportFailureReporter) (*Importer, error) {
 	switch {
 	case store == nil:
 		return nil, errors.New("catalog: importer requires a product store")
 	case rec == nil:
 		return nil, errors.New("catalog: importer requires a recorder")
-	case log == nil:
-		return nil, errors.New("catalog: importer requires a logger")
-	case limits.MaxBytes <= 0 || limits.MaxRows <= 0:
-		return nil, errors.New("catalog: importer requires positive limits")
+	case failures == nil:
+		return nil, errors.New("catalog: importer requires a failure reporter")
 	}
-	return &Importer{store: store, rec: rec, log: log, limits: limits}, nil
+	return &Importer{store: store, rec: rec, failures: failures}, nil
 }
 
 type importRow struct {
@@ -121,19 +111,9 @@ type importRow struct {
 	errs    validation.Errors
 }
 
-func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (ImportReport, error) {
+func (i *Importer) Import(ctx context.Context, file ImportFile, rows []ImportRow) (ImportReport, error) {
 	start := time.Now()
-	metered := &meteredReader{r: r, hash: sha256.New(), max: i.limits.MaxBytes}
-	rows, err := csvimport.Read(metered, i.limits.MaxRows)
-	if err != nil {
-		return ImportReport{}, readError(err)
-	}
-
-	report := ImportReport{
-		File:    ImportFile{Name: fileName, Bytes: metered.n, SHA256: hex.EncodeToString(metered.hash.Sum(nil))},
-		Records: len(rows),
-		Errors:  []RowError{},
-	}
+	report := ImportReport{File: file, Records: len(rows), Errors: []RowError{}}
 	valid := i.validate(rows, &report)
 	slices.SortFunc(valid, func(a, b importRow) int { return cmp.Compare(a.sku, b.sku) })
 	var interrupted error
@@ -159,7 +139,7 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (Im
 	return report, interrupted
 }
 
-func (i *Importer) validate(rows []csvimport.Row, report *ImportReport) []importRow {
+func (i *Importer) validate(rows []ImportRow, report *ImportReport) []importRow {
 	candidates := make([]importRow, 0, len(rows))
 	bySKU := map[string][]int{}
 	for _, row := range rows {
@@ -167,11 +147,11 @@ func (i *Importer) validate(rows []csvimport.Row, report *ImportReport) []import
 			report.Skipped++
 			continue
 		}
-		if len(row.Fields) != csvimport.Columns() {
+		if len(row.Fields) != importColumns {
 			report.Rejected++
 			report.Errors = append(report.Errors, RowError{
 				Line: row.Line, Field: rowField, Code: CodeWrongFieldCount,
-				Message: fmt.Sprintf("must have %d fields, found %d", csvimport.Columns(), len(row.Fields)),
+				Message: fmt.Sprintf("must have %d fields, found %d", importColumns, len(row.Fields)),
 			})
 			continue
 		}
@@ -222,9 +202,7 @@ func (i *Importer) apply(ctx context.Context, batch []importRow, report *ImportR
 	if ctx.Err() != nil {
 		return fmt.Errorf("catalog: import interrupted: %w", ctx.Err())
 	}
-	i.log.Error(ctx, fmt.Errorf("catalog: import batch failed, retrying row by row: %w", err), map[string]any{
-		"component": "catalog", "rows": len(batch),
-	})
+	i.failures.BatchRetried(ctx, len(batch), err)
 	for _, row := range batch {
 		outcomes, err := i.store.Upsert(ctx, []Product{row.product})
 		if err == nil {
@@ -234,9 +212,7 @@ func (i *Importer) apply(ctx context.Context, batch []importRow, report *ImportR
 		if ctx.Err() != nil {
 			return fmt.Errorf("catalog: import interrupted: %w", ctx.Err())
 		}
-		i.log.Error(ctx, fmt.Errorf("catalog: import row rejected by the database: %w", err), map[string]any{
-			"component": "catalog", "line": row.line, "sku": row.sku,
-		})
+		i.failures.RowRejected(ctx, row.line, row.sku, err)
 		report.Rejected++
 		report.Errors = append(report.Errors, RowError{
 			Line: row.line, SKU: row.sku, Field: rowField, Code: CodeRejectedByDatabase, Message: "could not be saved",
@@ -262,7 +238,7 @@ func count(report *ImportReport, row importRow, outcome UpsertOutcome) {
 	}
 }
 
-func newImportRow(row csvimport.Row) importRow {
+func newImportRow(row ImportRow) importRow {
 	var format validation.Errors
 	f := row.Fields
 	product, err := NewProduct(NewProductInput{
@@ -272,19 +248,6 @@ func newImportRow(row csvimport.Row) importRow {
 		WeightKg: decimalCell(&format, "weight_kg", f[6]),
 	})
 	return importRow{line: row.Line, sku: NormalizeSKU(f[1]), product: product, errs: rowErrors(format, err)}
-}
-
-func CleanFileName(raw string) string {
-	name := strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, strings.ToValidUTF8(raw, ""))
-	if runes := []rune(name); len(runes) > maxFileNameLength {
-		name = string(runes[:maxFileNameLength])
-	}
-	return name
 }
 
 func NormalizeSKU(raw string) string {
@@ -341,36 +304,4 @@ func otherLines(candidates []importRow, group []int, self int) string {
 		return "line " + lines[0]
 	}
 	return "lines " + strings.Join(lines[:len(lines)-1], ", ") + " and " + lines[len(lines)-1]
-}
-
-func readError(err error) error {
-	var format *csvimport.FormatError
-	switch {
-	case errors.Is(err, ErrFileTooLarge):
-		return ErrFileTooLarge
-	case errors.Is(err, csvimport.ErrInvalidHeader):
-		return ErrInvalidHeader
-	case errors.Is(err, csvimport.ErrTooManyRows):
-		return ErrTooManyRows
-	case errors.As(err, &format):
-		return &InvalidCSVError{Line: format.Line, Reason: format.Reason}
-	}
-	return fmt.Errorf("catalog: read import file: %w", err)
-}
-
-type meteredReader struct {
-	r    io.Reader
-	hash hash.Hash
-	n    int64
-	max  int64
-}
-
-func (m *meteredReader) Read(p []byte) (int, error) {
-	n, err := m.r.Read(p)
-	m.n += int64(n)
-	if m.n > m.max {
-		return 0, ErrFileTooLarge
-	}
-	_, _ = m.hash.Write(p[:n])
-	return n, err
 }

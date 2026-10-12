@@ -79,7 +79,7 @@ func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
 		if part.FormName() != importField {
 			continue
 		}
-		report, err := h.importer.Import(r.Context(), part, core.CleanFileName(part.FileName()))
+		report, err := h.importer.Import(r.Context(), part, part.FileName())
 		if err != nil {
 			h.writeError(w, r, err)
 			return
