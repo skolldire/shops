@@ -27,7 +27,6 @@ type fakeStore struct {
 	failBatch bool
 	failSKU   map[string]bool
 	batches   [][]string
-	has       bool
 	onBatch   func(applied int)
 }
 
@@ -70,8 +69,6 @@ func (f *fakeStore) Upsert(ctx context.Context, products []core.Product) (map[st
 	}
 	return out, nil
 }
-
-func (f *fakeStore) HasProducts(context.Context) (bool, error) { return f.has, nil }
 
 type fakeRecorder struct {
 	rows      map[string]int

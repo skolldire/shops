@@ -32,15 +32,20 @@ type Deps struct {
 
 const seedFileName = "seed.csv"
 
+type seedGuard interface {
+	HasProducts(ctx context.Context) (bool, error)
+}
+
 type store interface {
 	core.Repository
 	core.ProductUpserter
+	seedGuard
 }
 
 type Module struct {
 	svc      *core.Service
 	importer *core.Importer
-	store    core.ProductUpserter
+	seed     seedGuard
 	http     *httpapi.Handler
 	imports  *httpapi.ImportHandler
 }
@@ -74,7 +79,7 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Module{svc: svc, importer: importer, store: s, http: h, imports: imports}, nil
+	return &Module{svc: svc, importer: importer, seed: s, http: h, imports: imports}, nil
 }
 
 func (m *Module) RegisterRoutes(r chi.Router) {
@@ -103,7 +108,7 @@ func (m *Module) Seed(ctx context.Context, path string) (ImportReport, bool, err
 	}
 	defer func() { _ = file.Close() }()
 
-	has, err := m.store.HasProducts(ctx)
+	has, err := m.seed.HasProducts(ctx)
 	if err != nil {
 		return ImportReport{}, false, err
 	}

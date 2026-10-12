@@ -7,7 +7,6 @@ import (
 
 type ProductUpserter interface {
 	Upsert(ctx context.Context, products []Product) (map[string]UpsertOutcome, error)
-	HasProducts(ctx context.Context) (bool, error)
 }
 
 type ImportRecorder interface {
