@@ -26,23 +26,27 @@ func TestQueriesAreTracedAgainstPostgres(t *testing.T) {
 	t.Cleanup(pool.Close)
 	tm, err := database.NewTxManager(pool)
 	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `CREATE TABLE tracing_probe (label text PRIMARY KEY, amount integer NOT NULL CHECK (amount >= 0))`)
+	require.NoError(t, err)
 	already := len(recorder.Ended())
 
-	parentCtx, parent := provider.Tracer("test").Start(ctx, "catalog.import")
+	parentCtx, parent := provider.Tracer("test").Start(ctx, "caller")
 	err = tm.WithinTx(parentCtx, func(ctx context.Context) error {
-		return insertProduct(ctx, database.Q(ctx, pool), "TRACE-1", 1)
+		_, err := database.Q(ctx, pool).Exec(ctx, `INSERT INTO tracing_probe (label, amount) VALUES ($1, $2)`, "first", 1)
+		return err
 	})
 	require.NoError(t, err)
 	var n int
-	require.NoError(t, pool.QueryRow(parentCtx, `SELECT count(*) FROM products WHERE sku = $1`, "TRACE-1").Scan(&n))
-	_, failed := pool.Exec(parentCtx, `UPDATE products SET stock = -1 WHERE sku = 'TRACE-1'`)
+	require.NoError(t, pool.QueryRow(parentCtx, `SELECT count(*) FROM tracing_probe WHERE label = $1`, "first").Scan(&n))
+	require.Equal(t, 1, n)
+	_, failed := pool.Exec(parentCtx, `UPDATE tracing_probe SET amount = -1 WHERE label = 'first'`)
 	require.Error(t, failed)
 	parent.End()
 
 	var names []string
 	statuses := map[string]sdktrace.Status{}
 	for _, span := range recorder.Ended()[already:] {
-		if span.Name() == "catalog.import" {
+		if span.Name() == "caller" {
 			continue
 		}
 		names = append(names, span.Name())
