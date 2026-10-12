@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -49,15 +50,86 @@ func TestImporterHandsTheRowsAndTheFileToTheUseCase(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, report, "the report of the use case is returned as it is")
 	require.Equal(t, app.ImportFile{Name: "products.csv", Bytes: int64(len(body)), SHA256: hex.EncodeToString(sum[:])}, rows.file)
+	require.Len(t, rows.rows, 5)
+	first := rows.rows[0]
+	require.Equal(t, 2, first.Line)
+	require.Equal(t, "Shoes", first.Product.Name)
+	require.Equal(t, "RS-1", first.Product.SKU)
+	require.Equal(t, "Light,\nfast", first.Product.Description)
+	require.Equal(t, "Sports", first.Product.Category)
+	require.Equal(t, "9.99", first.Product.Price.String())
+	require.EqualValues(t, 1, *first.Product.Stock)
+	require.Equal(t, "0.3", first.Product.WeightKg.String())
+	require.Empty(t, first.Format)
+	require.False(t, first.Empty)
 	require.Equal(t, []app.ImportRow{
-		{Line: 2, Fields: app.ImportFields{
-			Name: "Shoes", SKU: "RS-1", Description: "Light,\nfast", Category: "Sports", Price: "9.99", Stock: "1", WeightKg: "0.3",
-		}},
-		{Line: 4},
+		{Line: 4, Empty: true},
 		{Line: 5, Malformed: "must have 7 fields, found 2"},
-		{Line: 6},
+		{Line: 6, Empty: true},
 		{Line: 7, Malformed: "must have 7 fields, found 8"},
-	}, rows.rows, "columns are mapped by name, empty rows stay empty and other widths are flagged")
+	}, rows.rows[1:], "empty rows are flagged as empty and other widths as malformed")
+}
+
+func TestImporterReadsNumbersAndReportsTheOnesItCannotRead(t *testing.T) {
+	tests := map[string]struct {
+		row    string
+		format map[string]string
+		price  string
+		stock  string
+		weight string
+	}{
+		"plain numbers":        {"N,S,,C,9.99,7,0.300", nil, "9.99", "7", "0.3"},
+		"spaces are trimmed":   {"N,S,,C, 9.90 , 7 , 0.3 ", nil, "9.9", "7", "0.3"},
+		"empty numbers":        {"N,S,,C,,,", nil, "", "", ""},
+		"blank numbers":        {"N,S,,C,  , ,\t", nil, "", "", ""},
+		"negative values":      {"N,S,,C,-1,-5,-0.1", nil, "-1", "-5", "-0.1"},
+		"price with currency":  {"N,S,,C,$9.99,1,1", map[string]string{"price": "invalid_format"}, "", "1", "1"},
+		"price as a word":      {"N,S,,C,free,1,1", map[string]string{"price": "invalid_format"}, "", "1", "1"},
+		"price with exponent":  {"N,S,,C,1e100000000,1,1", map[string]string{"price": "invalid_format"}, "", "1", "1"},
+		"stock with decimals":  {"N,S,,C,1,1.0,1", map[string]string{"stock": "invalid_format"}, "1", "", "1"},
+		"stock with plus sign": {"N,S,,C,1,+5,1", map[string]string{"stock": "invalid_format"}, "1", "", "1"},
+		"stock with exponent":  {"N,S,,C,1,1e3,1", map[string]string{"stock": "invalid_format"}, "1", "", "1"},
+		"stock above int32":    {"N,S,,C,1,2147483648,1", map[string]string{"stock": "out_of_range"}, "1", "", "1"},
+		"stock beyond int64":   {"N,S,,C,1,99999999999999999999,1", map[string]string{"stock": "out_of_range"}, "1", "", "1"},
+		"weight as a word":     {"N,S,,C,1,1,heavy", map[string]string{"weight_kg": "invalid_format"}, "1", "1", ""},
+		"every number invalid": {"N,S,,C,free,ten,heavy", map[string]string{"price": "invalid_format", "stock": "invalid_format", "weight_kg": "invalid_format"}, "", "", ""},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			rows := &fakeRows{}
+
+			_, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(header+tt.row+"\n"), "products.csv")
+
+			require.NoError(t, err)
+			require.Len(t, rows.rows, 1)
+			row := rows.rows[0]
+			codes := map[string]string{}
+			for _, fe := range row.Format {
+				require.NotEmpty(t, fe.Message)
+				codes[fe.Field] = fe.Code
+			}
+			if tt.format == nil {
+				require.Empty(t, codes)
+			} else {
+				require.Equal(t, tt.format, codes)
+			}
+			text := func(d interface{ String() string }, missing bool) string {
+				if missing {
+					return ""
+				}
+				return d.String()
+			}
+			require.Equal(t, tt.price, text(row.Product.Price, row.Product.Price == nil))
+			require.Equal(t, tt.weight, text(row.Product.WeightKg, row.Product.WeightKg == nil))
+			if tt.stock == "" {
+				require.Nil(t, row.Product.Stock)
+			} else {
+				require.Equal(t, tt.stock, strconv.FormatInt(*row.Product.Stock, 10))
+			}
+			require.Equal(t, "N", row.Product.Name, "text fields are handed over as they came")
+			require.Equal(t, "S", row.Product.SKU)
+		})
+	}
 }
 
 func TestImporterReturnsTheUseCaseErrorWithItsPartialReport(t *testing.T) {

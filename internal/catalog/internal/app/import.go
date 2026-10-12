@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/shopspring/decimal"
-
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/validation"
 )
@@ -55,20 +53,12 @@ func (e *InvalidCSVError) Is(target error) bool {
 	return target == ErrInvalidCSV
 }
 
-type ImportFields struct {
-	Name        string
-	SKU         string
-	Description string
-	Category    string
-	Price       string
-	Stock       string
-	WeightKg    string
-}
-
 type ImportRow struct {
 	Line      int
-	Fields    ImportFields
+	Empty     bool
 	Malformed string
+	Product   domain.NewProductInput
+	Format    validation.Errors
 }
 
 type ImportFile struct {
@@ -158,7 +148,7 @@ func (i *Importer) validate(rows []ImportRow, report *ImportReport) []importRow 
 			})
 			continue
 		}
-		if row.Fields.blank() {
+		if row.Empty {
 			report.Skipped++
 			continue
 		}
@@ -246,54 +236,19 @@ func count(report *ImportReport, row importRow, outcome UpsertOutcome) {
 }
 
 func newImportRow(row ImportRow) importRow {
-	var format validation.Errors
-	f := row.Fields
-	product, err := domain.NewProduct(domain.NewProductInput{
-		Name: f.Name, SKU: f.SKU, Description: f.Description, Category: f.Category,
-		Price:    decimalCell(&format, "price", f.Price),
-		Stock:    wholeCell(&format, "stock", f.Stock),
-		WeightKg: decimalCell(&format, "weight_kg", f.WeightKg),
-	})
-	return importRow{line: row.Line, sku: domain.NormalizeSKU(f.SKU), product: product, errs: rowErrors(format, err)}
-}
-
-func decimalCell(errs *validation.Errors, field, raw string) *decimal.Decimal {
-	if strings.TrimSpace(raw) == "" {
-		return nil
+	product, err := domain.NewProduct(row.Product)
+	return importRow{
+		line:    row.Line,
+		sku:     domain.NormalizeSKU(row.Product.SKU),
+		product: product,
+		errs:    rowErrors(row.Format, err),
 	}
-	d, err := domain.ParseDecimal(raw)
-	if err != nil {
-		errs.Add(field, validation.CodeInvalidFormat, err.Error())
-		return nil
-	}
-	return &d
-}
-
-func wholeCell(errs *validation.Errors, field, raw string) *int64 {
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	n, err := domain.ParseWholeNumber(raw)
-	if err != nil {
-		errs.Add(field, domain.WholeNumberErrorCode(err), err.Error())
-		return nil
-	}
-	return &n
 }
 
 func rowErrors(format validation.Errors, domain error) validation.Errors {
 	var errs validation.Errors
 	errors.As(validation.Merge(format, domain), &errs)
 	return errs
-}
-
-func (f ImportFields) blank() bool {
-	for _, value := range []string{f.Name, f.SKU, f.Description, f.Category, f.Price, f.Stock, f.WeightKg} {
-		if strings.TrimSpace(value) != "" {
-			return false
-		}
-	}
-	return true
 }
 
 func otherLines(candidates []importRow, group []int, self int) string {

@@ -11,7 +11,11 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
+	"github.com/skolldire/shops/internal/platform/validation"
 )
 
 const maxFileNameLength = 255
@@ -62,13 +66,42 @@ func importRow(row Row) app.ImportRow {
 	f := row.Fields
 	switch {
 	case blank(f):
-		return app.ImportRow{Line: row.Line}
+		return app.ImportRow{Line: row.Line, Empty: true}
 	case len(f) != len(header):
 		return app.ImportRow{Line: row.Line, Malformed: fmt.Sprintf("must have %d fields, found %d", len(header), len(f))}
 	}
-	return app.ImportRow{Line: row.Line, Fields: app.ImportFields{
-		Name: f[0], SKU: f[1], Description: f[2], Category: f[3], Price: f[4], Stock: f[5], WeightKg: f[6],
-	}}
+	var format validation.Errors
+	product := domain.NewProductInput{
+		Name: f[0], SKU: f[1], Description: f[2], Category: f[3],
+		Price:    decimalCell(&format, "price", f[4]),
+		Stock:    wholeCell(&format, "stock", f[5]),
+		WeightKg: decimalCell(&format, "weight_kg", f[6]),
+	}
+	return app.ImportRow{Line: row.Line, Product: product, Format: format}
+}
+
+func decimalCell(errs *validation.Errors, field, raw string) *decimal.Decimal {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	d, err := domain.ParseDecimal(raw)
+	if err != nil {
+		errs.Add(field, validation.CodeInvalidFormat, err.Error())
+		return nil
+	}
+	return &d
+}
+
+func wholeCell(errs *validation.Errors, field, raw string) *int64 {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	n, err := domain.ParseWholeNumber(raw)
+	if err != nil {
+		errs.Add(field, domain.WholeNumberErrorCode(err), err.Error())
+		return nil
+	}
+	return &n
 }
 
 func blank(fields []string) bool {

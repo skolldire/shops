@@ -8,10 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
+	"github.com/skolldire/shops/internal/platform/validation"
 )
 
 const csvHeader = "name,sku,description,category,price,stock,weight_kg\n"
@@ -116,13 +118,34 @@ func rowOf(line int, f []string) app.ImportRow {
 	}
 	switch {
 	case blank:
-		return app.ImportRow{Line: line}
+		return app.ImportRow{Line: line, Empty: true}
 	case len(f) != 7:
 		return app.ImportRow{Line: line, Malformed: fmt.Sprintf("must have 7 fields, found %d", len(f))}
 	}
-	return app.ImportRow{Line: line, Fields: app.ImportFields{
-		Name: f[0], SKU: f[1], Description: f[2], Category: f[3], Price: f[4], Stock: f[5], WeightKg: f[6],
-	}}
+	row := app.ImportRow{Line: line, Product: domain.NewProductInput{Name: f[0], SKU: f[1], Description: f[2], Category: f[3]}}
+	row.Product.Price = decimalOf(&row.Format, "price", f[4])
+	row.Product.WeightKg = decimalOf(&row.Format, "weight_kg", f[6])
+	if stock := strings.TrimSpace(f[5]); stock != "" {
+		n, err := domain.ParseWholeNumber(stock)
+		if err != nil {
+			row.Format.Add("stock", domain.WholeNumberErrorCode(err), err.Error())
+		} else {
+			row.Product.Stock = &n
+		}
+	}
+	return row
+}
+
+func decimalOf(errs *validation.Errors, field, raw string) *decimal.Decimal {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	d, err := domain.ParseDecimal(raw)
+	if err != nil {
+		errs.Add(field, validation.CodeInvalidFormat, err.Error())
+		return nil
+	}
+	return &d
 }
 
 var productsFile = app.ImportFile{Name: "products.csv", Bytes: 8930, SHA256: "6fc46b84"}
