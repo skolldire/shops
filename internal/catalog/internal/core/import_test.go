@@ -103,9 +103,25 @@ func rowsOf(body string) []core.ImportRow {
 		if line == "" && len(lines) == 1 {
 			break
 		}
-		rows = append(rows, core.ImportRow{Line: i + 2, Fields: strings.Split(line, ",")})
+		rows = append(rows, rowOf(i+2, strings.Split(line, ",")))
 	}
 	return rows
+}
+
+func rowOf(line int, f []string) core.ImportRow {
+	blank := true
+	for _, value := range f {
+		blank = blank && strings.TrimSpace(value) == ""
+	}
+	switch {
+	case blank:
+		return core.ImportRow{Line: line}
+	case len(f) != 7:
+		return core.ImportRow{Line: line, Malformed: fmt.Sprintf("must have 7 fields, found %d", len(f))}
+	}
+	return core.ImportRow{Line: line, Fields: core.ImportFields{
+		Name: f[0], SKU: f[1], Description: f[2], Category: f[3], Price: f[4], Stock: f[5], WeightKg: f[6],
+	}}
 }
 
 var productsFile = core.ImportFile{Name: "products.csv", Bytes: 8930, SHA256: "6fc46b84"}

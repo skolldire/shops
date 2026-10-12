@@ -30,7 +30,6 @@ const (
 
 	rowField        = "row"
 	importBatchSize = 500
-	importColumns   = 7
 )
 
 var (
@@ -55,9 +54,20 @@ func (e *InvalidCSVError) Is(target error) bool {
 	return target == ErrInvalidCSV
 }
 
+type ImportFields struct {
+	Name        string
+	SKU         string
+	Description string
+	Category    string
+	Price       string
+	Stock       string
+	WeightKg    string
+}
+
 type ImportRow struct {
-	Line   int
-	Fields []string
+	Line      int
+	Fields    ImportFields
+	Malformed string
 }
 
 type ImportFile struct {
@@ -140,16 +150,15 @@ func (i *Importer) validate(rows []ImportRow, report *ImportReport) []importRow 
 	candidates := make([]importRow, 0, len(rows))
 	bySKU := map[string][]int{}
 	for _, row := range rows {
-		if isEmpty(row.Fields) {
-			report.Skipped++
-			continue
-		}
-		if len(row.Fields) != importColumns {
+		if row.Malformed != "" {
 			report.Rejected++
 			report.Errors = append(report.Errors, RowError{
-				Line: row.Line, Field: rowField, Code: CodeWrongFieldCount,
-				Message: fmt.Sprintf("must have %d fields, found %d", importColumns, len(row.Fields)),
+				Line: row.Line, Field: rowField, Code: CodeWrongFieldCount, Message: row.Malformed,
 			})
+			continue
+		}
+		if row.Fields.blank() {
+			report.Skipped++
 			continue
 		}
 		candidate := newImportRow(row)
@@ -239,12 +248,12 @@ func newImportRow(row ImportRow) importRow {
 	var format validation.Errors
 	f := row.Fields
 	product, err := NewProduct(NewProductInput{
-		Name: f[0], SKU: f[1], Description: f[2], Category: f[3],
-		Price:    decimalCell(&format, "price", f[4]),
-		Stock:    wholeCell(&format, "stock", f[5]),
-		WeightKg: decimalCell(&format, "weight_kg", f[6]),
+		Name: f.Name, SKU: f.SKU, Description: f.Description, Category: f.Category,
+		Price:    decimalCell(&format, "price", f.Price),
+		Stock:    wholeCell(&format, "stock", f.Stock),
+		WeightKg: decimalCell(&format, "weight_kg", f.WeightKg),
 	})
-	return importRow{line: row.Line, sku: NormalizeSKU(f[1]), product: product, errs: rowErrors(format, err)}
+	return importRow{line: row.Line, sku: NormalizeSKU(f.SKU), product: product, errs: rowErrors(format, err)}
 }
 
 func NormalizeSKU(raw string) string {
@@ -281,9 +290,9 @@ func rowErrors(format validation.Errors, domain error) validation.Errors {
 	return errs
 }
 
-func isEmpty(fields []string) bool {
-	for _, field := range fields {
-		if strings.TrimSpace(field) != "" {
+func (f ImportFields) blank() bool {
+	for _, value := range []string{f.Name, f.SKU, f.Description, f.Category, f.Price, f.Stock, f.WeightKg} {
+		if strings.TrimSpace(value) != "" {
 			return false
 		}
 	}

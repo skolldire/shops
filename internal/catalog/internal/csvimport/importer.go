@@ -48,7 +48,7 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (co
 	}
 	rows := make([]core.ImportRow, len(read))
 	for index, row := range read {
-		rows[index] = core.ImportRow{Line: row.Line, Fields: row.Fields}
+		rows[index] = importRow(row)
 	}
 	file := core.ImportFile{
 		Name:   cleanFileName(fileName),
@@ -56,6 +56,28 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (co
 		SHA256: hex.EncodeToString(metered.hash.Sum(nil)),
 	}
 	return i.rows.Import(ctx, file, rows)
+}
+
+func importRow(row Row) core.ImportRow {
+	f := row.Fields
+	switch {
+	case blank(f):
+		return core.ImportRow{Line: row.Line}
+	case len(f) != len(header):
+		return core.ImportRow{Line: row.Line, Malformed: fmt.Sprintf("must have %d fields, found %d", len(header), len(f))}
+	}
+	return core.ImportRow{Line: row.Line, Fields: core.ImportFields{
+		Name: f[0], SKU: f[1], Description: f[2], Category: f[3], Price: f[4], Stock: f[5], WeightKg: f[6],
+	}}
+}
+
+func blank(fields []string) bool {
+	for _, field := range fields {
+		if strings.TrimSpace(field) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func cleanFileName(raw string) string {

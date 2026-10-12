@@ -39,9 +39,9 @@ func newImporter(t *testing.T, rows *fakeRows, limits csvimport.Limits) *csvimpo
 var roomy = csvimport.Limits{MaxBytes: 1 << 20, MaxRows: 1000}
 
 func TestImporterHandsTheRowsAndTheFileToTheUseCase(t *testing.T) {
-	body := header + "Shoes,RS-1,\"Light,\nfast\",Sports,9.99,1,0.3\n,,,,,,\nMug,MG-1\n"
+	body := header + "Shoes,RS-1,\"Light,\nfast\",Sports,9.99,1,0.3\n,,,,,,\nMug,MG-1\n , \nA,B,C,D,E,F,G,H\n"
 	sum := sha256.Sum256([]byte(body))
-	want := core.ImportReport{Records: 3, Created: 1}
+	want := core.ImportReport{Records: 5, Created: 1}
 	rows := &fakeRows{report: want}
 
 	report, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(body), "products.csv")
@@ -50,10 +50,14 @@ func TestImporterHandsTheRowsAndTheFileToTheUseCase(t *testing.T) {
 	require.Equal(t, want, report, "the report of the use case is returned as it is")
 	require.Equal(t, core.ImportFile{Name: "products.csv", Bytes: int64(len(body)), SHA256: hex.EncodeToString(sum[:])}, rows.file)
 	require.Equal(t, []core.ImportRow{
-		{Line: 2, Fields: []string{"Shoes", "RS-1", "Light,\nfast", "Sports", "9.99", "1", "0.3"}},
-		{Line: 4, Fields: []string{"", "", "", "", "", "", ""}},
-		{Line: 5, Fields: []string{"Mug", "MG-1"}},
-	}, rows.rows)
+		{Line: 2, Fields: core.ImportFields{
+			Name: "Shoes", SKU: "RS-1", Description: "Light,\nfast", Category: "Sports", Price: "9.99", Stock: "1", WeightKg: "0.3",
+		}},
+		{Line: 4},
+		{Line: 5, Malformed: "must have 7 fields, found 2"},
+		{Line: 6},
+		{Line: 7, Malformed: "must have 7 fields, found 8"},
+	}, rows.rows, "columns are mapped by name, empty rows stay empty and other widths are flagged")
 }
 
 func TestImporterReturnsTheUseCaseErrorWithItsPartialReport(t *testing.T) {
