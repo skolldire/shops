@@ -80,7 +80,11 @@ func (ui *UI) listing(r *http.Request, path string) (listing, error) {
 		SortOptions: sortOptions,
 		Notice:      notices[values.Get("notice")],
 	}
-	query, err := catalog.ParseSearchQuery(values)
+	query, err := catalog.ParseSearchQuery(catalog.SearchParams{
+		Q: values.Get("q"), Category: values.Get("category"), MinPrice: values.Get("min_price"),
+		MaxPrice: values.Get("max_price"), InStock: values.Get("in_stock"), Sort: values.Get("sort"),
+		Page: values.Get("page"), PageSize: values.Get("page_size"),
+	})
 	var fieldErrs validation.Errors
 	if errors.As(err, &fieldErrs) {
 		data.Errors = make(map[string]string, len(fieldErrs))

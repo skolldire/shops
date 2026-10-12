@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -131,8 +130,8 @@ func ParseWholeNumber(raw string) (int64, error) {
 	return core.ParseWholeNumber(raw)
 }
 
-func ParseSearchQuery(values url.Values) (SearchQuery, error) {
-	s, err := httpquery.ParseSearch(values)
+func ParseSearchQuery(p SearchParams) (SearchQuery, error) {
+	s, err := httpquery.ParseParams(httpquery.Params(p))
 	if err != nil {
 		return SearchQuery{}, err
 	}

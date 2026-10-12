@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -192,7 +191,7 @@ func TestModuleSearch(t *testing.T) {
 }
 
 func TestParseSearchQuery(t *testing.T) {
-	q, err := ParseSearchQuery(url.Values{"q": {"50%"}, "sort": {"-created_at"}, "in_stock": {"true"}, "min_price": {"10"}})
+	q, err := ParseSearchQuery(SearchParams{Q: "50%", Sort: "-created_at", InStock: "true", MinPrice: "10"})
 
 	require.NoError(t, err)
 	require.Equal(t, "50%", q.Q)
@@ -202,7 +201,7 @@ func TestParseSearchQuery(t *testing.T) {
 	require.Equal(t, 1, q.Page)
 	require.Equal(t, 20, q.PageSize)
 
-	_, err = ParseSearchQuery(url.Values{"page": {"0"}})
+	_, err = ParseSearchQuery(SearchParams{Page: "0"})
 	var fieldErrs validation.Errors
 	require.ErrorAs(t, err, &fieldErrs)
 	require.Equal(t, "page", fieldErrs[0].Field)
