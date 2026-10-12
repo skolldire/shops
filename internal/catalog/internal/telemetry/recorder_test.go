@@ -40,6 +40,8 @@ func TestImportRecorderExposesRowsByOutcomeAndDuration(t *testing.T) {
 	require.Contains(t, body, `import_rows_total{outcome="rejected"} 13`)
 	require.Contains(t, body, `import_duration_seconds_count 1`)
 	require.Contains(t, body, `import_duration_seconds_sum 0.25`)
+	require.Contains(t, body, `import_duration_seconds_bucket{le="0.1"} 0`)
+	require.Contains(t, body, `import_duration_seconds_bucket{le="0.5"} 1`)
 }
 
 func TestNewImportRecorderRequiresMetrics(t *testing.T) {

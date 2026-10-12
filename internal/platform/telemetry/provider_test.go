@@ -56,6 +56,31 @@ func TestMetricsAreExposedInPrometheusFormat(t *testing.T) {
 	require.Contains(t, body, "go_goroutines")
 }
 
+func TestDurationHistogramsUseBucketsInSeconds(t *testing.T) {
+	p, _ := newTestProvider(t, nil)
+
+	for _, seconds := range []float64{0.02, 0.25, 0.25, 3, 42} {
+		p.Histogram(t.Context(), "import_duration_seconds", seconds)
+	}
+	p.Histogram(t.Context(), "queue_depth", 250)
+
+	body := scrape(t, p)
+	for _, want := range []string{
+		`import_duration_seconds_bucket{le="0.05"} 1`,
+		`import_duration_seconds_bucket{le="0.1"} 1`,
+		`import_duration_seconds_bucket{le="0.5"} 3`,
+		`import_duration_seconds_bucket{le="1"} 3`,
+		`import_duration_seconds_bucket{le="2"} 3`,
+		`import_duration_seconds_bucket{le="5"} 4`,
+		`import_duration_seconds_bucket{le="10"} 4`,
+		`import_duration_seconds_bucket{le="+Inf"} 5`,
+		`queue_depth_bucket{le="250"} 1`,
+	} {
+		require.Contains(t, body, want)
+	}
+	require.NotContains(t, body, `import_duration_seconds_bucket{le="250"}`)
+}
+
 func TestInvalidInstrumentIsLoggedNotPanicking(t *testing.T) {
 	p, logs := newTestProvider(t, nil)
 
