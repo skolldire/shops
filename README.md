@@ -320,7 +320,7 @@ Secret fields (the database password) must be a placeholder without a default, s
 | `TRACING_ENABLED` / `OTLP_ENDPOINT` / `OTLP_INSECURE` | `false` / empty / `false` |
 | `APP_VERSION` | `dev` |
 | `SEED_DEMO` | `true`. Imports the demo catalog at startup when there are no products |
-| `SEED_FILE` | `/etc/shop/seed/products.csv`, the official CSV shipped in the image. `config.local.yaml` uses `testdata/products.csv` |
+| `SEED_FILE` | `/etc/shop/seed.csv`, the official CSV shipped in the image. `config.local.yaml` uses `testdata/products.csv` |
 
 ## Observability
 

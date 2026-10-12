@@ -48,7 +48,7 @@ func TestShippedConfigDefaults(t *testing.T) {
 	require.Equal(t, "shops", cfg.Telemetry.ServiceName)
 	require.False(t, cfg.Telemetry.Tracing.Enabled)
 	require.True(t, cfg.Demo.Seed)
-	require.Equal(t, "/etc/shop/seed/products.csv", cfg.Demo.SeedFile)
+	require.Equal(t, "/etc/shop/seed.csv", cfg.Demo.SeedFile)
 }
 
 func TestShippedConfigOverrides(t *testing.T) {

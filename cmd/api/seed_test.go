@@ -29,8 +29,8 @@ func runSeed(t *testing.T, s *fakeSeeder) (string, error) {
 	var logs bytes.Buffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
-	err = seedDemo(t.Context(), log, s, "/etc/shop/seed/products.csv")
-	require.Equal(t, "/etc/shop/seed/products.csv", s.path)
+	err = seedDemo(t.Context(), log, s, "/etc/shop/seed.csv")
+	require.Equal(t, "/etc/shop/seed.csv", s.path)
 	return logs.String(), err
 }
 
