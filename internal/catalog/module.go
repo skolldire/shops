@@ -128,6 +128,10 @@ func ParseDecimal(raw string) (decimal.Decimal, error) {
 	return core.ParseDecimal(raw)
 }
 
+func ParseWholeNumber(raw string) (int64, error) {
+	return core.ParseWholeNumber(raw)
+}
+
 func ParseSearchQuery(values url.Values) (SearchQuery, error) {
 	s, err := core.ParseSearch(values)
 	if err != nil {

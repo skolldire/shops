@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -47,8 +46,6 @@ var (
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")
 	ErrTooManyRows   = errors.New("catalog: the csv has too many rows")
 	ErrFileTooLarge  = errors.New("catalog: the csv file is too large")
-
-	wholeNumber = regexp.MustCompile(`^-?[0-9]+$`)
 )
 
 type UpsertOutcome string
@@ -307,17 +304,12 @@ func decimalCell(errs *validation.Errors, field, raw string) *decimal.Decimal {
 }
 
 func wholeCell(errs *validation.Errors, field, raw string) *int64 {
-	s := strings.TrimSpace(raw)
-	switch {
-	case s == "":
-		return nil
-	case !wholeNumber.MatchString(s):
-		errs.Add(field, validation.CodeInvalidFormat, "must be a whole number such as 25")
+	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
-	n, err := strconv.ParseInt(s, 10, 32)
+	n, err := ParseWholeNumber(raw)
 	if err != nil {
-		errs.Add(field, validation.CodeOutOfRange, "must be between 0 and 2147483647")
+		errs.Add(field, WholeNumberErrorCode(err), err.Error())
 		return nil
 	}
 	return &n

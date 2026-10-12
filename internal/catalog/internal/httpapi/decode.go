@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/shopspring/decimal"
 
@@ -120,14 +119,9 @@ func intField(errs *validation.Errors, field string, raw json.RawMessage) *int64
 	if raw == nil {
 		return nil
 	}
-	n, err := strconv.ParseInt(string(raw), 10, 32)
-	var numErr *strconv.NumError
-	switch {
-	case errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange):
-		errs.Add(field, validation.CodeOutOfRange, "must be between 0 and 2147483647")
-		return nil
-	case err != nil:
-		errs.Add(field, validation.CodeInvalidFormat, "must be an integer")
+	n, err := core.ParseWholeNumber(string(raw))
+	if err != nil {
+		errs.Add(field, core.WholeNumberErrorCode(err), err.Error())
 		return nil
 	}
 	return &n

@@ -312,6 +312,34 @@ func TestStockOverflowIsOutOfRange(t *testing.T) {
 	require.EqualValues(t, 2147483647, *svc.created.Stock)
 }
 
+func TestStockFollowsTheSharedWholeNumberRule(t *testing.T) {
+	tests := map[string]struct {
+		stock   string
+		code    string
+		message string
+	}{
+		"decimal":      {`1.0`, "invalid_format", "must be a whole number such as 25"},
+		"exponent":     {`1e3`, "invalid_format", "must be a whole number such as 25"},
+		"string":       {`"5"`, "invalid_format", "must be a whole number such as 25"},
+		"null":         {`null`, "invalid_format", "must be a whole number such as 25"},
+		"beyond int32": {`2147483648`, "out_of_range", "must be between -2147483648 and 2147483647"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			svc := &fakeService{}
+			h, _ := newServer(t, svc)
+
+			rec := do(h, http.MethodPost, "/api/v1/products", `{"sku":"a","name":"n","category":"c","price":1,"weight_kg":0,"stock":`+tt.stock+`}`)
+
+			require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+			p := decodeProblem(t, rec)
+			require.Equal(t, map[string]string{"stock": tt.code}, fieldCodes(p))
+			require.Equal(t, tt.message, p.Errors[0].Message)
+			require.Zero(t, svc.creates)
+		})
+	}
+}
+
 func TestPatchPassesSKUToTheDomain(t *testing.T) {
 	svc := &fakeService{err: fieldErr("sku", "immutable")}
 	h, _ := newServer(t, svc)

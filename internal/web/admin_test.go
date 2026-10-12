@@ -102,10 +102,39 @@ func TestCreateProductFormatErrorsStayNextToTheirFields(t *testing.T) {
 	body := rec.Body.String()
 	require.Contains(t, fieldBlock(body, "price"), "must be a plain decimal number such as 29.99")
 	require.Contains(t, fieldBlock(body, "price"), `value="cheap"`)
-	require.Contains(t, fieldBlock(body, "stock"), "must be between 0 and 2147483647")
+	require.Contains(t, fieldBlock(body, "stock"), "must be between -2147483648 and 2147483647")
 	require.Contains(t, fieldBlock(body, "weight_kg"), "must be a plain decimal number such as 29.99")
 	require.NotContains(t, fieldBlock(body, "name"), "field-error")
 	require.Empty(t, cat.created.SKU, "invalid forms must not reach the catalog")
+}
+
+func TestCreateProductStockFollowsTheSharedWholeNumberRule(t *testing.T) {
+	tests := map[string]string{
+		"+5":         "must be a whole number such as 25",
+		"1.0":        "must be a whole number such as 25",
+		"1e3":        "must be a whole number such as 25",
+		"ten":        "must be a whole number such as 25",
+		"2147483648": "must be between -2147483648 and 2147483647",
+		"-5":         "must be between 0 and 2147483647",
+	}
+	for stock, message := range tests {
+		t.Run(stock, func(t *testing.T) {
+			cat := withProducts()
+			if stock == "-5" {
+				var errs validation.Errors
+				errs.Add("stock", validation.CodeOutOfRange, message)
+				cat.writeErr = errs.Err()
+			}
+			h, _ := newTestUI(t, cat)
+			form := validForm()
+			form.Set("stock", stock)
+
+			rec := post(h, "/admin/products", form)
+
+			require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+			require.Contains(t, fieldBlock(rec.Body.String(), "stock"), message)
+		})
+	}
 }
 
 func TestCreateProductRejectsExponents(t *testing.T) {
