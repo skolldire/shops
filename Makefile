@@ -36,7 +36,11 @@ lint-comments:
 	@! grep -rn '<!--' --include='*.html' internal || { echo "HTML comments are not allowed"; exit 1; }
 	@! grep -rn '/[*]' --include='*.css' internal || { echo "CSS comments are not allowed"; exit 1; }
 
+CORE_IMPORTS := cmp|context|errors|fmt|regexp|slices|strconv|strings|time|unicode/utf8|github.com/shopspring/decimal|github.com/skolldire/shops/internal/platform/validation
+
 lint-arch:
+	@imports="$$($(GO) list -f '{{join .Imports "\n"}}' ./internal/catalog/internal/core)" || { echo "go list failed for catalog core"; exit 1; }; \
+	! printf '%s\n' "$$imports" | grep -vE '^($(CORE_IMPORTS))$$' || { echo "catalog core may only import the packages in CORE_IMPORTS: no adapters, file formats, logging, transport or persistence"; exit 1; }
 	@deps="$$($(GO) list -deps ./internal/catalog/internal/core)" || { echo "go list failed for catalog core"; exit 1; }; \
 	! printf '%s\n' "$$deps" | grep -E '^(github.com/jackc/pgx|net/http$$|net/url$$|database/sql$$|github.com/go-chi|go.opentelemetry.io|github.com/skolldire/shops/internal/platform/(httpx|telemetry|database))' || { echo "catalog core must not depend on transport, persistence or telemetry"; exit 1; }
 	@deps="$$($(GO) list -deps ./internal/platform/...)" || { echo "go list failed for platform"; exit 1; }; \
