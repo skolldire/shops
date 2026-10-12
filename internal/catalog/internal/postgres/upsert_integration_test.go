@@ -126,6 +126,40 @@ func TestUpsert(t *testing.T) {
 		require.Equal(t, map[string]core.UpsertOutcome{"GONE-1": core.OutcomeDeleted}, only)
 	})
 
+	t.Run("a product deleted while the upsert waits for it is reported as deleted", func(t *testing.T) {
+		f.reset(t)
+		racing := f.create(t, "RACE-1", "Race", "Imports", "1.00", 1)
+		deletion, err := f.pool.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = deletion.Rollback(context.Background()) })
+		_, err = deletion.Exec(ctx, `UPDATE products SET status = 'DELETED', deleted_at = now() WHERE id = $1::uuid`, racing.ID)
+		require.NoError(t, err)
+
+		type result struct {
+			outcomes map[string]core.UpsertOutcome
+			err      error
+		}
+		done := make(chan result, 1)
+		go func() {
+			outcomes, err := f.repo.Upsert(ctx, []core.Product{item("RACE-1", "Race again", "9.00", 9), item("RACE-2", "Other", "1.00", 1)})
+			done <- result{outcomes, err}
+		}()
+		require.Eventually(t, func() bool {
+			var waiting int
+			err := f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+				WHERE wait_event_type = 'Lock' AND query LIKE '%INSERT INTO products%' AND pid <> pg_backend_pid()`).Scan(&waiting)
+			return err == nil && waiting == 1
+		}, 10*time.Second, 20*time.Millisecond, "the upsert never waited for the row being deleted")
+		require.NoError(t, deletion.Commit(ctx))
+
+		got := <-done
+		require.NoError(t, got.err)
+		require.Equal(t, map[string]core.UpsertOutcome{"RACE-1": core.OutcomeDeleted, "RACE-2": core.OutcomeCreated}, got.outcomes)
+		after := f.stored(t, "RACE-1")
+		require.Equal(t, "DELETED", after.Status)
+		require.Equal(t, "Race", after.Name)
+	})
+
 	t.Run("an empty batch does nothing", func(t *testing.T) {
 		f.reset(t)
 		outcomes, err := f.repo.Upsert(ctx, nil)

@@ -31,6 +31,8 @@ WHERE products.status = 'ACTIVE'
       (EXCLUDED.name, EXCLUDED.description, EXCLUDED.category, EXCLUDED.price, EXCLUDED.stock, EXCLUDED.weight_kg)
 RETURNING sku, (xmax = 0)`
 
+const deletedSKUs = `SELECT sku FROM products WHERE sku = ANY($1) AND status = 'DELETED'`
+
 func (r *Repository) Upsert(ctx context.Context, products []core.Product) (map[string]core.UpsertOutcome, error) {
 	outcomes := make(map[string]core.UpsertOutcome, len(products))
 	if len(products) == 0 {
@@ -44,12 +46,8 @@ func (r *Repository) Upsert(ctx context.Context, products []core.Product) (map[s
 		for i, p := range products {
 			skus[i] = p.SKU
 		}
-		deleted, err := collect(q.Query(ctx, `SELECT sku FROM products WHERE sku = ANY($1) AND status = 'DELETED'`, skus))
-		if err != nil {
-			return fmt.Errorf("catalog: find deleted skus: %w", err)
-		}
-		for _, sku := range deleted {
-			outcomes[sku] = core.OutcomeDeleted
+		if err := markDeleted(ctx, q, skus, outcomes); err != nil {
+			return err
 		}
 
 		var in upsertInput
@@ -83,12 +81,33 @@ func (r *Repository) Upsert(ctx context.Context, products []core.Product) (map[s
 		if err != nil {
 			return fmt.Errorf("catalog: upsert products: %w", err)
 		}
-		return nil
+
+		var untouched []string
+		for _, sku := range in.skus {
+			if outcomes[sku] == core.OutcomeUnchanged {
+				untouched = append(untouched, sku)
+			}
+		}
+		return markDeleted(ctx, q, untouched, outcomes)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return outcomes, nil
+}
+
+func markDeleted(ctx context.Context, q database.Querier, skus []string, outcomes map[string]core.UpsertOutcome) error {
+	if len(skus) == 0 {
+		return nil
+	}
+	deleted, err := collect(q.Query(ctx, deletedSKUs, skus))
+	if err != nil {
+		return fmt.Errorf("catalog: find deleted skus: %w", err)
+	}
+	for _, sku := range deleted {
+		outcomes[sku] = core.OutcomeDeleted
+	}
+	return nil
 }
 
 func (r *Repository) HasProducts(ctx context.Context) (bool, error) {
