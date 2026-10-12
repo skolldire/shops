@@ -18,6 +18,7 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/importlog"
 	"github.com/skolldire/shops/internal/catalog/internal/metrics"
 	"github.com/skolldire/shops/internal/catalog/internal/postgres"
+	"github.com/skolldire/shops/internal/catalog/internal/tracing"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
 )
@@ -26,6 +27,7 @@ type Deps struct {
 	Pool    *pgxpool.Pool
 	Log     logger.Service
 	Metrics telemetry.Metrics
+	Tracer  telemetry.Tracer
 	Import  ImportLimits
 }
 
@@ -78,11 +80,19 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	files, err := csvimport.NewImporter(rows, csvimport.Limits{MaxBytes: d.Import.MaxBytes, MaxRows: d.Import.MaxRows})
+	tracedRows, err := tracing.NewRowImporter(rows, d.Tracer)
 	if err != nil {
 		return nil, err
 	}
-	importer, err := metrics.NewTimedImporter(files, d.Metrics)
+	files, err := csvimport.NewImporter(tracedRows, csvimport.Limits{MaxBytes: d.Import.MaxBytes, MaxRows: d.Import.MaxRows})
+	if err != nil {
+		return nil, err
+	}
+	tracedFiles, err := tracing.NewFileImporter(files, d.Tracer, csvimport.IsRejection)
+	if err != nil {
+		return nil, err
+	}
+	importer, err := metrics.NewTimedImporter(tracedFiles, d.Metrics)
 	if err != nil {
 		return nil, err
 	}

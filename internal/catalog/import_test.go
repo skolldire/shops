@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,8 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
+	"github.com/skolldire/shops/internal/platform/logger"
 )
 
 const importHeader = "name,sku,description,category,price,stock,weight_kg\n"
@@ -149,4 +152,38 @@ func TestModuleRegistersImportRoutes(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "invalid_request")
+}
+
+type spanRecorder struct {
+	names []string
+	open  []string
+	paths []string
+}
+
+func (r *spanRecorder) Span(ctx context.Context, name string, fn func(ctx context.Context) error, _ ...attribute.KeyValue) error {
+	r.names = append(r.names, name)
+	r.open = append(r.open, name)
+	r.paths = append(r.paths, strings.Join(r.open, " > "))
+	err := fn(ctx)
+	r.open = r.open[:len(r.open)-1]
+	return err
+}
+
+func TestModuleImportIsTracedAsOneSpanWithTheRowsInside(t *testing.T) {
+	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
+	require.NoError(t, err)
+	spans := &spanRecorder{}
+	deps := testDeps(log)
+	deps.Tracer = spans
+	m, err := newModule(&memoryRepo{products: map[string]domain.Product{}}, deps)
+	require.NoError(t, err)
+
+	_, err = m.Import(context.Background(), strings.NewReader(importHeader+"Shoes,RS-1,,Sports,9.99,1,0.3\n"), ImportOptions{FileName: "products.csv"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"catalog.import", "catalog.import > catalog.import.apply"}, spans.paths)
+
+	spans.paths = nil
+	_, err = m.Import(context.Background(), strings.NewReader("sku,name\n"), ImportOptions{})
+	require.ErrorIs(t, err, ErrInvalidHeader)
+	require.Equal(t, []string{"catalog.import"}, spans.paths, "a rejected file never reaches the use case")
 }

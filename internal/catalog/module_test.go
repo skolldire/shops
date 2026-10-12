@@ -86,7 +86,7 @@ func (m *memoryRepo) Categories(context.Context) ([]string, error) {
 }
 
 func testDeps(log logger.Service) Deps {
-	return Deps{Log: log, Metrics: telemetry.Noop(), Import: ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}}
+	return Deps{Log: log, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(), Import: ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}}
 }
 
 func (m *memoryRepo) Upsert(ctx context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
@@ -229,6 +229,7 @@ func TestNewModuleRequiresDependencies(t *testing.T) {
 	for name, mutate := range map[string]func(*Deps){
 		"logger":  func(d *Deps) { d.Log = nil },
 		"metrics": func(d *Deps) { d.Metrics = nil },
+		"tracer":  func(d *Deps) { d.Tracer = nil },
 		"limits":  func(d *Deps) { d.Import = ImportLimits{} },
 	} {
 		deps := testDeps(log)
