@@ -43,7 +43,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	if err != nil {
 		return nil, err
 	}
-	ui, err := web.New(web.Deps{Catalog: products, Log: log, Import: limits})
+	ui, err := web.New(web.Deps{Catalog: products, Log: log, MaxImportBytes: limits.MaxBytes})
 	if err != nil {
 		return nil, err
 	}

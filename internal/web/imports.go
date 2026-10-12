@@ -14,23 +14,17 @@ const (
 	importField            = "file"
 	maxShownImportErrors   = 200
 	multipartOverheadBytes = 64 << 10
-	megabyte               = 1 << 20
 )
 
 type importPage struct {
-	Limits  string
 	Problem string
 	Report  *catalog.ImportReport
 	Errors  []catalog.RowError
 	More    int
 }
 
-func (ui *UI) importPage() importPage {
-	return importPage{Limits: fmt.Sprintf("up to %d MB and %d rows", ui.importLimits.MaxBytes/megabyte, ui.importLimits.MaxRows)}
-}
-
 func (ui *UI) importForm(w http.ResponseWriter, r *http.Request) {
-	ui.page(w, r, http.StatusOK, "admin_import", ui.importPage())
+	ui.page(w, r, http.StatusOK, "admin_import", importPage{})
 }
 
 func (ui *UI) importFile(w http.ResponseWriter, r *http.Request) {
@@ -57,9 +51,7 @@ func (ui *UI) importFile(w http.ResponseWriter, r *http.Request) {
 			ui.importFailed(w, r, err)
 			return
 		}
-		data := ui.importPage()
-		data.Report = &report
-		data.Errors = report.Errors
+		data := importPage{Report: &report, Errors: report.Errors}
 		if len(data.Errors) > maxShownImportErrors {
 			data.Errors = data.Errors[:maxShownImportErrors]
 			data.More = len(report.Errors) - maxShownImportErrors
@@ -89,7 +81,5 @@ func (ui *UI) importFailed(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (ui *UI) importProblem(w http.ResponseWriter, r *http.Request, status int, message string) {
-	data := ui.importPage()
-	data.Problem = message
-	ui.page(w, r, status, "admin_import", data)
+	ui.page(w, r, status, "admin_import", importPage{Problem: message})
 }
