@@ -134,6 +134,8 @@ A product:
 
 Every decimal the app reads (`price`, `weight_kg`, `min_price`, `max_price`, in the API and in the web forms) must be a plain decimal number such as `29.99`: an optional `-`, 1 to 13 integer digits and, optionally, a `.` followed by 1 to 6 decimals. Surrounding spaces are ignored. Exponents (`1e3`, `2.5E-1`), a leading `+`, `.5`, `5.`, thousands separators, `NaN` and `Infinity` are rejected with `invalid_format`. This also applies to JSON numbers, so `"price": 2.999e1` is rejected even though it is valid JSON.
 
+Whole numbers follow the same idea. `stock`, `page` and `page_size` must be a plain whole number such as `25`: an optional `-` followed by digits, with surrounding spaces ignored. A leading `+`, decimals (`1.0`), exponents (`1e3`) and separators are rejected with `invalid_format`, and a value that does not fit in 32 bits is rejected with `out_of_range`. The API, the web forms and the CSV import share this rule, so the same input gets the same answer everywhere.
+
 ### Rules
 
 | Field | Rule |
