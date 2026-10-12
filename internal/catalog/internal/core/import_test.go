@@ -28,14 +28,21 @@ type fakeStore struct {
 	failSKU   map[string]bool
 	batches   [][]string
 	has       bool
+	onBatch   func(applied int)
 }
 
-func (f *fakeStore) Upsert(_ context.Context, products []core.Product) (map[string]core.UpsertOutcome, error) {
+func (f *fakeStore) Upsert(ctx context.Context, products []core.Product) (map[string]core.UpsertOutcome, error) {
 	skus := make([]string, len(products))
 	for i, p := range products {
 		skus[i] = p.SKU
 	}
 	f.batches = append(f.batches, skus)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if f.onBatch != nil {
+		defer f.onBatch(len(f.batches))
+	}
 	if f.failBatch && len(products) > 1 {
 		return nil, errors.New("batch exploded: host=10.0.0.5")
 	}
@@ -333,6 +340,36 @@ func TestImportStopsWhenTheContextIsCancelled(t *testing.T) {
 
 	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, store.batches, 1)
+}
+
+func TestImportInterruptedKeepsTheCountsOfTheAppliedBatches(t *testing.T) {
+	var body strings.Builder
+	body.WriteString(csvHeader)
+	for i := 1; i <= 1200; i++ {
+		fmt.Fprintf(&body, "Item,SKU-%04d,,A,5,1,1\n", i)
+	}
+	body.WriteString("Bad,BAD-1,,A,free,1,1\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &fakeStore{onBatch: func(applied int) {
+		if applied == 2 {
+			cancel()
+		}
+	}}
+	rec := &fakeRecorder{}
+	importer, _ := newImporter(t, store, rec, core.ImportLimits{MaxBytes: 1 << 20, MaxRows: 2000})
+
+	report, err := importer.Import(ctx, strings.NewReader(body.String()), "big.csv")
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, store.batches, 3)
+	require.Equal(t, 1000, report.Created, "the two committed batches are still reported")
+	require.Equal(t, 1201, report.Records)
+	require.Equal(t, 1, report.Rejected)
+	require.Equal(t, []string{"1202 BAD-1 price invalid_format"}, codes(report))
+	require.Equal(t, "big.csv", report.File.Name)
+	require.Len(t, report.File.SHA256, 64)
+	require.Equal(t, 1000, rec.rows["created"])
+	require.Equal(t, 1, rec.durations)
 }
 
 func TestImportRejectsTheWholeFile(t *testing.T) {

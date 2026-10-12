@@ -86,10 +86,13 @@ func (m *Module) RegisterImportRoutes(r chi.Router) {
 
 func (m *Module) Import(ctx context.Context, r io.Reader, opts ImportOptions) (ImportReport, error) {
 	report, err := m.importer.Import(ctx, r, core.CleanFileName(opts.FileName))
-	if err != nil {
+	switch {
+	case err == nil:
+		return fromReport(report), nil
+	case report.Errors == nil:
 		return ImportReport{}, publicImportError(err)
 	}
-	return fromReport(report), nil
+	return fromReport(report), err
 }
 
 func (m *Module) Seed(ctx context.Context, path string) (ImportReport, bool, error) {

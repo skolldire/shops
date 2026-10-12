@@ -42,6 +42,21 @@ func TestModuleImportCleansTheFileName(t *testing.T) {
 	require.Equal(t, "products.csv", report.File.Name)
 }
 
+func TestModuleImportInterruptedReturnsTheReportWithTheError(t *testing.T) {
+	m, repo := newTestModule(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	body := importHeader + "Shoes,RS-1,,Sports,9.99,1,0.3\nMug,MG-1,,Home,free,0,0\n"
+
+	report, err := m.Import(ctx, strings.NewReader(body), ImportOptions{FileName: "products.csv"})
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, "products.csv", report.File.Name)
+	require.Equal(t, []int{2, 0, 1}, []int{report.Records, report.Created, report.Rejected})
+	require.Len(t, report.Errors, 1)
+	require.Empty(t, repo.products)
+}
+
 func TestModuleImportErrorsArePublic(t *testing.T) {
 	m, repo := newTestModule(t)
 	tests := map[string]struct {
@@ -55,9 +70,10 @@ func TestModuleImportErrorsArePublic(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := m.Import(context.Background(), strings.NewReader(tt.body), ImportOptions{})
+			report, err := m.Import(context.Background(), strings.NewReader(tt.body), ImportOptions{})
 
 			require.ErrorIs(t, err, tt.target)
+			require.Equal(t, ImportReport{}, report, "a file rejected as a whole has no report")
 			require.Empty(t, repo.products)
 		})
 	}

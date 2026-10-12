@@ -139,9 +139,10 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (Im
 	}
 	valid := i.validate(rows, &report)
 	slices.SortFunc(valid, func(a, b importRow) int { return cmp.Compare(a.sku, b.sku) })
+	var interrupted error
 	for batch := range slices.Chunk(valid, importBatchSize) {
-		if err := i.apply(ctx, batch, &report); err != nil {
-			return ImportReport{}, err
+		if interrupted = i.apply(ctx, batch, &report); interrupted != nil {
+			break
 		}
 	}
 	slices.SortFunc(report.Errors, func(a, b RowError) int {
@@ -158,7 +159,7 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (Im
 		i.rec.RecordRows(ctx, outcome, n)
 	}
 	i.rec.RecordDuration(ctx, time.Since(start))
-	return report, nil
+	return report, interrupted
 }
 
 func (i *Importer) validate(rows []csvimport.Row, report *ImportReport) []importRow {

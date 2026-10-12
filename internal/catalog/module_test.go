@@ -89,7 +89,10 @@ func testDeps(log logger.Service) Deps {
 	return Deps{Log: log, Metrics: telemetry.Noop(), Import: ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}}
 }
 
-func (m *memoryRepo) Upsert(_ context.Context, products []core.Product) (map[string]core.UpsertOutcome, error) {
+func (m *memoryRepo) Upsert(ctx context.Context, products []core.Product) (map[string]core.UpsertOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	out := make(map[string]core.UpsertOutcome, len(products))
 	for _, p := range products {
 		out[p.SKU] = core.OutcomeCreated
