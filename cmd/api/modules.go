@@ -43,7 +43,8 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	if err != nil {
 		return nil, err
 	}
-	ui, err := web.New(web.Deps{Catalog: products, Log: log, MaxImportBytes: limits.MaxBytes})
+	importBodyBytes := cfg.Import.MaxBytes + multipartOverheadBytes
+	ui, err := web.New(web.Deps{Catalog: products, Log: log, MaxImportBodyBytes: importBodyBytes})
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +60,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 			products.RegisterRoutes(r)
 		})
 		api.Group(func(r chi.Router) {
-			r.Use(httpx.MaxBodyBytes(cfg.Import.MaxBytes + multipartOverheadBytes))
+			r.Use(httpx.MaxBodyBytes(importBodyBytes))
 			products.RegisterImportRoutes(r)
 		})
 	})

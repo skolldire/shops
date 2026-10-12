@@ -10,10 +10,9 @@ import (
 )
 
 const (
-	adminImports           = "/admin/imports"
-	importField            = "file"
-	maxShownImportErrors   = 200
-	multipartOverheadBytes = 64 << 10
+	adminImports         = "/admin/imports"
+	importField          = "file"
+	maxShownImportErrors = 200
 )
 
 type importPage struct {

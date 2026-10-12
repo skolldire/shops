@@ -48,7 +48,7 @@ func (f *fakeCatalog) Import(_ context.Context, r io.Reader, opts catalog.Import
 	return f.report, f.importErr
 }
 
-const testMaxImportBytes = 4096
+const testMaxImportBodyBytes = 8192
 
 func (f *fakeCatalog) Search(_ context.Context, q catalog.SearchQuery) (catalog.Page, error) {
 	f.query, f.searched = q, true
@@ -110,7 +110,7 @@ func newTestUI(t *testing.T, cat *fakeCatalog) (http.Handler, *bytes.Buffer) {
 	if cat.products == nil {
 		cat.products = map[string]catalog.Product{}
 	}
-	ui, err := New(Deps{Catalog: cat, Log: log, MaxImportBytes: testMaxImportBytes})
+	ui, err := New(Deps{Catalog: cat, Log: log, MaxImportBodyBytes: testMaxImportBodyBytes})
 	require.NoError(t, err)
 	return ui.Routes(), logs
 }
@@ -197,7 +197,7 @@ func TestPanicsRenderAnHTMLErrorPage(t *testing.T) {
 	var logs bytes.Buffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
-	ui, err := New(Deps{Catalog: cat, Log: log, MaxImportBytes: testMaxImportBytes})
+	ui, err := New(Deps{Catalog: cat, Log: log, MaxImportBodyBytes: testMaxImportBodyBytes})
 	require.NoError(t, err)
 	h := securityHeaders(ui.recoverHTML(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })))
 
@@ -218,5 +218,5 @@ func TestNewRequiresDependencies(t *testing.T) {
 	log, logErr := logger.New(logger.Config{Level: "info"}, io.Discard)
 	require.NoError(t, logErr)
 	_, err = New(Deps{Catalog: &fakeCatalog{}, Log: log})
-	require.EqualError(t, err, "web: import size limit is required")
+	require.EqualError(t, err, "web: import body limit is required")
 }

@@ -35,17 +35,17 @@ type Catalog interface {
 }
 
 type Deps struct {
-	Catalog        Catalog
-	Log            logger.Service
-	MaxImportBytes int64
+	Catalog            Catalog
+	Log                logger.Service
+	MaxImportBodyBytes int64
 }
 
 type UI struct {
-	catalog        Catalog
-	log            logger.Service
-	maxImportBytes int64
-	views          *renderer
-	static         http.Handler
+	catalog            Catalog
+	log                logger.Service
+	maxImportBodyBytes int64
+	views              *renderer
+	static             http.Handler
 }
 
 func New(d Deps) (*UI, error) {
@@ -55,8 +55,8 @@ func New(d Deps) (*UI, error) {
 	if d.Log == nil {
 		return nil, errors.New("web: logger is required")
 	}
-	if d.MaxImportBytes <= 0 {
-		return nil, errors.New("web: import size limit is required")
+	if d.MaxImportBodyBytes <= 0 {
+		return nil, errors.New("web: import body limit is required")
 	}
 	views, err := newRenderer()
 	if err != nil {
@@ -66,7 +66,7 @@ func New(d Deps) (*UI, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &UI{catalog: d.Catalog, log: d.Log, maxImportBytes: d.MaxImportBytes, views: views, static: static}, nil
+	return &UI{catalog: d.Catalog, log: d.Log, maxImportBodyBytes: d.MaxImportBodyBytes, views: views, static: static}, nil
 }
 
 func (ui *UI) Routes() http.Handler {
@@ -90,7 +90,7 @@ func (ui *UI) Routes() http.Handler {
 		})
 	})
 	r.Group(func(r chi.Router) {
-		r.Use(httpx.MaxBodyBytes(ui.maxImportBytes + multipartOverheadBytes))
+		r.Use(httpx.MaxBodyBytes(ui.maxImportBodyBytes))
 		r.Get(adminImports, ui.importForm)
 		r.Post(adminImports, ui.importFile)
 	})

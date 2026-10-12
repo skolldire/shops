@@ -45,7 +45,7 @@ func TestImportFormIsAPlainMultipartForm(t *testing.T) {
 	require.Contains(t, body, "name,sku,description,category,price,stock,weight_kg")
 	require.NotContains(t, body, "import-report")
 	require.NotContains(t, body, "hx-")
-	require.NotContains(t, body, "4096", "configured limits are not rendered")
+	require.NotContains(t, body, "8192", "configured limits are not rendered")
 }
 
 func TestImportShowsTheSummaryAndTheRejectedRows(t *testing.T) {
@@ -180,7 +180,7 @@ func TestImportHasItsOwnBodyLimit(t *testing.T) {
 	cat := &fakeCatalog{report: catalog.ImportReport{Records: 1, Created: 1}}
 	h, _ := newTestUI(t, cat)
 
-	rec := uploadCSV(t, h, "file", "products.csv", strings.Repeat("x", testMaxImportBytes+multipartOverheadBytes+1))
+	rec := uploadCSV(t, h, "file", "products.csv", strings.Repeat("x", testMaxImportBodyBytes+1))
 
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 	require.Contains(t, rec.Body.String(), "The file is larger than the import limit. Nothing was imported.")
@@ -194,7 +194,7 @@ func TestImportHasItsOwnBodyLimit(t *testing.T) {
 func TestImportAcceptsUploadsLargerThanOtherForms(t *testing.T) {
 	cat := &fakeCatalog{report: catalog.ImportReport{Records: 1, Created: 1}}
 	log, _ := newTestLogger(t)
-	ui, err := New(Deps{Catalog: cat, Log: log, MaxImportBytes: 4 << 20})
+	ui, err := New(Deps{Catalog: cat, Log: log, MaxImportBodyBytes: 4 << 20})
 	require.NoError(t, err)
 
 	rec := uploadCSV(t, ui.Routes(), "file", "products.csv", strings.Repeat("x", 2*maxFormBytes))
