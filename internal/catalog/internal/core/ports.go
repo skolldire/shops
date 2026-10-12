@@ -1,9 +1,6 @@
 package core
 
-import (
-	"context"
-	"time"
-)
+import "context"
 
 type ProductUpserter interface {
 	Upsert(ctx context.Context, products []Product) (map[string]UpsertOutcome, error)
@@ -16,7 +13,6 @@ type ImportFailureReporter interface {
 
 type ImportRecorder interface {
 	RecordRows(ctx context.Context, outcome string, n int)
-	RecordDuration(ctx context.Context, d time.Duration)
 }
 
 type Repository interface {

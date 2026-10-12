@@ -42,7 +42,7 @@ type store interface {
 
 type Module struct {
 	svc      *core.Service
-	importer *csvimport.Importer
+	importer *metrics.TimedImporter
 	seed     seedGuard
 	http     *httpapi.Handler
 	imports  *httpapi.ImportHandler
@@ -77,7 +77,11 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	importer, err := csvimport.NewImporter(rows, csvimport.Limits{MaxBytes: d.Import.MaxBytes, MaxRows: d.Import.MaxRows})
+	files, err := csvimport.NewImporter(rows, csvimport.Limits{MaxBytes: d.Import.MaxBytes, MaxRows: d.Import.MaxRows})
+	if err != nil {
+		return nil, err
+	}
+	importer, err := metrics.NewTimedImporter(files, d.Metrics)
 	if err != nil {
 		return nil, err
 	}

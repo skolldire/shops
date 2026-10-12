@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -66,8 +65,7 @@ func (f *fakeStore) Upsert(ctx context.Context, products []core.Product) (map[st
 }
 
 type fakeRecorder struct {
-	rows      map[string]int
-	durations int
+	rows map[string]int
 }
 
 func (f *fakeRecorder) RecordRows(_ context.Context, outcome string, n int) {
@@ -76,8 +74,6 @@ func (f *fakeRecorder) RecordRows(_ context.Context, outcome string, n int) {
 	}
 	f.rows[outcome] += n
 }
-
-func (f *fakeRecorder) RecordDuration(context.Context, time.Duration) { f.durations++ }
 
 type fakeFailures struct {
 	batches []string
@@ -285,7 +281,6 @@ func TestImportCountsEveryOutcome(t *testing.T) {
 	require.Equal(t, report.Records, report.Skipped+report.Created+report.Updated+report.Unchanged+report.Rejected)
 	require.Equal(t, []string{"5 GONE-1 sku sku_deleted", "7 BAD-1 price invalid_format"}, codes(report))
 	require.Equal(t, map[string]int{"created": 1, "updated": 1, "unchanged": 1, "skipped": 1, "rejected": 2}, rec.rows)
-	require.Equal(t, 1, rec.durations)
 }
 
 func TestImportRecordsEveryOutcomeEvenWhenItIsZero(t *testing.T) {
@@ -390,7 +385,6 @@ func TestImportInterruptedKeepsTheCountsOfTheAppliedBatches(t *testing.T) {
 	require.Equal(t, []string{"1202 BAD-1 price invalid_format"}, codes(report))
 	require.Equal(t, "big.csv", report.File.Name)
 	require.Equal(t, 1000, rec.rows["created"])
-	require.Equal(t, 1, rec.durations)
 }
 
 func TestNewImporterRequiresItsDependencies(t *testing.T) {

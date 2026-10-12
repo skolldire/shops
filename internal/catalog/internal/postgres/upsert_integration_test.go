@@ -18,8 +18,7 @@ import (
 
 type noRecorder struct{}
 
-func (noRecorder) RecordRows(context.Context, string, int)       {}
-func (noRecorder) RecordDuration(context.Context, time.Duration) {}
+func (noRecorder) RecordRows(context.Context, string, int) {}
 
 type noFailures struct{}
 

@@ -3,11 +3,8 @@ package metrics
 import (
 	"context"
 	"errors"
-	"time"
 
 	"go.opentelemetry.io/otel/attribute"
-
-	"github.com/skolldire/shops/internal/platform/telemetry"
 )
 
 const (
@@ -16,21 +13,22 @@ const (
 	outcomeKey     = "outcome"
 )
 
-type ImportRecorder struct {
-	metrics telemetry.Metrics
+type Instruments interface {
+	Counter(ctx context.Context, name string, value int64, attrs ...attribute.KeyValue)
+	Histogram(ctx context.Context, name string, value float64, attrs ...attribute.KeyValue)
 }
 
-func NewImportRecorder(metrics telemetry.Metrics) (*ImportRecorder, error) {
-	if metrics == nil {
+type ImportRecorder struct {
+	instruments Instruments
+}
+
+func NewImportRecorder(instruments Instruments) (*ImportRecorder, error) {
+	if instruments == nil {
 		return nil, errors.New("catalog: import recorder requires metrics")
 	}
-	return &ImportRecorder{metrics: metrics}, nil
+	return &ImportRecorder{instruments: instruments}, nil
 }
 
 func (r *ImportRecorder) RecordRows(ctx context.Context, outcome string, n int) {
-	r.metrics.Counter(ctx, importRows, int64(n), attribute.String(outcomeKey, outcome))
-}
-
-func (r *ImportRecorder) RecordDuration(ctx context.Context, d time.Duration) {
-	r.metrics.Histogram(ctx, importDuration, d.Seconds())
+	r.instruments.Counter(ctx, importRows, int64(n), attribute.String(outcomeKey, outcome))
 }

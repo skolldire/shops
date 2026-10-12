@@ -5,8 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -28,7 +28,10 @@ func TestImportRecorderExposesRowsByOutcomeAndDuration(t *testing.T) {
 		recorder.RecordRows(t.Context(), outcome, n)
 	}
 	recorder.RecordRows(t.Context(), "created", 3)
-	recorder.RecordDuration(t.Context(), 250*time.Millisecond)
+	timed, err := metrics.NewTimedImporter(&fakeFileImporter{}, provider)
+	require.NoError(t, err)
+	_, err = timed.Import(t.Context(), strings.NewReader("name\n"), "products.csv")
+	require.NoError(t, err)
 
 	rec := httptest.NewRecorder()
 	provider.MetricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -39,9 +42,9 @@ func TestImportRecorderExposesRowsByOutcomeAndDuration(t *testing.T) {
 	require.Contains(t, body, `import_rows_total{outcome="skipped"} 2`)
 	require.Contains(t, body, `import_rows_total{outcome="rejected"} 13`)
 	require.Contains(t, body, `import_duration_seconds_count 1`)
-	require.Contains(t, body, `import_duration_seconds_sum 0.25`)
-	require.Contains(t, body, `import_duration_seconds_bucket{le="0.1"} 0`)
-	require.Contains(t, body, `import_duration_seconds_bucket{le="0.5"} 1`)
+	require.Contains(t, body, `import_duration_seconds_bucket{le="0.05"} 1`)
+	require.Contains(t, body, `import_duration_seconds_bucket{le="10"} 1`)
+	require.NotContains(t, body, `import_duration_seconds_bucket{le="250"}`)
 }
 
 func TestNewImportRecorderRequiresMetrics(t *testing.T) {

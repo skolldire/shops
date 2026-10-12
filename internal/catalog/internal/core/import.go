@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -112,7 +111,6 @@ type importRow struct {
 }
 
 func (i *Importer) Import(ctx context.Context, file ImportFile, rows []ImportRow) (ImportReport, error) {
-	start := time.Now()
 	report := ImportReport{File: file, Records: len(rows), Errors: []RowError{}}
 	valid := i.validate(rows, &report)
 	slices.SortFunc(valid, func(a, b importRow) int { return cmp.Compare(a.sku, b.sku) })
@@ -135,7 +133,6 @@ func (i *Importer) Import(ctx context.Context, file ImportFile, rows []ImportRow
 	} {
 		i.rec.RecordRows(ctx, outcome, n)
 	}
-	i.rec.RecordDuration(ctx, time.Since(start))
 	return report, interrupted
 }
 
