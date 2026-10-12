@@ -98,14 +98,20 @@ Inside the catalog module the dependencies point towards the business rules:
 
 | Package | Role | May import |
 |---|---|---|
-| `core` | Product rules, the search and import use cases, and the ports they need (`Repository`, `ProductUpserter`, `ImportRecorder`, `ImportFailureReporter`) | A closed list: a few standard packages, `shopspring/decimal` and `platform/validation` |
-| `httpapi`, `httpquery`, `csvimport` | Input adapters: JSON, query strings and CSV files are decoded here and handed to `core` as plain values | `core` and `platform` |
-| `postgres`, `metrics`, `importlog` | Output adapters: they implement the ports of `core` for PostgreSQL, metrics and operational logs | `core` and `platform` |
+| `domain` | Products, search criteria, the decimal and whole number grammars, and their invariants. No ports, no I/O | A closed list: a few standard packages, `shopspring/decimal` and `platform/validation` |
+| `app` | Use cases (product service, import) and the ports they need: `Repository`, `ProductUpserter`, `ImportRecorder`, `ImportFailureReporter` | A closed list: `domain`, a few standard packages, `shopspring/decimal` and `platform/validation` |
+| `httpapi`, `httpquery`, `csvimport` | Input adapters: JSON, query strings and CSV files are decoded here and handed over as plain values | `app`, `domain` and `platform` |
+| `postgres`, `metrics`, `importlog` | Output adapters: they implement the ports of `app` for PostgreSQL, metrics and operational logs | `app`, `domain` and `platform` |
 | `module.go` | Composition: builds the adapters, wires them into the use cases and exposes the facade | Everything in the module |
 
-`core` does not read files, parse formats, log or call a telemetry SDK. The CSV adapter reads the upload, enforces the size and row limits, hashes the file and passes the rows on; when the import recovers from a failed batch or the database refuses a row, `core` reports it through `ImportFailureReporter` and the `importlog` adapter writes the log line.
+`domain` and `app` do not read files, parse formats, log, measure time or call a telemetry SDK:
 
-`make lint-arch` enforces this on every pull request: it fails if `core` imports anything outside its closed list, if it reaches transport, persistence or telemetry packages even indirectly, or if `internal/platform` imports a business module.
+- The CSV adapter reads the upload, enforces the size and row limits, hashes the file and maps the columns to named fields. The import use case only sees rows with a name, a SKU, a price and so on.
+- When the import recovers from a failed batch, or the database refuses a row, the use case reports it through `ImportFailureReporter` and the `importlog` adapter writes the log line.
+- The duration of an import is measured by a decorator in the `metrics` adapter around the whole operation, so it also covers files that are rejected before any row is applied.
+- The facade takes search parameters as plain text and the seed as a reader; query strings stay in the HTTP adapters and the seed file is opened by `cmd/api`.
+
+`make lint-arch` enforces this on every pull request. It fails if `domain` or `app` import anything outside their closed lists (so `domain` cannot import `app`, and neither can import an adapter), if they reach transport, persistence, logging or telemetry packages even indirectly, or if `internal/platform` imports a business module.
 
 ## Endpoints
 
@@ -344,5 +350,5 @@ Secret fields (the database password) must be a placeholder without a default, s
 ## Observability
 
 - **Logs:** JSON on stdout with `timestamp`, `severity` and `message`. Every request line carries `request_id`, `trace_id` and `span_id`. Sensitive fields and values (passwords, tokens, bearer credentials, card numbers) are redacted. The configuration is never logged.
-- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish. Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`.
+- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish. Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole.
 - **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route.
