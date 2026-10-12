@@ -11,7 +11,8 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
 	"github.com/skolldire/shops/internal/platform/validation"
@@ -20,14 +21,14 @@ import (
 const productID = "2b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
 
 type memoryRepo struct {
-	products map[string]core.Product
-	search   core.Search
+	products map[string]domain.Product
+	search   domain.Search
 }
 
-func (m *memoryRepo) Create(_ context.Context, p core.Product) (core.Product, error) {
+func (m *memoryRepo) Create(_ context.Context, p domain.Product) (domain.Product, error) {
 	for _, existing := range m.products {
 		if existing.SKU == p.SKU {
-			return core.Product{}, core.ErrSKUTaken
+			return domain.Product{}, app.ErrSKUTaken
 		}
 	}
 	p.ID, p.Version = productID, 1
@@ -35,21 +36,21 @@ func (m *memoryRepo) Create(_ context.Context, p core.Product) (core.Product, er
 	return p, nil
 }
 
-func (m *memoryRepo) Get(_ context.Context, id string) (core.Product, error) {
+func (m *memoryRepo) Get(_ context.Context, id string) (domain.Product, error) {
 	p, ok := m.products[id]
 	if !ok {
-		return core.Product{}, core.ErrNotFound
+		return domain.Product{}, app.ErrNotFound
 	}
 	return p, nil
 }
 
-func (m *memoryRepo) Update(_ context.Context, id string, version int, c core.Changes) (core.Product, error) {
+func (m *memoryRepo) Update(_ context.Context, id string, version int, c domain.Changes) (domain.Product, error) {
 	p, ok := m.products[id]
 	switch {
 	case !ok:
-		return core.Product{}, core.ErrNotFound
+		return domain.Product{}, app.ErrNotFound
 	case p.Version != version:
-		return core.Product{}, core.ErrVersionConflict
+		return domain.Product{}, app.ErrVersionConflict
 	}
 	if c.Stock != nil {
 		p.Stock = int(*c.Stock)
@@ -63,17 +64,17 @@ func (m *memoryRepo) Delete(_ context.Context, id string, version int) error {
 	p, ok := m.products[id]
 	switch {
 	case !ok:
-		return core.ErrNotFound
+		return app.ErrNotFound
 	case p.Version != version:
-		return core.ErrVersionConflict
+		return app.ErrVersionConflict
 	}
 	delete(m.products, id)
 	return nil
 }
 
-func (m *memoryRepo) Search(_ context.Context, s core.Search) ([]core.Product, int, error) {
+func (m *memoryRepo) Search(_ context.Context, s domain.Search) ([]domain.Product, int, error) {
 	m.search = s
-	var items []core.Product
+	var items []domain.Product
 	for _, p := range m.products {
 		items = append(items, p)
 	}
@@ -88,13 +89,13 @@ func testDeps(log logger.Service) Deps {
 	return Deps{Log: log, Metrics: telemetry.Noop(), Import: ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}}
 }
 
-func (m *memoryRepo) Upsert(ctx context.Context, products []core.Product) (map[string]core.UpsertOutcome, error) {
+func (m *memoryRepo) Upsert(ctx context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := make(map[string]core.UpsertOutcome, len(products))
+	out := make(map[string]app.UpsertOutcome, len(products))
 	for _, p := range products {
-		out[p.SKU] = core.OutcomeCreated
+		out[p.SKU] = app.OutcomeCreated
 		p.ID, p.Version = p.SKU, 1
 		m.products[p.ID] = p
 	}
@@ -109,7 +110,7 @@ func newTestModule(t *testing.T) (*Module, *memoryRepo) {
 	t.Helper()
 	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
 	require.NoError(t, err)
-	repo := &memoryRepo{products: map[string]core.Product{}}
+	repo := &memoryRepo{products: map[string]domain.Product{}}
 	m, err := newModule(repo, testDeps(log))
 	require.NoError(t, err)
 	return m, repo
@@ -178,7 +179,7 @@ func TestModuleSearch(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "shoes", repo.search.Q)
-	require.Equal(t, core.SortPrice, repo.search.Sort)
+	require.Equal(t, domain.SortPrice, repo.search.Sort)
 	require.True(t, repo.search.Descending)
 	require.Equal(t, 2, page.Page)
 	require.Equal(t, 5, page.PageSize)

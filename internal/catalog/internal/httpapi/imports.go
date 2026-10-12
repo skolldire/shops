@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
@@ -17,7 +17,7 @@ import (
 const importField = "file"
 
 type Importer interface {
-	Import(ctx context.Context, r io.Reader, fileName string) (core.ImportReport, error)
+	Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error)
 }
 
 type ImportHandler struct {
@@ -89,7 +89,7 @@ func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func reportJSON(report core.ImportReport) importReportJSON {
+func reportJSON(report app.ImportReport) importReportJSON {
 	out := importReportJSON{
 		File:      importFileJSON{Name: report.File.Name, Bytes: report.File.Bytes, SHA256: report.File.SHA256},
 		Records:   report.Records,
@@ -125,16 +125,16 @@ func (h *ImportHandler) partError(w http.ResponseWriter, r *http.Request, err er
 func (h *ImportHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
 		tooLarge *http.MaxBytesError
-		invalid  *core.InvalidCSVError
+		invalid  *app.InvalidCSVError
 	)
 	switch {
-	case errors.Is(err, core.ErrFileTooLarge), errors.As(err, &tooLarge):
+	case errors.Is(err, app.ErrFileTooLarge), errors.As(err, &tooLarge):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusRequestEntityTooLarge, Code: "request_too_large", Detail: "The CSV file is larger than the import limit."})
-	case errors.Is(err, core.ErrInvalidHeader):
+	case errors.Is(err, app.ErrInvalidHeader):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_header", Detail: "The first line must be exactly name,sku,description,category,price,stock,weight_kg."})
 	case errors.As(err, &invalid):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_csv", Detail: fmt.Sprintf("Line %d: %s.", invalid.Line, invalid.Reason)})
-	case errors.Is(err, core.ErrTooManyRows):
+	case errors.Is(err, app.ErrTooManyRows):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "too_many_rows", Detail: "The CSV has more rows than the import limit."})
 	default:
 		h.log.Error(r.Context(), err, map[string]any{"component": "catalog"})

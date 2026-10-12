@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/metrics"
 )
 
@@ -37,13 +37,13 @@ func (f *fakeInstruments) Histogram(_ context.Context, name string, value float6
 }
 
 type fakeFileImporter struct {
-	report core.ImportReport
+	report app.ImportReport
 	err    error
 	name   string
 	body   string
 }
 
-func (f *fakeFileImporter) Import(_ context.Context, r io.Reader, fileName string) (core.ImportReport, error) {
+func (f *fakeFileImporter) Import(_ context.Context, r io.Reader, fileName string) (app.ImportReport, error) {
 	body, _ := io.ReadAll(r)
 	f.name, f.body = fileName, string(body)
 	return f.report, f.err
@@ -51,13 +51,13 @@ func (f *fakeFileImporter) Import(_ context.Context, r io.Reader, fileName strin
 
 func TestTimedImporterRecordsTheDurationOfEveryOutcome(t *testing.T) {
 	tests := map[string]struct {
-		report core.ImportReport
+		report app.ImportReport
 		err    error
 	}{
-		"imported":                 {core.ImportReport{Records: 97, Created: 82}, nil},
-		"file rejected as a whole": {core.ImportReport{}, core.ErrInvalidHeader},
-		"interrupted":              {core.ImportReport{Records: 1200, Created: 500}, context.Canceled},
-		"unexpected failure":       {core.ImportReport{}, errors.New("boom")},
+		"imported":                 {app.ImportReport{Records: 97, Created: 82}, nil},
+		"file rejected as a whole": {app.ImportReport{}, app.ErrInvalidHeader},
+		"interrupted":              {app.ImportReport{Records: 1200, Created: 500}, context.Canceled},
+		"unexpected failure":       {app.ImportReport{}, errors.New("boom")},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

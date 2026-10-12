@@ -1,4 +1,4 @@
-package core_test
+package app_test
 
 import (
 	"context"
@@ -10,13 +10,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 )
 
 const csvHeader = "name,sku,description,category,price,stock,weight_kg\n"
 
 type fakeStore struct {
-	existing  map[string]core.Product
+	existing  map[string]domain.Product
 	deleted   map[string]bool
 	failBatch bool
 	failSKU   map[string]bool
@@ -24,7 +25,7 @@ type fakeStore struct {
 	onBatch   func(applied int)
 }
 
-func (f *fakeStore) Upsert(ctx context.Context, products []core.Product) (map[string]core.UpsertOutcome, error) {
+func (f *fakeStore) Upsert(ctx context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
 	skus := make([]string, len(products))
 	for i, p := range products {
 		skus[i] = p.SKU
@@ -39,23 +40,23 @@ func (f *fakeStore) Upsert(ctx context.Context, products []core.Product) (map[st
 	if f.failBatch && len(products) > 1 {
 		return nil, errors.New("batch exploded: host=10.0.0.5")
 	}
-	out := make(map[string]core.UpsertOutcome, len(products))
+	out := make(map[string]app.UpsertOutcome, len(products))
 	for _, p := range products {
 		current, found := f.existing[p.SKU]
 		switch {
 		case f.failSKU[p.SKU]:
 			return nil, errors.New("row exploded: host=10.0.0.5")
 		case f.deleted[p.SKU]:
-			out[p.SKU] = core.OutcomeDeleted
+			out[p.SKU] = app.OutcomeDeleted
 		case !found:
-			out[p.SKU] = core.OutcomeCreated
+			out[p.SKU] = app.OutcomeCreated
 		case current.Name == p.Name && current.Stock == p.Stock && current.Price.Equal(p.Price):
-			out[p.SKU] = core.OutcomeUnchanged
+			out[p.SKU] = app.OutcomeUnchanged
 		default:
-			out[p.SKU] = core.OutcomeUpdated
+			out[p.SKU] = app.OutcomeUpdated
 		}
 		if f.existing == nil {
-			f.existing = map[string]core.Product{}
+			f.existing = map[string]domain.Product{}
 		}
 		if !f.deleted[p.SKU] {
 			f.existing[p.SKU] = p
@@ -88,17 +89,17 @@ func (f *fakeFailures) RowRejected(_ context.Context, line int, sku string, caus
 	f.rows = append(f.rows, fmt.Sprintf("%d %s: %v", line, sku, cause))
 }
 
-func newImporter(t *testing.T, store *fakeStore, rec *fakeRecorder) (*core.Importer, *fakeFailures) {
+func newImporter(t *testing.T, store *fakeStore, rec *fakeRecorder) (*app.Importer, *fakeFailures) {
 	t.Helper()
 	failures := &fakeFailures{}
-	importer, err := core.NewImporter(store, rec, failures)
+	importer, err := app.NewImporter(store, rec, failures)
 	require.NoError(t, err)
 	return importer, failures
 }
 
-func rowsOf(body string) []core.ImportRow {
+func rowsOf(body string) []app.ImportRow {
 	lines := strings.Split(strings.TrimSuffix(strings.TrimPrefix(body, csvHeader), "\n"), "\n")
-	rows := make([]core.ImportRow, 0, len(lines))
+	rows := make([]app.ImportRow, 0, len(lines))
 	for i, line := range lines {
 		if line == "" && len(lines) == 1 {
 			break
@@ -108,25 +109,25 @@ func rowsOf(body string) []core.ImportRow {
 	return rows
 }
 
-func rowOf(line int, f []string) core.ImportRow {
+func rowOf(line int, f []string) app.ImportRow {
 	blank := true
 	for _, value := range f {
 		blank = blank && strings.TrimSpace(value) == ""
 	}
 	switch {
 	case blank:
-		return core.ImportRow{Line: line}
+		return app.ImportRow{Line: line}
 	case len(f) != 7:
-		return core.ImportRow{Line: line, Malformed: fmt.Sprintf("must have 7 fields, found %d", len(f))}
+		return app.ImportRow{Line: line, Malformed: fmt.Sprintf("must have 7 fields, found %d", len(f))}
 	}
-	return core.ImportRow{Line: line, Fields: core.ImportFields{
+	return app.ImportRow{Line: line, Fields: app.ImportFields{
 		Name: f[0], SKU: f[1], Description: f[2], Category: f[3], Price: f[4], Stock: f[5], WeightKg: f[6],
 	}}
 }
 
-var productsFile = core.ImportFile{Name: "products.csv", Bytes: 8930, SHA256: "6fc46b84"}
+var productsFile = app.ImportFile{Name: "products.csv", Bytes: 8930, SHA256: "6fc46b84"}
 
-func run(t *testing.T, store *fakeStore, body string) (core.ImportReport, *fakeRecorder) {
+func run(t *testing.T, store *fakeStore, body string) (app.ImportReport, *fakeRecorder) {
 	t.Helper()
 	rec := &fakeRecorder{}
 	importer, _ := newImporter(t, store, rec)
@@ -135,7 +136,7 @@ func run(t *testing.T, store *fakeStore, body string) (core.ImportReport, *fakeR
 	return report, rec
 }
 
-func codes(report core.ImportReport) []string {
+func codes(report app.ImportReport) []string {
 	out := make([]string, len(report.Errors))
 	for i, e := range report.Errors {
 		out[i] = fmt.Sprintf("%d %s %s %s", e.Line, e.SKU, e.Field, e.Code)
@@ -254,7 +255,7 @@ func TestImportRejectsEverySKURepeatedInTheFile(t *testing.T) {
 	}, codes(report))
 	messages := map[int]string{}
 	for _, e := range report.Errors {
-		if e.Code == core.CodeDuplicateInFile {
+		if e.Code == app.CodeDuplicateInFile {
 			messages[e.Line] = e.Message
 		}
 	}
@@ -272,7 +273,7 @@ func TestImportRejectsEverySKURepeatedInTheFile(t *testing.T) {
 
 func TestImportCountsEveryOutcome(t *testing.T) {
 	store := &fakeStore{
-		existing: map[string]core.Product{
+		existing: map[string]domain.Product{
 			"SAME-1": product(t, "SAME-1", "Same", "5", 1),
 			"CHG-1":  product(t, "CHG-1", "Old name", "5", 1),
 		},
@@ -317,7 +318,7 @@ func TestImportOfNoRowsIsAnEmptyReport(t *testing.T) {
 	report, err := importer.Import(context.Background(), productsFile, nil)
 
 	require.NoError(t, err)
-	require.Equal(t, core.ImportReport{File: productsFile, Errors: []core.RowError{}}, report)
+	require.Equal(t, app.ImportReport{File: productsFile, Errors: []app.RowError{}}, report)
 }
 
 func TestImportAppliesSortedBatchesOfFiveHundred(t *testing.T) {
@@ -330,7 +331,7 @@ func TestImportAppliesSortedBatchesOfFiveHundred(t *testing.T) {
 	rec := &fakeRecorder{}
 	importer, _ := newImporter(t, store, rec)
 
-	report, err := importer.Import(context.Background(), core.ImportFile{Name: "big.csv"}, rowsOf(body.String()))
+	report, err := importer.Import(context.Background(), app.ImportFile{Name: "big.csv"}, rowsOf(body.String()))
 
 	require.NoError(t, err)
 	require.Equal(t, 1200, report.Created)
@@ -351,7 +352,7 @@ func TestImportRetriesAFailedBatchRowByRow(t *testing.T) {
 	importer, failures := newImporter(t, store, rec)
 	body := csvHeader + "A,A-1,,A,5,1,1\nB,B-1,,A,5,1,1\nC,C-1,,A,5,1,1\n"
 
-	report, err := importer.Import(context.Background(), core.ImportFile{Name: "products.csv"}, rowsOf(body))
+	report, err := importer.Import(context.Background(), app.ImportFile{Name: "products.csv"}, rowsOf(body))
 
 	require.NoError(t, err)
 	require.Equal(t, 2, report.Created)
@@ -369,7 +370,7 @@ func TestImportStopsWhenTheContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := importer.Import(ctx, core.ImportFile{Name: "products.csv"}, rowsOf(csvHeader+"A,A-1,,A,5,1,1\nB,B-1,,A,5,1,1\n"))
+	_, err := importer.Import(ctx, app.ImportFile{Name: "products.csv"}, rowsOf(csvHeader+"A,A-1,,A,5,1,1\nB,B-1,,A,5,1,1\n"))
 
 	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, store.batches, 1)
@@ -391,7 +392,7 @@ func TestImportInterruptedKeepsTheCountsOfTheAppliedBatches(t *testing.T) {
 	rec := &fakeRecorder{}
 	importer, _ := newImporter(t, store, rec)
 
-	report, err := importer.Import(ctx, core.ImportFile{Name: "big.csv"}, rowsOf(body.String()))
+	report, err := importer.Import(ctx, app.ImportFile{Name: "big.csv"}, rowsOf(body.String()))
 
 	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, store.batches, 3)
@@ -404,17 +405,17 @@ func TestImportInterruptedKeepsTheCountsOfTheAppliedBatches(t *testing.T) {
 }
 
 func TestNewImporterRequiresItsDependencies(t *testing.T) {
-	_, err := core.NewImporter(nil, &fakeRecorder{}, &fakeFailures{})
+	_, err := app.NewImporter(nil, &fakeRecorder{}, &fakeFailures{})
 	require.EqualError(t, err, "catalog: importer requires a product store")
-	_, err = core.NewImporter(&fakeStore{}, nil, &fakeFailures{})
+	_, err = app.NewImporter(&fakeStore{}, nil, &fakeFailures{})
 	require.EqualError(t, err, "catalog: importer requires a recorder")
-	_, err = core.NewImporter(&fakeStore{}, &fakeRecorder{}, nil)
+	_, err = app.NewImporter(&fakeStore{}, &fakeRecorder{}, nil)
 	require.EqualError(t, err, "catalog: importer requires a failure reporter")
 }
 
-func product(t *testing.T, sku, name, price string, stock int) core.Product {
+func product(t *testing.T, sku, name, price string, stock int) domain.Product {
 	t.Helper()
-	d, err := core.ParseDecimal(price)
+	d, err := domain.ParseDecimal(price)
 	require.NoError(t, err)
-	return core.Product{SKU: sku, Name: name, Price: d, Stock: stock}
+	return domain.Product{SKU: sku, Name: name, Price: d, Stock: stock}
 }

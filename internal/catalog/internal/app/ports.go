@@ -1,0 +1,29 @@
+package app
+
+import (
+	"context"
+
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
+)
+
+type ProductUpserter interface {
+	Upsert(ctx context.Context, products []domain.Product) (map[string]UpsertOutcome, error)
+}
+
+type ImportFailureReporter interface {
+	BatchRetried(ctx context.Context, rows int, cause error)
+	RowRejected(ctx context.Context, line int, sku string, cause error)
+}
+
+type ImportRecorder interface {
+	RecordRows(ctx context.Context, outcome string, n int)
+}
+
+type Repository interface {
+	Create(ctx context.Context, p domain.Product) (domain.Product, error)
+	Get(ctx context.Context, id string) (domain.Product, error)
+	Update(ctx context.Context, id string, version int, c domain.Changes) (domain.Product, error)
+	Delete(ctx context.Context, id string, version int) error
+	Search(ctx context.Context, s domain.Search) ([]domain.Product, int, error)
+	Categories(ctx context.Context) ([]string, error)
+}

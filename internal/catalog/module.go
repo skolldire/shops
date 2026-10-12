@@ -10,8 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
 	"github.com/skolldire/shops/internal/catalog/internal/httpquery"
 	"github.com/skolldire/shops/internal/catalog/internal/importlog"
@@ -35,13 +36,13 @@ type seedGuard interface {
 }
 
 type store interface {
-	core.Repository
-	core.ProductUpserter
+	app.Repository
+	app.ProductUpserter
 	seedGuard
 }
 
 type Module struct {
-	svc      *core.Service
+	svc      *app.Service
 	importer *metrics.TimedImporter
 	seed     seedGuard
 	http     *httpapi.Handler
@@ -57,7 +58,7 @@ func NewModule(d Deps) (*Module, error) {
 }
 
 func newModule(s store, d Deps) (*Module, error) {
-	svc, err := core.NewService(s)
+	svc, err := app.NewService(s)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +74,7 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := core.NewImporter(s, recorder, failures)
+	rows, err := app.NewImporter(s, recorder, failures)
 	if err != nil {
 		return nil, err
 	}
@@ -127,11 +128,11 @@ func (m *Module) Seed(ctx context.Context, file io.Reader) (ImportReport, bool, 
 }
 
 func ParseDecimal(raw string) (decimal.Decimal, error) {
-	return core.ParseDecimal(raw)
+	return domain.ParseDecimal(raw)
 }
 
 func ParseWholeNumber(raw string) (int64, error) {
-	return core.ParseWholeNumber(raw)
+	return domain.ParseWholeNumber(raw)
 }
 
 func ParseSearchQuery(p SearchParams) (SearchQuery, error) {
@@ -143,7 +144,7 @@ func ParseSearchQuery(p SearchParams) (SearchQuery, error) {
 }
 
 func (m *Module) Search(ctx context.Context, q SearchQuery) (Page, error) {
-	s, err := core.NewSearch(core.SearchInput{
+	s, err := domain.NewSearch(domain.SearchInput{
 		Q: q.Q, Category: q.Category, MinPrice: q.MinPrice, MaxPrice: q.MaxPrice,
 		InStock: q.InStock, Sort: q.Sort, Page: q.Page, PageSize: q.PageSize,
 	})
@@ -170,7 +171,7 @@ func (m *Module) Get(ctx context.Context, id string) (Product, error) {
 }
 
 func (m *Module) Create(ctx context.Context, in CreateInput) (Product, error) {
-	p, err := m.svc.Create(ctx, core.NewProductInput{
+	p, err := m.svc.Create(ctx, domain.NewProductInput{
 		SKU: in.SKU, Name: in.Name, Description: in.Description, Category: in.Category,
 		Price: in.Price, Stock: in.Stock, WeightKg: in.WeightKg,
 	})
@@ -181,7 +182,7 @@ func (m *Module) Create(ctx context.Context, in CreateInput) (Product, error) {
 }
 
 func (m *Module) Update(ctx context.Context, id string, in UpdateInput) (Product, error) {
-	p, err := m.svc.Update(ctx, id, in.Version, core.Changes{
+	p, err := m.svc.Update(ctx, id, in.Version, domain.Changes{
 		SKU: in.SKU, Name: in.Name, Description: in.Description, Category: in.Category,
 		Price: in.Price, Stock: in.Stock, WeightKg: in.WeightKg,
 	})
@@ -203,7 +204,7 @@ func (m *Module) Categories(ctx context.Context) ([]string, error) {
 	return categories, nil
 }
 
-func fromCore(p core.Product) Product {
+func fromCore(p domain.Product) Product {
 	return Product{
 		ID: p.ID, SKU: p.SKU, Name: p.Name, Description: p.Description, Category: p.Category,
 		Price: p.Price, Stock: p.Stock, WeightKg: p.WeightKg, Version: p.Version,
@@ -211,7 +212,7 @@ func fromCore(p core.Product) Product {
 	}
 }
 
-func fromSearch(s core.Search) SearchQuery {
+func fromSearch(s domain.Search) SearchQuery {
 	sort := string(s.Sort)
 	if s.Descending {
 		sort = "-" + sort
@@ -222,7 +223,7 @@ func fromSearch(s core.Search) SearchQuery {
 	}
 }
 
-func fromReport(r core.ImportReport) ImportReport {
+func fromReport(r app.ImportReport) ImportReport {
 	out := ImportReport{
 		File:    ImportFile{Name: r.File.Name, Bytes: r.File.Bytes, SHA256: r.File.SHA256},
 		Records: r.Records, Skipped: r.Skipped, Created: r.Created, Updated: r.Updated,
@@ -236,13 +237,13 @@ func fromReport(r core.ImportReport) ImportReport {
 }
 
 func publicImportError(err error) error {
-	var invalid *core.InvalidCSVError
+	var invalid *app.InvalidCSVError
 	switch {
-	case errors.Is(err, core.ErrFileTooLarge):
+	case errors.Is(err, app.ErrFileTooLarge):
 		return ErrFileTooLarge
-	case errors.Is(err, core.ErrInvalidHeader):
+	case errors.Is(err, app.ErrInvalidHeader):
 		return ErrInvalidHeader
-	case errors.Is(err, core.ErrTooManyRows):
+	case errors.Is(err, app.ErrTooManyRows):
 		return ErrTooManyRows
 	case errors.As(err, &invalid):
 		return &InvalidCSVError{Line: invalid.Line, Reason: invalid.Reason}
@@ -252,11 +253,11 @@ func publicImportError(err error) error {
 
 func publicError(err error) error {
 	switch {
-	case errors.Is(err, core.ErrNotFound):
+	case errors.Is(err, app.ErrNotFound):
 		return ErrNotFound
-	case errors.Is(err, core.ErrSKUTaken):
+	case errors.Is(err, app.ErrSKUTaken):
 		return ErrSKUTaken
-	case errors.Is(err, core.ErrVersionConflict):
+	case errors.Is(err, app.ErrVersionConflict):
 		return ErrVersionConflict
 	}
 	return err

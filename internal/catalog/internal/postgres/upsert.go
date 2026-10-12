@@ -6,7 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/database"
 )
 
@@ -33,8 +34,8 @@ RETURNING sku, (xmax = 0)`
 
 const deletedSKUs = `SELECT sku FROM products WHERE sku = ANY($1) AND status = 'DELETED'`
 
-func (r *Repository) Upsert(ctx context.Context, products []core.Product) (map[string]core.UpsertOutcome, error) {
-	outcomes := make(map[string]core.UpsertOutcome, len(products))
+func (r *Repository) Upsert(ctx context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
+	outcomes := make(map[string]app.UpsertOutcome, len(products))
 	if len(products) == 0 {
 		return outcomes, nil
 	}
@@ -55,7 +56,7 @@ func (r *Repository) Upsert(ctx context.Context, products []core.Product) (map[s
 			if _, gone := outcomes[p.SKU]; gone {
 				continue
 			}
-			outcomes[p.SKU] = core.OutcomeUnchanged
+			outcomes[p.SKU] = app.OutcomeUnchanged
 			in.add(p)
 		}
 		if len(in.skus) == 0 {
@@ -72,9 +73,9 @@ func (r *Repository) Upsert(ctx context.Context, products []core.Product) (map[s
 			inserted bool
 		)
 		_, err = pgx.ForEachRow(rows, []any{&sku, &inserted}, func() error {
-			outcomes[sku] = core.OutcomeUpdated
+			outcomes[sku] = app.OutcomeUpdated
 			if inserted {
-				outcomes[sku] = core.OutcomeCreated
+				outcomes[sku] = app.OutcomeCreated
 			}
 			return nil
 		})
@@ -84,7 +85,7 @@ func (r *Repository) Upsert(ctx context.Context, products []core.Product) (map[s
 
 		var untouched []string
 		for _, sku := range in.skus {
-			if outcomes[sku] == core.OutcomeUnchanged {
+			if outcomes[sku] == app.OutcomeUnchanged {
 				untouched = append(untouched, sku)
 			}
 		}
@@ -96,7 +97,7 @@ func (r *Repository) Upsert(ctx context.Context, products []core.Product) (map[s
 	return outcomes, nil
 }
 
-func markDeleted(ctx context.Context, q database.Querier, skus []string, outcomes map[string]core.UpsertOutcome) error {
+func markDeleted(ctx context.Context, q database.Querier, skus []string, outcomes map[string]app.UpsertOutcome) error {
 	if len(skus) == 0 {
 		return nil
 	}
@@ -105,7 +106,7 @@ func markDeleted(ctx context.Context, q database.Querier, skus []string, outcome
 		return fmt.Errorf("catalog: find deleted skus: %w", err)
 	}
 	for _, sku := range deleted {
-		outcomes[sku] = core.OutcomeDeleted
+		outcomes[sku] = app.OutcomeDeleted
 	}
 	return nil
 }
@@ -123,7 +124,7 @@ type upsertInput struct {
 	stocks                                                 []int
 }
 
-func (in *upsertInput) add(p core.Product) {
+func (in *upsertInput) add(p domain.Product) {
 	in.skus = append(in.skus, p.SKU)
 	in.names = append(in.names, p.Name)
 	in.descriptions = append(in.descriptions, p.Description)

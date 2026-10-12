@@ -11,19 +11,19 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
 )
 
 type fakeRows struct {
 	calls  int
-	file   core.ImportFile
-	rows   []core.ImportRow
-	report core.ImportReport
+	file   app.ImportFile
+	rows   []app.ImportRow
+	report app.ImportReport
 	err    error
 }
 
-func (f *fakeRows) Import(_ context.Context, file core.ImportFile, rows []core.ImportRow) (core.ImportReport, error) {
+func (f *fakeRows) Import(_ context.Context, file app.ImportFile, rows []app.ImportRow) (app.ImportReport, error) {
 	f.calls++
 	f.file, f.rows = file, rows
 	return f.report, f.err
@@ -41,16 +41,16 @@ var roomy = csvimport.Limits{MaxBytes: 1 << 20, MaxRows: 1000}
 func TestImporterHandsTheRowsAndTheFileToTheUseCase(t *testing.T) {
 	body := header + "Shoes,RS-1,\"Light,\nfast\",Sports,9.99,1,0.3\n,,,,,,\nMug,MG-1\n , \nA,B,C,D,E,F,G,H\n"
 	sum := sha256.Sum256([]byte(body))
-	want := core.ImportReport{Records: 5, Created: 1}
+	want := app.ImportReport{Records: 5, Created: 1}
 	rows := &fakeRows{report: want}
 
 	report, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(body), "products.csv")
 
 	require.NoError(t, err)
 	require.Equal(t, want, report, "the report of the use case is returned as it is")
-	require.Equal(t, core.ImportFile{Name: "products.csv", Bytes: int64(len(body)), SHA256: hex.EncodeToString(sum[:])}, rows.file)
-	require.Equal(t, []core.ImportRow{
-		{Line: 2, Fields: core.ImportFields{
+	require.Equal(t, app.ImportFile{Name: "products.csv", Bytes: int64(len(body)), SHA256: hex.EncodeToString(sum[:])}, rows.file)
+	require.Equal(t, []app.ImportRow{
+		{Line: 2, Fields: app.ImportFields{
 			Name: "Shoes", SKU: "RS-1", Description: "Light,\nfast", Category: "Sports", Price: "9.99", Stock: "1", WeightKg: "0.3",
 		}},
 		{Line: 4},
@@ -61,7 +61,7 @@ func TestImporterHandsTheRowsAndTheFileToTheUseCase(t *testing.T) {
 }
 
 func TestImporterReturnsTheUseCaseErrorWithItsPartialReport(t *testing.T) {
-	partial := core.ImportReport{Records: 1200, Created: 500, Errors: []core.RowError{}}
+	partial := app.ImportReport{Records: 1200, Created: 500, Errors: []app.RowError{}}
 	rows := &fakeRows{report: partial, err: context.Canceled}
 
 	report, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(header), "products.csv")
@@ -77,13 +77,13 @@ func TestImporterRejectsTheWholeFile(t *testing.T) {
 		body   string
 		target error
 	}{
-		"another header":   {"sku,name\n" + row, core.ErrInvalidHeader},
-		"empty file":       {"", core.ErrInvalidHeader},
-		"broken quotes":    {header + "A,\"A-1,,A,5,1,1\n", core.ErrInvalidCSV},
-		"invalid utf-8":    {header + "A\xff,A-1,,A,5,1,1\n", core.ErrInvalidCSV},
-		"too many rows":    {header + strings.Repeat(",,,,,,\n", 4), core.ErrTooManyRows},
-		"too many bytes":   {header + row + strings.Repeat(" ", 200), core.ErrFileTooLarge},
-		"rows before size": {header + strings.Repeat(row, 4), core.ErrTooManyRows},
+		"another header":   {"sku,name\n" + row, app.ErrInvalidHeader},
+		"empty file":       {"", app.ErrInvalidHeader},
+		"broken quotes":    {header + "A,\"A-1,,A,5,1,1\n", app.ErrInvalidCSV},
+		"invalid utf-8":    {header + "A\xff,A-1,,A,5,1,1\n", app.ErrInvalidCSV},
+		"too many rows":    {header + strings.Repeat(",,,,,,\n", 4), app.ErrTooManyRows},
+		"too many bytes":   {header + row + strings.Repeat(" ", 200), app.ErrFileTooLarge},
+		"rows before size": {header + strings.Repeat(row, 4), app.ErrTooManyRows},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -92,7 +92,7 @@ func TestImporterRejectsTheWholeFile(t *testing.T) {
 			report, err := newImporter(t, rows, limits).Import(context.Background(), strings.NewReader(tt.body), "products.csv")
 
 			require.ErrorIs(t, err, tt.target)
-			require.Equal(t, core.ImportReport{}, report)
+			require.Equal(t, app.ImportReport{}, report)
 			require.Zero(t, rows.calls, "a rejected file never reaches the use case")
 		})
 	}
@@ -101,7 +101,7 @@ func TestImporterRejectsTheWholeFile(t *testing.T) {
 func TestImporterReportsTheLineOfAMalformedFile(t *testing.T) {
 	_, err := newImporter(t, &fakeRows{}, roomy).Import(context.Background(), strings.NewReader(header+"A,A-1,,A,5,1,1\nB,\"B-1,,A,5,1,1\n"), "products.csv")
 
-	var invalid *core.InvalidCSVError
+	var invalid *app.InvalidCSVError
 	require.ErrorAs(t, err, &invalid)
 	require.Equal(t, 3, invalid.Line)
 	require.NotEmpty(t, invalid.Reason)
@@ -161,6 +161,6 @@ func TestNewImporterRequiresItsDependencies(t *testing.T) {
 func TestImporterErrorsAreTheOnesTheUseCaseDeclares(t *testing.T) {
 	_, err := newImporter(t, &fakeRows{}, roomy).Import(context.Background(), strings.NewReader("sku,name\n"), "products.csv")
 
-	require.True(t, errors.Is(err, core.ErrInvalidHeader))
+	require.True(t, errors.Is(err, app.ErrInvalidHeader))
 	require.False(t, errors.Is(err, csvimport.ErrInvalidHeader), "the adapter's own error does not leak")
 }

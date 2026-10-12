@@ -11,13 +11,13 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
 )
 
 const maxFileNameLength = 255
 
 type RowImporter interface {
-	Import(ctx context.Context, file core.ImportFile, rows []core.ImportRow) (core.ImportReport, error)
+	Import(ctx context.Context, file app.ImportFile, rows []app.ImportRow) (app.ImportReport, error)
 }
 
 type Limits struct {
@@ -40,17 +40,17 @@ func NewImporter(rows RowImporter, limits Limits) (*Importer, error) {
 	return &Importer{rows: rows, limits: limits}, nil
 }
 
-func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (core.ImportReport, error) {
+func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error) {
 	metered := &meteredReader{r: r, hash: sha256.New(), max: i.limits.MaxBytes}
 	read, err := Read(metered, i.limits.MaxRows)
 	if err != nil {
-		return core.ImportReport{}, readError(err)
+		return app.ImportReport{}, readError(err)
 	}
-	rows := make([]core.ImportRow, len(read))
+	rows := make([]app.ImportRow, len(read))
 	for index, row := range read {
 		rows[index] = importRow(row)
 	}
-	file := core.ImportFile{
+	file := app.ImportFile{
 		Name:   cleanFileName(fileName),
 		Bytes:  metered.n,
 		SHA256: hex.EncodeToString(metered.hash.Sum(nil)),
@@ -58,15 +58,15 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (co
 	return i.rows.Import(ctx, file, rows)
 }
 
-func importRow(row Row) core.ImportRow {
+func importRow(row Row) app.ImportRow {
 	f := row.Fields
 	switch {
 	case blank(f):
-		return core.ImportRow{Line: row.Line}
+		return app.ImportRow{Line: row.Line}
 	case len(f) != len(header):
-		return core.ImportRow{Line: row.Line, Malformed: fmt.Sprintf("must have %d fields, found %d", len(header), len(f))}
+		return app.ImportRow{Line: row.Line, Malformed: fmt.Sprintf("must have %d fields, found %d", len(header), len(f))}
 	}
-	return core.ImportRow{Line: row.Line, Fields: core.ImportFields{
+	return app.ImportRow{Line: row.Line, Fields: app.ImportFields{
 		Name: f[0], SKU: f[1], Description: f[2], Category: f[3], Price: f[4], Stock: f[5], WeightKg: f[6],
 	}}
 }
@@ -96,14 +96,14 @@ func cleanFileName(raw string) string {
 func readError(err error) error {
 	var format *FormatError
 	switch {
-	case errors.Is(err, core.ErrFileTooLarge):
-		return core.ErrFileTooLarge
+	case errors.Is(err, app.ErrFileTooLarge):
+		return app.ErrFileTooLarge
 	case errors.Is(err, ErrInvalidHeader):
-		return core.ErrInvalidHeader
+		return app.ErrInvalidHeader
 	case errors.Is(err, ErrTooManyRows):
-		return core.ErrTooManyRows
+		return app.ErrTooManyRows
 	case errors.As(err, &format):
-		return &core.InvalidCSVError{Line: format.Line, Reason: format.Reason}
+		return &app.InvalidCSVError{Line: format.Line, Reason: format.Reason}
 	}
 	return fmt.Errorf("catalog: read import file: %w", err)
 }
@@ -119,7 +119,7 @@ func (m *meteredReader) Read(p []byte) (int, error) {
 	n, err := m.r.Read(p)
 	m.n += int64(n)
 	if m.n > m.max {
-		return 0, core.ErrFileTooLarge
+		return 0, app.ErrFileTooLarge
 	}
 	_, _ = m.hash.Write(p[:n])
 	return n, err

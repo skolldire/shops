@@ -1,4 +1,4 @@
-package core
+package domain
 
 import (
 	"regexp"
@@ -115,8 +115,12 @@ func ValidateChanges(c Changes) (Changes, error) {
 	return out, nil
 }
 
+func NormalizeSKU(raw string) string {
+	return strings.ToUpper(strings.TrimSpace(raw))
+}
+
 func checkSKU(errs *validation.Errors, raw string) string {
-	sku := strings.ToUpper(strings.TrimSpace(raw))
+	sku := NormalizeSKU(raw)
 	switch {
 	case sku == "":
 		errs.Add("sku", validation.CodeRequired, "is required")

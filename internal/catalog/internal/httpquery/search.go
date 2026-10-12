@@ -6,7 +6,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/validation"
 )
 
@@ -34,13 +34,13 @@ func FromValues(values url.Values) Params {
 	}
 }
 
-func ParseSearch(values url.Values) (core.Search, error) {
+func ParseSearch(values url.Values) (domain.Search, error) {
 	return ParseParams(FromValues(values))
 }
 
-func ParseParams(p Params) (core.Search, error) {
+func ParseParams(p Params) (domain.Search, error) {
 	var format validation.Errors
-	in := core.SearchInput{
+	in := domain.SearchInput{
 		Q:        p.Q,
 		Category: p.Category,
 		Sort:     p.Sort,
@@ -50,9 +50,9 @@ func ParseParams(p Params) (core.Search, error) {
 		Page:     positiveParam(&format, "page", p.Page),
 		PageSize: positiveParam(&format, "page_size", p.PageSize),
 	}
-	search, err := core.NewSearch(in)
+	search, err := domain.NewSearch(in)
 	if merged := validation.Merge(format, err); merged != nil {
-		return core.Search{}, merged
+		return domain.Search{}, merged
 	}
 	return search, nil
 }
@@ -61,7 +61,7 @@ func decimalParam(errs *validation.Errors, field, raw string) *decimal.Decimal {
 	if raw == "" {
 		return nil
 	}
-	d, err := core.ParseDecimal(raw)
+	d, err := domain.ParseDecimal(raw)
 	if err != nil {
 		errs.Add(field, validation.CodeInvalidFormat, err.Error())
 		return nil
@@ -84,10 +84,10 @@ func positiveParam(errs *validation.Errors, field, raw string) int {
 	if raw == "" {
 		return 0
 	}
-	n, err := core.ParseWholeNumber(raw)
+	n, err := domain.ParseWholeNumber(raw)
 	switch {
 	case err != nil:
-		errs.Add(field, core.WholeNumberErrorCode(err), err.Error())
+		errs.Add(field, domain.WholeNumberErrorCode(err), err.Error())
 		return 1
 	case n < 1:
 		errs.Add(field, validation.CodeOutOfRange, "must be at least 1")

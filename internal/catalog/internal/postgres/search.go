@@ -8,19 +8,19 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/database"
 )
 
-var sortColumns = map[core.SortField]string{
-	core.SortName:      "products.name",
-	core.SortPrice:     "products.price",
-	core.SortCreatedAt: "products.created_at",
+var sortColumns = map[domain.SortField]string{
+	domain.SortName:      "products.name",
+	domain.SortPrice:     "products.price",
+	domain.SortCreatedAt: "products.created_at",
 }
 
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
-func (r *Repository) Search(ctx context.Context, s core.Search) ([]core.Product, int, error) {
+func (r *Repository) Search(ctx context.Context, s domain.Search) ([]domain.Product, int, error) {
 	where, args := filters(s)
 	q := database.Q(ctx, r.pool)
 
@@ -41,7 +41,7 @@ func (r *Repository) Search(ctx context.Context, s core.Search) ([]core.Product,
 	if err != nil {
 		return nil, 0, fmt.Errorf("catalog: search products: %w", err)
 	}
-	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (core.Product, error) {
+	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Product, error) {
 		return scanProduct(row)
 	})
 	if err != nil {
@@ -50,7 +50,7 @@ func (r *Repository) Search(ctx context.Context, s core.Search) ([]core.Product,
 	return items, total, nil
 }
 
-func filters(s core.Search) (string, []any) {
+func filters(s domain.Search) (string, []any) {
 	conds := []string{"status = 'ACTIVE'"}
 	var args []any
 	param := func(value any) string {

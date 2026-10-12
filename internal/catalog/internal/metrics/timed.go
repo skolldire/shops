@@ -6,11 +6,11 @@ import (
 	"io"
 	"time"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
 )
 
 type FileImporter interface {
-	Import(ctx context.Context, r io.Reader, fileName string) (core.ImportReport, error)
+	Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error)
 }
 
 type TimedImporter struct {
@@ -28,7 +28,7 @@ func NewTimedImporter(next FileImporter, instruments Instruments) (*TimedImporte
 	return &TimedImporter{next: next, instruments: instruments}, nil
 }
 
-func (t *TimedImporter) Import(ctx context.Context, r io.Reader, fileName string) (core.ImportReport, error) {
+func (t *TimedImporter) Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error) {
 	start := time.Now()
 	defer func() {
 		t.instruments.Histogram(context.WithoutCancel(ctx), importDuration, time.Since(start).Seconds())

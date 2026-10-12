@@ -10,7 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 )
 
 const importHeader = "name,sku,description,category,price,stock,weight_kg\n"
@@ -101,7 +101,7 @@ func TestModuleSeed(t *testing.T) {
 
 	t.Run("does nothing when there are products already", func(t *testing.T) {
 		m, repo := newTestModule(t)
-		repo.products["existing"] = core.Product{ID: "existing", SKU: "OLD-1"}
+		repo.products["existing"] = domain.Product{ID: "existing", SKU: "OLD-1"}
 		file := strings.NewReader(content)
 
 		report, seeded, err := m.Seed(ctx, file)

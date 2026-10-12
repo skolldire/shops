@@ -1,4 +1,4 @@
-package core_test
+package domain_test
 
 import (
 	"strings"
@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 )
 
 func TestParseDecimalAccepts(t *testing.T) {
@@ -21,7 +21,7 @@ func TestParseDecimalAccepts(t *testing.T) {
 		"  42.5  ":             "42.5",
 	}
 	for raw, want := range tests {
-		d, err := core.ParseDecimal(raw)
+		d, err := domain.ParseDecimal(raw)
 		require.NoError(t, err, raw)
 		require.Equal(t, want, d.String(), raw)
 	}
@@ -33,8 +33,8 @@ func TestParseDecimalRejects(t *testing.T) {
 		"1,000.00", "NaN", "Infinity", "", "  ",
 		strings.Repeat("1", 14), "1." + strings.Repeat("1", 7), "0x10", "1_000", "--1",
 	} {
-		_, err := core.ParseDecimal(raw)
-		require.ErrorIs(t, err, core.ErrInvalidDecimal, raw)
+		_, err := domain.ParseDecimal(raw)
+		require.ErrorIs(t, err, domain.ErrInvalidDecimal, raw)
 		require.EqualError(t, err, "must be a plain decimal number such as 29.99", raw)
 	}
 }
@@ -43,12 +43,12 @@ func TestParseDecimalRejectsHugeExponentsQuickly(t *testing.T) {
 	for _, raw := range []string{"1e100000000", "1e-100000000"} {
 		done := make(chan error, 1)
 		go func() {
-			_, err := core.ParseDecimal(raw)
+			_, err := domain.ParseDecimal(raw)
 			done <- err
 		}()
 		select {
 		case err := <-done:
-			require.ErrorIs(t, err, core.ErrInvalidDecimal, raw)
+			require.ErrorIs(t, err, domain.ErrInvalidDecimal, raw)
 		case <-time.After(time.Second):
 			t.Fatalf("%s took longer than 1s to reject", raw)
 		}

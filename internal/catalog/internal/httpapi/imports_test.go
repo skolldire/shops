@@ -15,27 +15,27 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
 
 type fakeImporter struct {
-	report core.ImportReport
+	report app.ImportReport
 	err    error
 	calls  int
 	name   string
 	body   string
 }
 
-func (f *fakeImporter) Import(_ context.Context, r io.Reader, fileName string) (core.ImportReport, error) {
+func (f *fakeImporter) Import(_ context.Context, r io.Reader, fileName string) (app.ImportReport, error) {
 	f.calls++
 	f.name = fileName
 	body, err := io.ReadAll(r)
 	f.body = string(body)
 	if err != nil {
-		return core.ImportReport{}, fmt.Errorf("catalog: read import file: %w", err)
+		return app.ImportReport{}, fmt.Errorf("catalog: read import file: %w", err)
 	}
 	return f.report, f.err
 }
@@ -75,10 +75,10 @@ func upload(t *testing.T, h http.Handler, field, name, content string, extra ...
 }
 
 func TestImportReturnsTheReportEvenWithRejectedRows(t *testing.T) {
-	importer := &fakeImporter{report: core.ImportReport{
-		File:    core.ImportFile{Name: "products.csv", Bytes: 10240, SHA256: "6fc46b84"},
+	importer := &fakeImporter{report: app.ImportReport{
+		File:    app.ImportFile{Name: "products.csv", Bytes: 10240, SHA256: "6fc46b84"},
 		Records: 97, Skipped: 2, Created: 80, Updated: 1, Unchanged: 1, Rejected: 13,
-		Errors: []core.RowError{
+		Errors: []app.RowError{
 			{Line: 12, SKU: "BS-021", Field: "sku", Code: "duplicate_in_file", Message: "also used on lines 57 and 90"},
 			{Line: 15, SKU: "XY-003", Field: "price", Code: "invalid_format", Message: "must be a plain decimal number such as 29.99"},
 		},
@@ -102,7 +102,7 @@ func TestImportReturnsTheReportEvenWithRejectedRows(t *testing.T) {
 }
 
 func TestImportWithoutErrorsReturnsAnEmptyList(t *testing.T) {
-	h, _ := newImportServer(t, &fakeImporter{report: core.ImportReport{Errors: []core.RowError{}}}, 1<<20)
+	h, _ := newImportServer(t, &fakeImporter{report: app.ImportReport{Errors: []app.RowError{}}}, 1<<20)
 
 	rec := upload(t, h, "file", "products.csv", "name\n")
 
@@ -117,10 +117,10 @@ func TestImportErrorTable(t *testing.T) {
 		code   string
 		detail string
 	}{
-		"another header":     {core.ErrInvalidHeader, 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
-		"malformed csv":      {&core.InvalidCSVError{Line: 7, Reason: "bare quote"}, 400, "invalid_csv", "Line 7: bare quote."},
-		"too many rows":      {core.ErrTooManyRows, 400, "too_many_rows", "more rows"},
-		"file too large":     {core.ErrFileTooLarge, 413, "request_too_large", "larger than the import limit"},
+		"another header":     {app.ErrInvalidHeader, 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
+		"malformed csv":      {&app.InvalidCSVError{Line: 7, Reason: "bare quote"}, 400, "invalid_csv", "Line 7: bare quote."},
+		"too many rows":      {app.ErrTooManyRows, 400, "too_many_rows", "more rows"},
+		"file too large":     {app.ErrFileTooLarge, 413, "request_too_large", "larger than the import limit"},
 		"unexpected failure": {errors.New("db exploded: host=10.0.0.5"), 500, "internal_error", "unexpected"},
 	}
 	for name, tt := range tests {

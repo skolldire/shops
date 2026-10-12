@@ -36,18 +36,24 @@ lint-comments:
 	@! grep -rn '<!--' --include='*.html' internal || { echo "HTML comments are not allowed"; exit 1; }
 	@! grep -rn '/[*]' --include='*.css' internal || { echo "CSS comments are not allowed"; exit 1; }
 
-CORE_IMPORTS := cmp|context|errors|fmt|regexp|slices|strconv|strings|time|unicode/utf8|github[.]com/shopspring/decimal|github[.]com/skolldire/shops/internal/platform/validation
+CATALOG := github[.]com/skolldire/shops/internal/catalog/internal
+SHARED_IMPORTS := github[.]com/shopspring/decimal|github[.]com/skolldire/shops/internal/platform/validation
+DOMAIN_IMPORTS := errors|regexp|strconv|strings|time|unicode/utf8|$(SHARED_IMPORTS)
+APP_IMPORTS := cmp|context|errors|fmt|regexp|slices|strconv|strings|$(SHARED_IMPORTS)|$(CATALOG)/domain
+FORBIDDEN_DEPS := github[.]com/jackc/pgx|net/http$$|net/url$$|database/sql$$|github[.]com/go-chi|go[.]opentelemetry[.]io|github[.]com/skolldire/shops/internal/platform/(httpx|telemetry|database|logger)
 
 lint-arch:
-	@imports="$$($(GO) list -f '{{join .Imports "\n"}}' ./internal/catalog/internal/core)" || { echo "go list failed for catalog core"; exit 1; }; \
-	! printf '%s\n' "$$imports" | grep -vE '^($(CORE_IMPORTS))$$' || { echo "catalog core may only import the packages in CORE_IMPORTS: no adapters, file formats, logging, transport or persistence"; exit 1; }
-	@deps="$$($(GO) list -deps ./internal/catalog/internal/core)" || { echo "go list failed for catalog core"; exit 1; }; \
-	! printf '%s\n' "$$deps" | grep -E '^(github.com/jackc/pgx|net/http$$|net/url$$|database/sql$$|github.com/go-chi|go.opentelemetry.io|github.com/skolldire/shops/internal/platform/(httpx|telemetry|database))' || { echo "catalog core must not depend on transport, persistence or telemetry"; exit 1; }
+	@imports="$$($(GO) list -f '{{join .Imports "\n"}}' ./internal/catalog/internal/domain)" || { echo "go list failed for catalog domain"; exit 1; }; \
+	! printf '%s\n' "$$imports" | grep -vE '^($(DOMAIN_IMPORTS))$$' || { echo "catalog domain may only import the packages in DOMAIN_IMPORTS: no use cases, ports, adapters, logging, transport or persistence"; exit 1; }
+	@imports="$$($(GO) list -f '{{join .Imports "\n"}}' ./internal/catalog/internal/app)" || { echo "go list failed for catalog app"; exit 1; }; \
+	! printf '%s\n' "$$imports" | grep -vE '^($(APP_IMPORTS))$$' || { echo "catalog app may only import the packages in APP_IMPORTS: the domain, but no adapters, file formats, logging, transport or persistence"; exit 1; }
+	@deps="$$($(GO) list -deps ./internal/catalog/internal/domain ./internal/catalog/internal/app)" || { echo "go list failed for catalog domain and app"; exit 1; }; \
+	! printf '%s\n' "$$deps" | grep -E '^($(FORBIDDEN_DEPS))' || { echo "catalog domain and app must not depend on transport, persistence, logging or telemetry"; exit 1; }
 	@deps="$$($(GO) list -deps ./internal/platform/...)" || { echo "go list failed for platform"; exit 1; }; \
 	! printf '%s\n' "$$deps" | grep -E '^github.com/skolldire/shops/internal/(catalog|web|ordering|payment)' || { echo "platform must not depend on business modules"; exit 1; }
 
 lint-decimals:
-	@! grep -rln --include='*.go' 'decimal.NewFromString' internal | grep -vE '^internal/catalog/internal/(core/decimal\.go|postgres/)' || { echo "parse decimals with catalog.ParseDecimal or core.ParseDecimal, not decimal.NewFromString"; exit 1; }
+	@! grep -rln --include='*.go' 'decimal.NewFromString' internal | grep -vE '^internal/catalog/internal/(domain/decimal\.go|postgres/)' || { echo "parse decimals with catalog.ParseDecimal or domain.ParseDecimal, not decimal.NewFromString"; exit 1; }
 
 tidy-check:
 	$(GO) mod tidy -diff

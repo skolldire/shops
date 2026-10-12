@@ -1,4 +1,4 @@
-package core
+package app
 
 import (
 	"cmp"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/validation"
 )
 
@@ -116,7 +117,7 @@ func NewImporter(store ProductUpserter, rec ImportRecorder, failures ImportFailu
 type importRow struct {
 	line    int
 	sku     string
-	product Product
+	product domain.Product
 	errs    validation.Errors
 }
 
@@ -194,7 +195,7 @@ func (i *Importer) validate(rows []ImportRow, report *ImportReport) []importRow 
 }
 
 func (i *Importer) apply(ctx context.Context, batch []importRow, report *ImportReport) error {
-	products := make([]Product, len(batch))
+	products := make([]domain.Product, len(batch))
 	for index, row := range batch {
 		products[index] = row.product
 	}
@@ -210,7 +211,7 @@ func (i *Importer) apply(ctx context.Context, batch []importRow, report *ImportR
 	}
 	i.failures.BatchRetried(ctx, len(batch), err)
 	for _, row := range batch {
-		outcomes, err := i.store.Upsert(ctx, []Product{row.product})
+		outcomes, err := i.store.Upsert(ctx, []domain.Product{row.product})
 		if err == nil {
 			count(report, row, outcomes[row.sku])
 			continue
@@ -247,24 +248,20 @@ func count(report *ImportReport, row importRow, outcome UpsertOutcome) {
 func newImportRow(row ImportRow) importRow {
 	var format validation.Errors
 	f := row.Fields
-	product, err := NewProduct(NewProductInput{
+	product, err := domain.NewProduct(domain.NewProductInput{
 		Name: f.Name, SKU: f.SKU, Description: f.Description, Category: f.Category,
 		Price:    decimalCell(&format, "price", f.Price),
 		Stock:    wholeCell(&format, "stock", f.Stock),
 		WeightKg: decimalCell(&format, "weight_kg", f.WeightKg),
 	})
-	return importRow{line: row.Line, sku: NormalizeSKU(f.SKU), product: product, errs: rowErrors(format, err)}
-}
-
-func NormalizeSKU(raw string) string {
-	return strings.ToUpper(strings.TrimSpace(raw))
+	return importRow{line: row.Line, sku: domain.NormalizeSKU(f.SKU), product: product, errs: rowErrors(format, err)}
 }
 
 func decimalCell(errs *validation.Errors, field, raw string) *decimal.Decimal {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
-	d, err := ParseDecimal(raw)
+	d, err := domain.ParseDecimal(raw)
 	if err != nil {
 		errs.Add(field, validation.CodeInvalidFormat, err.Error())
 		return nil
@@ -276,9 +273,9 @@ func wholeCell(errs *validation.Errors, field, raw string) *int64 {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
-	n, err := ParseWholeNumber(raw)
+	n, err := domain.ParseWholeNumber(raw)
 	if err != nil {
-		errs.Add(field, WholeNumberErrorCode(err), err.Error())
+		errs.Add(field, domain.WholeNumberErrorCode(err), err.Error())
 		return nil
 	}
 	return &n

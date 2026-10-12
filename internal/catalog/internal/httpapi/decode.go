@@ -9,7 +9,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/validation"
 )
 
@@ -47,9 +47,9 @@ func decodeBody(r *http.Request) (productBody, error) {
 	return body, nil
 }
 
-func (b productBody) createInput() (core.NewProductInput, validation.Errors) {
+func (b productBody) createInput() (domain.NewProductInput, validation.Errors) {
 	var errs validation.Errors
-	in := core.NewProductInput{
+	in := domain.NewProductInput{
 		SKU:         stringValue(&errs, "sku", b.SKU),
 		Name:        stringValue(&errs, "name", b.Name),
 		Description: stringValue(&errs, "description", b.Description),
@@ -61,9 +61,9 @@ func (b productBody) createInput() (core.NewProductInput, validation.Errors) {
 	return in, errs
 }
 
-func (b productBody) changes() (core.Changes, validation.Errors) {
+func (b productBody) changes() (domain.Changes, validation.Errors) {
 	var errs validation.Errors
-	c := core.Changes{
+	c := domain.Changes{
 		Name:        stringField(&errs, "name", b.Name),
 		Description: stringField(&errs, "description", b.Description),
 		Category:    stringField(&errs, "category", b.Category),
@@ -107,9 +107,9 @@ func decimalField(errs *validation.Errors, field string, raw json.RawMessage) *d
 			literal = ""
 		}
 	}
-	d, err := core.ParseDecimal(literal)
+	d, err := domain.ParseDecimal(literal)
 	if bytes.Equal(raw, null) || err != nil {
-		errs.Add(field, validation.CodeInvalidFormat, core.ErrInvalidDecimal.Error())
+		errs.Add(field, validation.CodeInvalidFormat, domain.ErrInvalidDecimal.Error())
 		return nil
 	}
 	return &d
@@ -119,9 +119,9 @@ func intField(errs *validation.Errors, field string, raw json.RawMessage) *int64
 	if raw == nil {
 		return nil
 	}
-	n, err := core.ParseWholeNumber(string(raw))
+	n, err := domain.ParseWholeNumber(string(raw))
 	if err != nil {
-		errs.Add(field, core.WholeNumberErrorCode(err), err.Error())
+		errs.Add(field, domain.WholeNumberErrorCode(err), err.Error())
 		return nil
 	}
 	return &n
