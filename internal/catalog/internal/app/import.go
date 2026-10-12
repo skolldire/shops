@@ -31,27 +31,7 @@ const (
 	importBatchSize = 500
 )
 
-var (
-	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
-	ErrInvalidCSV    = errors.New("catalog: invalid csv")
-	ErrTooManyRows   = errors.New("catalog: the csv has too many rows")
-	ErrFileTooLarge  = errors.New("catalog: the csv file is too large")
-)
-
 type UpsertOutcome string
-
-type InvalidCSVError struct {
-	Line   int
-	Reason string
-}
-
-func (e *InvalidCSVError) Error() string {
-	return fmt.Sprintf("catalog: invalid csv on line %d: %s", e.Line, e.Reason)
-}
-
-func (e *InvalidCSVError) Is(target error) bool {
-	return target == ErrInvalidCSV
-}
 
 type ImportRow struct {
 	Line      int

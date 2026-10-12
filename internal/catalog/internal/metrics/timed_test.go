@@ -65,7 +65,7 @@ func TestTimedImporterRecordsTheDurationOfEveryOutcome(t *testing.T) {
 		cancelled bool
 	}{
 		"imported":                 {app.ImportReport{Records: 97, Created: 82}, nil, false},
-		"file rejected as a whole": {app.ImportReport{}, app.ErrInvalidHeader, false},
+		"file rejected as a whole": {app.ImportReport{}, errors.New("the file was rejected"), false},
 		"interrupted":              {app.ImportReport{Records: 1200, Created: 500}, context.Canceled, true},
 		"unexpected failure":       {app.ImportReport{}, errors.New("boom"), false},
 	}

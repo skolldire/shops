@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -149,13 +150,13 @@ func TestImporterRejectsTheWholeFile(t *testing.T) {
 		body   string
 		target error
 	}{
-		"another header":   {"sku,name\n" + row, app.ErrInvalidHeader},
-		"empty file":       {"", app.ErrInvalidHeader},
-		"broken quotes":    {header + "A,\"A-1,,A,5,1,1\n", app.ErrInvalidCSV},
-		"invalid utf-8":    {header + "A\xff,A-1,,A,5,1,1\n", app.ErrInvalidCSV},
-		"too many rows":    {header + strings.Repeat(",,,,,,\n", 4), app.ErrTooManyRows},
-		"too many bytes":   {header + row + strings.Repeat(" ", 200), app.ErrFileTooLarge},
-		"rows before size": {header + strings.Repeat(row, 4), app.ErrTooManyRows},
+		"another header":   {"sku,name\n" + row, csvimport.ErrInvalidHeader},
+		"empty file":       {"", csvimport.ErrInvalidHeader},
+		"broken quotes":    {header + "A,\"A-1,,A,5,1,1\n", csvimport.ErrInvalidCSV},
+		"invalid utf-8":    {header + "A\xff,A-1,,A,5,1,1\n", csvimport.ErrInvalidCSV},
+		"too many rows":    {header + strings.Repeat(",,,,,,\n", 4), csvimport.ErrTooManyRows},
+		"too many bytes":   {header + row + strings.Repeat(" ", 200), csvimport.ErrFileTooLarge},
+		"rows before size": {header + strings.Repeat(row, 4), csvimport.ErrTooManyRows},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -173,7 +174,7 @@ func TestImporterRejectsTheWholeFile(t *testing.T) {
 func TestImporterReportsTheLineOfAMalformedFile(t *testing.T) {
 	_, err := newImporter(t, &fakeRows{}, roomy).Import(context.Background(), strings.NewReader(header+"A,A-1,,A,5,1,1\nB,\"B-1,,A,5,1,1\n"), "products.csv")
 
-	var invalid *app.InvalidCSVError
+	var invalid *csvimport.FormatError
 	require.ErrorAs(t, err, &invalid)
 	require.Equal(t, 3, invalid.Line)
 	require.NotEmpty(t, invalid.Reason)
@@ -230,9 +231,15 @@ func TestNewImporterRequiresItsDependencies(t *testing.T) {
 	require.EqualError(t, err, "catalog: csv importer requires positive limits")
 }
 
-func TestImporterErrorsAreTheOnesTheUseCaseDeclares(t *testing.T) {
-	_, err := newImporter(t, &fakeRows{}, roomy).Import(context.Background(), strings.NewReader("sku,name\n"), "products.csv")
-
-	require.True(t, errors.Is(err, app.ErrInvalidHeader))
-	require.False(t, errors.Is(err, csvimport.ErrInvalidHeader), "the adapter's own error does not leak")
+func TestIsRejectionTellsFileErrorsFromOtherFailures(t *testing.T) {
+	for _, err := range []error{
+		csvimport.ErrInvalidHeader, csvimport.ErrInvalidCSV, csvimport.ErrTooManyRows, csvimport.ErrFileTooLarge,
+		&csvimport.FormatError{Line: 3, Reason: "bare quote"},
+		fmt.Errorf("wrapped: %w", csvimport.ErrTooManyRows),
+	} {
+		require.True(t, csvimport.IsRejection(err), err.Error())
+	}
+	for _, err := range []error{nil, context.Canceled, io.ErrUnexpectedEOF, errors.New("boom")} {
+		require.False(t, csvimport.IsRejection(err))
+	}
 }

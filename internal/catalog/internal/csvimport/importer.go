@@ -126,17 +126,14 @@ func cleanFileName(raw string) string {
 	return name
 }
 
+func IsRejection(err error) bool {
+	return errors.Is(err, ErrInvalidHeader) || errors.Is(err, ErrInvalidCSV) ||
+		errors.Is(err, ErrTooManyRows) || errors.Is(err, ErrFileTooLarge)
+}
+
 func readError(err error) error {
-	var format *FormatError
-	switch {
-	case errors.Is(err, app.ErrFileTooLarge):
-		return app.ErrFileTooLarge
-	case errors.Is(err, ErrInvalidHeader):
-		return app.ErrInvalidHeader
-	case errors.Is(err, ErrTooManyRows):
-		return app.ErrTooManyRows
-	case errors.As(err, &format):
-		return &app.InvalidCSVError{Line: format.Line, Reason: format.Reason}
+	if IsRejection(err) {
+		return err
 	}
 	return fmt.Errorf("catalog: read import file: %w", err)
 }
@@ -152,7 +149,7 @@ func (m *meteredReader) Read(p []byte) (int, error) {
 	n, err := m.r.Read(p)
 	m.n += int64(n)
 	if m.n > m.max {
-		return 0, app.ErrFileTooLarge
+		return 0, ErrFileTooLarge
 	}
 	_, _ = m.hash.Write(p[:n])
 	return n, err

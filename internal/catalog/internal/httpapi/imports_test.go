@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
@@ -117,10 +118,10 @@ func TestImportErrorTable(t *testing.T) {
 		code   string
 		detail string
 	}{
-		"another header":     {app.ErrInvalidHeader, 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
-		"malformed csv":      {&app.InvalidCSVError{Line: 7, Reason: "bare quote"}, 400, "invalid_csv", "Line 7: bare quote."},
-		"too many rows":      {app.ErrTooManyRows, 400, "too_many_rows", "more rows"},
-		"file too large":     {app.ErrFileTooLarge, 413, "request_too_large", "larger than the import limit"},
+		"another header":     {csvimport.ErrInvalidHeader, 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
+		"malformed csv":      {&csvimport.FormatError{Line: 7, Reason: "bare quote"}, 400, "invalid_csv", "Line 7: bare quote."},
+		"too many rows":      {csvimport.ErrTooManyRows, 400, "too_many_rows", "more rows"},
+		"file too large":     {csvimport.ErrFileTooLarge, 413, "request_too_large", "larger than the import limit"},
 		"unexpected failure": {errors.New("db exploded: host=10.0.0.5"), 500, "internal_error", "unexpected"},
 	}
 	for name, tt := range tests {

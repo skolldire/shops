@@ -15,6 +15,7 @@ var (
 	ErrInvalidHeader = errors.New("csvimport: the header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("csvimport: invalid csv")
 	ErrTooManyRows   = errors.New("csvimport: too many rows")
+	ErrFileTooLarge  = errors.New("csvimport: the file is too large")
 
 	header = []string{"name", "sku", "description", "category", "price", "stock", "weight_kg"}
 	bom    = []byte{0xEF, 0xBB, 0xBF}

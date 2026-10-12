@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
@@ -125,16 +126,16 @@ func (h *ImportHandler) partError(w http.ResponseWriter, r *http.Request, err er
 func (h *ImportHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
 		tooLarge *http.MaxBytesError
-		invalid  *app.InvalidCSVError
+		invalid  *csvimport.FormatError
 	)
 	switch {
-	case errors.Is(err, app.ErrFileTooLarge), errors.As(err, &tooLarge):
+	case errors.Is(err, csvimport.ErrFileTooLarge), errors.As(err, &tooLarge):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusRequestEntityTooLarge, Code: "request_too_large", Detail: "The CSV file is larger than the import limit."})
-	case errors.Is(err, app.ErrInvalidHeader):
+	case errors.Is(err, csvimport.ErrInvalidHeader):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_header", Detail: "The first line must be exactly name,sku,description,category,price,stock,weight_kg."})
 	case errors.As(err, &invalid):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_csv", Detail: fmt.Sprintf("Line %d: %s.", invalid.Line, invalid.Reason)})
-	case errors.Is(err, app.ErrTooManyRows):
+	case errors.Is(err, csvimport.ErrTooManyRows):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "too_many_rows", Detail: "The CSV has more rows than the import limit."})
 	default:
 		h.log.Error(r.Context(), err, map[string]any{"component": "catalog"})

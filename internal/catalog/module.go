@@ -237,13 +237,13 @@ func fromReport(r app.ImportReport) ImportReport {
 }
 
 func publicImportError(err error) error {
-	var invalid *app.InvalidCSVError
+	var invalid *csvimport.FormatError
 	switch {
-	case errors.Is(err, app.ErrFileTooLarge):
+	case errors.Is(err, csvimport.ErrFileTooLarge):
 		return ErrFileTooLarge
-	case errors.Is(err, app.ErrInvalidHeader):
+	case errors.Is(err, csvimport.ErrInvalidHeader):
 		return ErrInvalidHeader
-	case errors.Is(err, app.ErrTooManyRows):
+	case errors.Is(err, csvimport.ErrTooManyRows):
 		return ErrTooManyRows
 	case errors.As(err, &invalid):
 		return &InvalidCSVError{Line: invalid.Line, Reason: invalid.Reason}
