@@ -14,12 +14,15 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/metrics"
 )
 
-type fakeInstruments struct {
-	counters   map[string]int64
+type fakeCounters struct {
+	counters map[string]int64
+}
+
+type fakeHistograms struct {
 	histograms map[string][]float64
 }
 
-func (f *fakeInstruments) Counter(_ context.Context, name string, value int64, attrs ...attribute.KeyValue) {
+func (f *fakeCounters) Counter(_ context.Context, name string, value int64, attrs ...attribute.KeyValue) {
 	if f.counters == nil {
 		f.counters = map[string]int64{}
 	}
@@ -29,7 +32,7 @@ func (f *fakeInstruments) Counter(_ context.Context, name string, value int64, a
 	f.counters[name] += value
 }
 
-func (f *fakeInstruments) Histogram(_ context.Context, name string, value float64, _ ...attribute.KeyValue) {
+func (f *fakeHistograms) Histogram(_ context.Context, name string, value float64, _ ...attribute.KeyValue) {
 	if f.histograms == nil {
 		f.histograms = map[string][]float64{}
 	}
@@ -62,8 +65,8 @@ func TestTimedImporterRecordsTheDurationOfEveryOutcome(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			next := &fakeFileImporter{report: tt.report, err: tt.err}
-			instruments := &fakeInstruments{}
-			timed, err := metrics.NewTimedImporter(next, instruments)
+			histograms := &fakeHistograms{}
+			timed, err := metrics.NewTimedImporter(next, histograms)
 			require.NoError(t, err)
 
 			report, err := timed.Import(context.Background(), strings.NewReader("name,sku\n"), "products.csv")
@@ -72,23 +75,23 @@ func TestTimedImporterRecordsTheDurationOfEveryOutcome(t *testing.T) {
 			require.Equal(t, tt.err, err)
 			require.Equal(t, "products.csv", next.name)
 			require.Equal(t, "name,sku\n", next.body)
-			require.Len(t, instruments.histograms["import_duration_seconds"], 1)
-			require.GreaterOrEqual(t, instruments.histograms["import_duration_seconds"][0], 0.0)
-			require.Empty(t, instruments.counters, "rows are counted by the use case, not here")
+			require.Len(t, histograms.histograms["import_duration_seconds"], 1)
+			require.GreaterOrEqual(t, histograms.histograms["import_duration_seconds"][0], 0.0)
+			require.Len(t, histograms.histograms, 1, "the decorator records nothing else")
 		})
 	}
 }
 
 func TestNewTimedImporterRequiresItsDependencies(t *testing.T) {
-	_, err := metrics.NewTimedImporter(nil, &fakeInstruments{})
+	_, err := metrics.NewTimedImporter(nil, &fakeHistograms{})
 	require.EqualError(t, err, "catalog: timed importer requires an importer")
 	_, err = metrics.NewTimedImporter(&fakeFileImporter{}, nil)
-	require.EqualError(t, err, "catalog: timed importer requires instruments")
+	require.EqualError(t, err, "catalog: timed importer requires histograms")
 }
 
 func TestImportRecorderCountsRowsByOutcome(t *testing.T) {
-	instruments := &fakeInstruments{}
-	recorder, err := metrics.NewImportRecorder(instruments)
+	counters := &fakeCounters{}
+	recorder, err := metrics.NewImportRecorder(counters)
 	require.NoError(t, err)
 
 	recorder.RecordRows(context.Background(), "created", 82)
@@ -98,6 +101,5 @@ func TestImportRecorderCountsRowsByOutcome(t *testing.T) {
 	require.Equal(t, map[string]int64{
 		"import_rows_total{outcome=created}":  85,
 		"import_rows_total{outcome=rejected}": 13,
-	}, instruments.counters)
-	require.Empty(t, instruments.histograms)
+	}, counters.counters)
 }

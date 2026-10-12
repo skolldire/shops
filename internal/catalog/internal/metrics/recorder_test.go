@@ -42,12 +42,12 @@ func TestImportRecorderExposesRowsByOutcomeAndDuration(t *testing.T) {
 	require.Contains(t, body, `import_rows_total{outcome="skipped"} 2`)
 	require.Contains(t, body, `import_rows_total{outcome="rejected"} 13`)
 	require.Contains(t, body, `import_duration_seconds_count 1`)
-	require.Contains(t, body, `import_duration_seconds_bucket{le="0.05"} 1`)
-	require.Contains(t, body, `import_duration_seconds_bucket{le="10"} 1`)
+	require.Contains(t, body, `import_duration_seconds_bucket{le="+Inf"} 1`)
+	require.Contains(t, body, `import_duration_seconds_bucket{le="0.05"}`, "buckets are in seconds")
 	require.NotContains(t, body, `import_duration_seconds_bucket{le="250"}`)
 }
 
 func TestNewImportRecorderRequiresMetrics(t *testing.T) {
 	_, err := metrics.NewImportRecorder(nil)
-	require.EqualError(t, err, "catalog: import recorder requires metrics")
+	require.EqualError(t, err, "catalog: import recorder requires counters")
 }
