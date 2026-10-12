@@ -1,54 +1,142 @@
+---
 language: en-US
-
 reviews:
   profile: assertive
   review_details: true
   request_changes_workflow: true
-
   pre_merge_checks:
     docstrings:
-      mode: "off"
+      mode: 'off'
     title:
       mode: warning
-      requirements: "Start with a gitmoji such as :sparkles:, :bug:, :recycle: or :memo:, followed by an imperative summary in English."
+      requirements: 'Start with a gitmoji such as :sparkles:, :bug:, :recycle: or
+        :memo:, followed by an imperative summary in English.'
     description:
       mode: warning
     custom_checks:
       - name: Repository conventions
         mode: error
         instructions: |
-          Fail if the change breaks any of these repository rules:
-          - No comments in Go, SQL, YAML, Dockerfile or Makefile files. The //go:build and //go:embed directives are allowed.
-          - The loaded configuration is never logged, and secrets or resolved configuration values never appear in logs, errors or HTTP responses.
-          - Business modules depend on each other only through their public api.go facade, and internal/platform imports no business module.
-          - No foreign keys between tables owned by different modules.
-          - Dependencies are wired manually in cmd/api: no global state, no init functions and no package-level loggers.
-
+          Fail only for a demonstrated violation introduced or materially changed by this PR:
+          - No comments in Go, SQL, YAML, Dockerfile or Makefile files. Required //go:build and //go:embed directives are allowed.
+          - Loaded configuration, secrets and resolved configuration values are never logged or exposed through errors or responses.
+          - Business modules communicate through public module contracts, without importing another module's implementation packages.
+          - internal/platform imports no business module. No cross-module foreign keys or direct access to another module's tables.
+          - Dependencies are wired manually in cmd/api or explicit module composition constructors. No mutable global application state, init-based wiring or package-level logger instances. Immutable constants and read-only lookup values are allowed.
+          Cite the changed code and actual dependency or data flow for each failure. Existing unrelated debt is not a reason to fail this check.
+      - name: Clean and hexagonal dependency boundaries
+        mode: error
+        instructions: |
+          Inspect changed code and relevant consumers. Fail if the PR introduces or materially changes any of these violations:
+          - Domain entities or policies import adapters, transport, persistence, file-format parsing, logging implementations or telemetry SDKs.
+          - Application use cases import concrete adapters, construct infrastructure clients or read environment/configuration directly.
+          - Domain/application contracts expose HTTP requests, ORM models, SQL transaction/row types, broker messages or provider-specific responses.
+          - A required output contract is owned by a concrete adapter instead of its domain/application consumer.
+          - Transport or persistence implements a business invariant independently rather than using its existing owner.
+          Ports are contracts; adapters implement them. Interfaces belong near consumers, usually in application, and in domain only when a domain policy needs them.
+          Composition may import concrete implementations. Pure computational dependencies and boundary DTO mappings are not automatically violations.
+          In a mixed core package, assess the responsibility of each changed type/function rather than assuming everything is domain. Parsing must remain outside business use cases.
+          Provide a concrete import, exposed type or duplicated policy as evidence. Do not fail for folder names, missing interfaces for concrete types, or unrelated pre-existing debt.
+      - name: Error ownership and observability boundaries
+        mode: error
+        instructions: |
+          Fail for a demonstrated new or materially changed violation:
+          - Domain code emits operational logs or directly invokes tracing/metrics SDKs.
+          - The same propagated failure is logged at multiple layers without distinct recovery, audit or terminal-handling purposes.
+          - Public responses expose internal errors or sensitive data.
+          - Request-derived blocking I/O drops cancellation by replacing its context with Background/TODO without a justified independent lifecycle.
+          - Metric labels contain unbounded IDs, emails, full URLs, raw error text or sensitive data.
+          - A counter claims committed business success before confirmation, or counts retries as distinct completed business events despite its stated semantics.
+          - Changed duration instrumentation omits an early-return path while claiming to measure every attempt.
+          Application may expose a minimal consumer-owned observability contract; implementations, SDKs and exporters stay outside it. Recovery and dead-letter decisions may be logged once at their owner. Access logs are distinct from failure logs.
+          Cite the relevant execution path and consequence. Missing instrumentation alone does not fail this check; report meaningful coverage gaps in the review.
+      - name: Behavioral contracts and regression evidence
+        mode: error
+        instructions: |
+          Fail when a changed adapter or test double demonstrably violates its consumed contract concerning error identity, supported outcomes, cancellation, atomicity, idempotency or optimistic concurrency.
+          Fail when an intentional public behavior/contract change is not identified in the PR description and relevant documentation.
+          Fail when a bug fix or changed business invariant lacks a behavioral regression test that exercises the affected outcome, unless the PR explains why such a test cannot meaningfully be automated and provides concrete alternative validation.
+          Inspect actual assertions; a passing mock call expectation alone is not proof of business behavior. Do not require tests for cosmetic edits or unchanged behavior.
+      - name: Evidence-based simplicity and SOLID
+        mode: warning
+        instructions: |
+          Report concrete design costs introduced or materially changed by this PR:
+          - SRP: parsing, policy, orchestration or persistence share unrelated reasons to change.
+          - OCP: a demonstrated extension leaks provider selection into business rules.
+          - LSP: implementations weaken a consumed behavioral contract.
+          - ISP: a consumer must implement unrelated capabilities it never uses.
+          - DIP: business decisions depend on concrete infrastructure.
+          - DRY: the same business invariant has independent owners and can diverge.
+          - KISS: indirection has no demonstrated isolation, translation, policy, instrumentation or other current purpose.
+          - YAGNI: a new public production abstraction has no current consumer or supported requirement.
+          Explain the affected consumer, maintenance cost and smallest useful correction. Do not recommend generic frameworks, one interface per struct, microservices, CQRS or event sourcing without present requirements.
+          Use warning for design judgment; reserve error findings for concrete contract/dependency violations covered by other checks.
   auto_review:
     enabled: true
     drafts: false
-
   path_instructions:
     - path: "**/*.go"
       instructions: |
+        Architectural review policy:
+        - Act as an expert Go architect. Review actual imports, contracts, execution paths and invariants, not directory names.
+        - Treat the project as a modular monolith unless requirements explicitly call for independent deployment. Preserve module autonomy and public facades.
+        - Domain owns entities, value objects and business invariants. It performs no transport, persistence, file parsing, operational logging or SDK instrumentation.
+        - Application owns use cases, coordination and output contracts. It depends on domain, not concrete adapters.
+        - Ports are consumer-owned contracts; adapters implement them. Domain defines a port only when a domain policy actually needs it. Input adapters may define narrow interfaces for the use cases they consume.
+        - Input adapters decode formats and translate requests/results. Output adapters translate provider types and errors. Business invariants have one internal owner.
+        - Composition in cmd/api and explicit module constructors may import all required implementations. Do not flag this as DIP failure.
+        - Do not expose HTTP, SQL, ORM, broker or vendor SDK types through business contracts. Preserve necessary DTO translations at public boundaries.
+        - Application selects atomic operation boundaries; infrastructure implements transactions. Do not leak concrete transactions into domain.
+        - Protect cancellation and distinguish rollback, committed partial progress and ambiguous commit outcomes. Preserve existing import guarantees during refactoring.
+        
+        Error and logging policy:
+        - Domain returns classifiable business errors. Application adds useful context with wrapping or decides recovery. Adapters translate technical errors where appropriate.
+        - Use errors.Is/errors.As, not comparisons of error text. Preserve relevant causes without exposing internals to clients.
+        - Log an unexpected failure once where it is finally handled: HTTP/gRPC boundary, exhausted worker retries, startup or another terminal owner.
+        - Do not log-and-return the same failure at every layer. Recovery, audit and access records have distinct purposes and are permitted.
+        - Expected rejection is not automatically ERROR. Classify cancellation according to lifecycle and actual outcome.
+        - Keep logger implementations outside business code; application may use a minimal owned reporting contract where a recovery decision needs observability.
+        
+        Tracing policy:
+        - Extract/start trace context at HTTP, gRPC and message boundaries. Propagate context.Context through blocking work.
+        - Instrument external I/O in adapters. Add useful use-case spans with external decorators, or a minimal application-owned contract when internal detail is justified.
+        - Keep OpenTelemetry providers, exporters and SDKs in infrastructure/composition. No direct domain instrumentation.
+        - Avoid duplicate auto-instrumented spans and one-span-per-function tracing. Mark failures according to operation semantics, not merely non-nil errors.
+        - Do not record sensitive payloads or credentials. Examine the full call path before claiming propagation is missing.
+        
+        Metrics policy:
+        - Transport owns request rate, duration and status; output adapters own dependency latency/errors; application results own confirmed business outcomes; workers own attempts/retries/dead letters; infrastructure owns runtime/pool telemetry.
+        - Use decorators or narrow application-owned recorders to keep SDKs out of business logic.
+        - Duration metrics cover all claimed outcomes, including early failures and cancellations. Record business success after confirmation and account for retries/duplicates.
+        - Use bounded labels such as operation, normalized route and outcome. Never IDs, emails, raw URLs, free-text errors or secrets.
+        - Instrument meaningful operations, not every function. Distinguish process measurements from durable business accounting.
+        
+        Strictness and evidence:
+        - Review all changed responsibilities and relevant callers. Report touched existing violations and newly introduced coupling; summarize unrelated debt without demanding a broad rewrite.
+        - For every finding state the exact code, triggering condition or dependency, concrete impact, and minimal correction. Distinguish defects, architecture debt and preferences.
+        - Apply SRP/OCP/LSP/ISP/DIP with Go composition and small consumer interfaces. Verify real substitute behavior, including errors and cancellation.
+        - DRY concerns duplicated knowledge, not similar syntax. KISS requires useful responsibility per layer. YAGNI requires a present consumer or supported contract for new abstractions.
+        - Do not propose abstractions or patterns solely to satisfy a checklist. Pure helper packages and computational libraries are not automatically infrastructure coupling.
+        - Require import-boundary checks for enforceable dependency rules and behavioral tests for changed invariants/contracts. Do not claim architecture compliance from folder names or green AI checks alone.
+        
         Act as a senior Go engineer reviewing production code.
         Prioritize correctness, security, reliability, and maintainability.
         Apply these criteria where relevant to the changed code.
-
+        
         Correctness and error handling:
         - Identify functional bugs, regressions, nil dereferences,
           incorrect assumptions, and unhandled edge cases.
         - Check error propagation, wrapping, and errors.Is/errors.As usage.
         - Flag ignored errors and panics in normal recoverable error paths.
         - Verify resource cleanup and partial-failure behavior.
-
+        
         Idiomatic Go:
         - Prefer clear, idiomatic Go and useful zero values.
         - Keep interfaces small and define them near their consumers.
         - Check pointer/value receiver consistency and mutation semantics.
         - Avoid unnecessary interfaces, embedding, reflection, and globals.
         - Follow established repository conventions when they are sound.
-
+        
         SOLID and separation of concerns:
         - Identify responsibilities that change for unrelated reasons.
         - Keep business logic separate from transport and persistence.
@@ -59,7 +147,7 @@ reviews:
           isolates external dependencies.
         - Apply SOLID pragmatically; do not force class-oriented patterns
           into Go or introduce abstractions without a concrete benefit.
-
+        
         DRY, KISS, and YAGNI:
         - Flag duplicated business rules that could diverge.
         - Distinguish meaningful duplication from coincidentally similar code.
@@ -67,28 +155,28 @@ reviews:
         - Identify unnecessary indirection, speculative extensibility,
           dead code, and premature optimization.
         - Suggest extraction only when it improves clarity or consistency.
-
+        
         Design patterns:
         - Assess whether existing patterns solve an actual problem.
         - Suggest patterns only for demonstrated variation, coupling,
           lifecycle, or testing needs.
         - Explain the benefit and tradeoff of each proposed pattern.
         - Avoid pattern-driven rewrites and generic frameworks.
-
+        
         Concurrency and lifecycle:
         - Check for data races, goroutine leaks, deadlocks, and unsafe sharing.
         - Verify channel ownership, closure, cancellation, and backpressure.
         - Ensure context.Context propagates through blocking operations.
         - Check bounded concurrency, timeouts, and graceful shutdown.
         - Review synchronization assumptions and concurrent error handling.
-
+        
         Security:
         - Review input validation, authentication, and authorization.
         - Check injection risks and unsafe handling of paths and URLs.
         - Flag exposed secrets and sensitive information in logs or errors.
         - Check trust boundaries and tenant isolation where applicable.
         - Identify unbounded resource consumption from untrusted inputs.
-
+        
         APIs, persistence, and external services:
         - Check API compatibility and appropriate error/status semantics.
         - Review transaction boundaries, rollback, and data consistency.
@@ -97,7 +185,7 @@ reviews:
         - Flag N+1 queries and inefficient operations on demonstrated
           high-volume paths.
         - Verify migrations preserve compatibility when relevant.
-
+        
         Testing:
         - Identify missing tests for changed behavior, regressions,
           boundary conditions, and failure paths.
@@ -105,13 +193,13 @@ reviews:
         - Check whether mocks hide integration or contract failures.
         - Recommend race or integration tests when the risk warrants them.
         - Avoid tests that merely duplicate implementation details.
-
+        
         Observability:
         - Check that failures provide actionable diagnostic context.
         - Review logging levels and avoid duplicate or sensitive logs.
         - Assess metrics and tracing for important failure boundaries.
         - Flag high-cardinality labels when they can grow without bounds.
-
+        
         Review quality:
         - Prioritize actionable findings over cosmetic preferences.
         - Inspect relevant callers and contracts before claiming a defect.
@@ -120,7 +208,6 @@ reviews:
         - State missing context instead of presenting assumptions as facts.
         - Do not demand broad refactors unrelated to the change.
         - Avoid repeating findings already reported by automated tools.
-
     - path: "**/*_test.go"
       instructions: |
         Focus on behavioral coverage, readable test cases, isolation,
@@ -128,7 +215,21 @@ reviews:
         Review happy paths, boundary conditions, and failure scenarios.
         Check cleanup, parallel-test safety, and timing assumptions.
         Avoid unnecessary mocking and assertions tied to internal details.
-
+        Verify substitute implementations preserve the production contract, especially error identity, cancellation, transactions and concurrency.
+        Assert business outcomes, not only mock invocations. Add meaningful regression coverage for changed invariants and bug fixes.
+        Keep domain tests infrastructure-free. Use real integration tests where SQL, migrations, transaction boundaries or external protocol behavior determine correctness.
+        For instrumentation changes, exercise success, early failure, cancellation and recovery; ensure telemetry failures do not alter business results.
+    - path: "**/Makefile"
+      instructions: |
+        Inspect architecture-check targets and their CI invocation. Flag newly weakened checks that allow forbidden business-to-adapter dependencies or platform-to-business imports.
+        Rules should enforce actual dependency boundaries, permit explicit composition, and fail when dependency enumeration fails.
+        Do not treat folder-name checks as proof of architecture. Preserve the existing no-comment convention.
+    - path: ".github/workflows/**"
+      instructions: |
+        Verify applicable PRs run architecture/import checks, relevant tests and existing security checks. Flag disabled or bypassed enforcement introduced by this PR.
+        Keep permissions minimal and do not expose secrets. Required merge gating must be backed by branch protection/rulesets; workflow presence alone does not guarantee it.
   tools:
     golangci-lint:
       enabled: true
+  allow_author_approval: false
+  fail_commit_status: true
