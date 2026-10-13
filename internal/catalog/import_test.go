@@ -1,8 +1,10 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -140,6 +142,48 @@ func TestModuleSeed(t *testing.T) {
 		require.Equal(t, ImportReport{}, report, "a file rejected as a whole has no report")
 		require.False(t, seeded)
 	})
+}
+
+func TestModuleImportRouteTranslatesFileRejections(t *testing.T) {
+	post := func(content string) *httptest.ResponseRecorder {
+		m, _ := newTestModule(t)
+		r := chi.NewRouter()
+		r.Route("/api/v1", m.RegisterImportRoutes)
+		var body bytes.Buffer
+		form := multipart.NewWriter(&body)
+		part, err := form.CreateFormFile("file", "products.csv")
+		require.NoError(t, err)
+		_, err = part.Write([]byte(content))
+		require.NoError(t, err)
+		require.NoError(t, form.Close())
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/imports", &body)
+		req.Header.Set("Content-Type", form.FormDataContentType())
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+	tests := map[string]struct {
+		content string
+		status  int
+		code    string
+	}{
+		"another header": {"sku,name\n", 400, "invalid_header"},
+		"malformed csv":  {importHeader + "A,\"A-1,,A,5,1,1\n", 400, "invalid_csv"},
+		"too many rows":  {importHeader + strings.Repeat(",,,,,,\n", 101), 400, "too_many_rows"},
+		"too large":      {importHeader + strings.Repeat(" ", 1<<20), 413, "request_too_large"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			rec := post(tt.content)
+
+			require.Equal(t, tt.status, rec.Code, rec.Body.String())
+			require.Contains(t, rec.Body.String(), `"code":"`+tt.code+`"`)
+		})
+	}
+
+	ok := post(importHeader + "Shoes,RS-1,,Sports,9.99,1,0.3\n")
+	require.Equal(t, http.StatusOK, ok.Code, ok.Body.String())
+	require.Contains(t, ok.Body.String(), `"created":1`)
 }
 
 func TestModuleRegistersImportRoutes(t *testing.T) {

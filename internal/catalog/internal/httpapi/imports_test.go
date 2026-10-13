@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
-	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
@@ -41,12 +40,40 @@ func (f *fakeImporter) Import(_ context.Context, r io.Reader, fileName string) (
 	return f.report, f.err
 }
 
+var (
+	errHeader   = errors.New("another header")
+	errRows     = errors.New("too many rows")
+	errTooLarge = errors.New("too large")
+)
+
+type formatError struct {
+	line   int
+	reason string
+}
+
+func (e *formatError) Error() string { return "malformed" }
+
+func classify(err error) httpapi.ImportFailure {
+	var format *formatError
+	switch {
+	case errors.Is(err, errTooLarge):
+		return httpapi.ImportFailure{Rejection: httpapi.RejectedFileTooLarge}
+	case errors.Is(err, errHeader):
+		return httpapi.ImportFailure{Rejection: httpapi.RejectedInvalidHeader}
+	case errors.Is(err, errRows):
+		return httpapi.ImportFailure{Rejection: httpapi.RejectedTooManyRows}
+	case errors.As(err, &format):
+		return httpapi.ImportFailure{Rejection: httpapi.RejectedInvalidFormat, Line: format.line, Reason: format.reason}
+	}
+	return httpapi.ImportFailure{}
+}
+
 func newImportServer(t *testing.T, importer *fakeImporter, maxBody int64) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
-	h, err := httpapi.NewImports(importer, log)
+	h, err := httpapi.NewImports(importer, classify, log)
 	require.NoError(t, err)
 	r := chi.NewRouter()
 	r.Route("/api/v1", func(r chi.Router) {
@@ -118,10 +145,11 @@ func TestImportErrorTable(t *testing.T) {
 		code   string
 		detail string
 	}{
-		"another header":     {csvimport.ErrInvalidHeader, 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
-		"malformed csv":      {&csvimport.FormatError{Line: 7, Reason: "bare quote"}, 400, "invalid_csv", "Line 7: bare quote."},
-		"too many rows":      {csvimport.ErrTooManyRows, 400, "too_many_rows", "more rows"},
-		"file too large":     {csvimport.ErrFileTooLarge, 413, "request_too_large", "larger than the import limit"},
+		"another header":     {errHeader, 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
+		"wrapped header":     {fmt.Errorf("reading: %w", errHeader), 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
+		"malformed csv":      {&formatError{line: 7, reason: "bare quote"}, 400, "invalid_csv", "Line 7: bare quote."},
+		"too many rows":      {errRows, 400, "too_many_rows", "more rows"},
+		"file too large":     {errTooLarge, 413, "request_too_large", "larger than the import limit"},
 		"unexpected failure": {errors.New("db exploded: host=10.0.0.5"), 500, "internal_error", "unexpected"},
 	}
 	for name, tt := range tests {
@@ -136,6 +164,8 @@ func TestImportErrorTable(t *testing.T) {
 			require.NotContains(t, rec.Body.String(), "10.0.0.5")
 			if tt.status == 500 {
 				require.Contains(t, logs.String(), "db exploded")
+			} else {
+				require.Empty(t, logs.String(), "an expected rejection is not logged as a failure")
 			}
 		})
 	}
@@ -204,8 +234,10 @@ func TestNewImportsRequiresDependencies(t *testing.T) {
 	log, err := logger.New(logger.Config{Level: "info"}, io.Discard)
 	require.NoError(t, err)
 
-	_, err = httpapi.NewImports(nil, log)
+	_, err = httpapi.NewImports(nil, classify, log)
 	require.EqualError(t, err, "catalog: import handler requires an importer")
-	_, err = httpapi.NewImports(&fakeImporter{}, nil)
+	_, err = httpapi.NewImports(&fakeImporter{}, nil, log)
+	require.EqualError(t, err, "catalog: import handler requires a failure classifier")
+	_, err = httpapi.NewImports(&fakeImporter{}, classify, nil)
 	require.EqualError(t, err, "catalog: import handler requires a logger")
 }

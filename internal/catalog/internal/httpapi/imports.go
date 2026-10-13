@@ -10,7 +10,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
-	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
@@ -21,19 +20,40 @@ type Importer interface {
 	Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error)
 }
 
+type ImportRejection int
+
+const (
+	NotRejected ImportRejection = iota
+	RejectedFileTooLarge
+	RejectedInvalidHeader
+	RejectedInvalidFormat
+	RejectedTooManyRows
+)
+
+type ImportFailure struct {
+	Rejection ImportRejection
+	Line      int
+	Reason    string
+}
+
+type ImportFailureClassifier func(err error) ImportFailure
+
 type ImportHandler struct {
 	importer Importer
+	classify ImportFailureClassifier
 	log      logger.Service
 }
 
-func NewImports(importer Importer, log logger.Service) (*ImportHandler, error) {
-	if importer == nil {
+func NewImports(importer Importer, classify ImportFailureClassifier, log logger.Service) (*ImportHandler, error) {
+	switch {
+	case importer == nil:
 		return nil, errors.New("catalog: import handler requires an importer")
-	}
-	if log == nil {
+	case classify == nil:
+		return nil, errors.New("catalog: import handler requires a failure classifier")
+	case log == nil:
 		return nil, errors.New("catalog: import handler requires a logger")
 	}
-	return &ImportHandler{importer: importer, log: log}, nil
+	return &ImportHandler{importer: importer, classify: classify, log: log}, nil
 }
 
 func (h *ImportHandler) Routes(r chi.Router) {
@@ -124,18 +144,16 @@ func (h *ImportHandler) partError(w http.ResponseWriter, r *http.Request, err er
 }
 
 func (h *ImportHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {
-	var (
-		tooLarge *http.MaxBytesError
-		invalid  *csvimport.FormatError
-	)
+	var tooLarge *http.MaxBytesError
+	failure := h.classify(err)
 	switch {
-	case errors.Is(err, csvimport.ErrFileTooLarge), errors.As(err, &tooLarge):
+	case failure.Rejection == RejectedFileTooLarge, errors.As(err, &tooLarge):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusRequestEntityTooLarge, Code: "request_too_large", Detail: "The CSV file is larger than the import limit."})
-	case errors.Is(err, csvimport.ErrInvalidHeader):
+	case failure.Rejection == RejectedInvalidHeader:
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_header", Detail: "The first line must be exactly name,sku,description,category,price,stock,weight_kg."})
-	case errors.As(err, &invalid):
-		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_csv", Detail: fmt.Sprintf("Line %d: %s.", invalid.Line, invalid.Reason)})
-	case errors.Is(err, csvimport.ErrTooManyRows):
+	case failure.Rejection == RejectedInvalidFormat:
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_csv", Detail: fmt.Sprintf("Line %d: %s.", failure.Line, failure.Reason)})
+	case failure.Rejection == RejectedTooManyRows:
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "too_many_rows", Detail: "The CSV has more rows than the import limit."})
 	default:
 		h.log.Error(r.Context(), err, map[string]any{"component": "catalog"})

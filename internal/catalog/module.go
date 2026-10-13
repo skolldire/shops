@@ -96,7 +96,7 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	imports, err := httpapi.NewImports(importer, d.Log)
+	imports, err := httpapi.NewImports(importer, classifyImportError, d.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -246,17 +246,31 @@ func fromReport(r app.ImportReport) ImportReport {
 	return out
 }
 
-func publicImportError(err error) error {
+func classifyImportError(err error) httpapi.ImportFailure {
 	var invalid *csvimport.FormatError
 	switch {
 	case errors.Is(err, csvimport.ErrFileTooLarge):
-		return ErrFileTooLarge
+		return httpapi.ImportFailure{Rejection: httpapi.RejectedFileTooLarge}
 	case errors.Is(err, csvimport.ErrInvalidHeader):
-		return ErrInvalidHeader
+		return httpapi.ImportFailure{Rejection: httpapi.RejectedInvalidHeader}
 	case errors.Is(err, csvimport.ErrTooManyRows):
-		return ErrTooManyRows
+		return httpapi.ImportFailure{Rejection: httpapi.RejectedTooManyRows}
 	case errors.As(err, &invalid):
-		return &InvalidCSVError{Line: invalid.Line, Reason: invalid.Reason}
+		return httpapi.ImportFailure{Rejection: httpapi.RejectedInvalidFormat, Line: invalid.Line, Reason: invalid.Reason}
+	}
+	return httpapi.ImportFailure{}
+}
+
+func publicImportError(err error) error {
+	switch failure := classifyImportError(err); failure.Rejection {
+	case httpapi.RejectedFileTooLarge:
+		return ErrFileTooLarge
+	case httpapi.RejectedInvalidHeader:
+		return ErrInvalidHeader
+	case httpapi.RejectedTooManyRows:
+		return ErrTooManyRows
+	case httpapi.RejectedInvalidFormat:
+		return &InvalidCSVError{Line: failure.Line, Reason: failure.Reason}
 	}
 	return err
 }
