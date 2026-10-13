@@ -12,7 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/database"
 )
 
@@ -38,7 +39,7 @@ func NewRepository(pool *pgxpool.Pool) (*Repository, error) {
 	return &Repository{pool: pool, tx: tx}, nil
 }
 
-func (r *Repository) Create(ctx context.Context, p core.Product) (core.Product, error) {
+func (r *Repository) Create(ctx context.Context, p domain.Product) (domain.Product, error) {
 	row := database.Q(ctx, r.pool).QueryRow(ctx,
 		`INSERT INTO products (sku, name, description, category, price, stock, weight_kg)
 		 VALUES ($1, $2, $3, $4, $5::numeric, $6, $7::numeric)
@@ -46,28 +47,28 @@ func (r *Repository) Create(ctx context.Context, p core.Product) (core.Product, 
 		p.SKU, p.Name, p.Description, p.Category, p.Price.String(), p.Stock, p.WeightKg.String())
 	created, err := scanProduct(row)
 	if isSKUTaken(err) {
-		return core.Product{}, core.ErrSKUTaken
+		return domain.Product{}, app.ErrSKUTaken
 	}
 	if err != nil {
-		return core.Product{}, fmt.Errorf("catalog: insert product: %w", err)
+		return domain.Product{}, fmt.Errorf("catalog: insert product: %w", err)
 	}
 	return created, nil
 }
 
-func (r *Repository) Get(ctx context.Context, id string) (core.Product, error) {
+func (r *Repository) Get(ctx context.Context, id string) (domain.Product, error) {
 	row := database.Q(ctx, r.pool).QueryRow(ctx,
 		`SELECT `+columns+` FROM products WHERE id = $1::uuid AND status = 'ACTIVE'`, id)
 	p, err := scanProduct(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return core.Product{}, core.ErrNotFound
+		return domain.Product{}, app.ErrNotFound
 	}
 	if err != nil {
-		return core.Product{}, fmt.Errorf("catalog: get product: %w", err)
+		return domain.Product{}, fmt.Errorf("catalog: get product: %w", err)
 	}
 	return p, nil
 }
 
-func (r *Repository) Update(ctx context.Context, id string, version int, c core.Changes) (core.Product, error) {
+func (r *Repository) Update(ctx context.Context, id string, version int, c domain.Changes) (domain.Product, error) {
 	set := []string{"version = version + 1", "updated_at = now()"}
 	args := []any{id, version}
 	add := func(column, cast string, value any) {
@@ -99,10 +100,10 @@ func (r *Repository) Update(ctx context.Context, id string, version int, c core.
 		 RETURNING `+columns, args...)
 	p, err := scanProduct(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return core.Product{}, r.missOrConflict(ctx, id)
+		return domain.Product{}, r.missOrConflict(ctx, id)
 	}
 	if err != nil {
-		return core.Product{}, fmt.Errorf("catalog: update product: %w", err)
+		return domain.Product{}, fmt.Errorf("catalog: update product: %w", err)
 	}
 	return p, nil
 }
@@ -143,27 +144,27 @@ func (r *Repository) missOrConflict(ctx context.Context, id string) error {
 	case err != nil:
 		return fmt.Errorf("catalog: check product: %w", err)
 	case exists:
-		return core.ErrVersionConflict
+		return app.ErrVersionConflict
 	default:
-		return core.ErrNotFound
+		return app.ErrNotFound
 	}
 }
 
-func scanProduct(row pgx.Row) (core.Product, error) {
+func scanProduct(row pgx.Row) (domain.Product, error) {
 	var (
-		p             core.Product
+		p             domain.Product
 		price, weight string
 	)
 	if err := row.Scan(&p.ID, &p.SKU, &p.Name, &p.Description, &p.Category,
 		&price, &p.Stock, &weight, &p.Version, &p.CreatedAt, &p.UpdatedAt); err != nil {
-		return core.Product{}, err
+		return domain.Product{}, err
 	}
 	var err error
 	if p.Price, err = decimal.NewFromString(price); err != nil {
-		return core.Product{}, fmt.Errorf("catalog: parse price: %w", err)
+		return domain.Product{}, fmt.Errorf("catalog: parse price: %w", err)
 	}
 	if p.WeightKg, err = decimal.NewFromString(weight); err != nil {
-		return core.Product{}, fmt.Errorf("catalog: parse weight: %w", err)
+		return domain.Product{}, fmt.Errorf("catalog: parse weight: %w", err)
 	}
 	return p, nil
 }

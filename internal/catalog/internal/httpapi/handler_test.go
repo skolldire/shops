@@ -15,7 +15,8 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
@@ -26,8 +27,8 @@ const id = "2b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
 
 var stamp = time.Date(2026, 10, 9, 17, 0, 0, 0, time.UTC)
 
-func sample() core.Product {
-	return core.Product{
+func sample() domain.Product {
+	return domain.Product{
 		ID: id, SKU: "RS-001", Name: "Running Shoes", Description: "Light", Category: "Sports",
 		Price: decimal.RequireFromString("29.9"), Stock: 10, WeightKg: decimal.RequireFromString("0.85"),
 		Version: 3, CreatedAt: stamp, UpdatedAt: stamp.Add(5 * time.Minute),
@@ -37,14 +38,14 @@ func sample() core.Product {
 type fakeService struct {
 	err     error
 	creates int
-	created core.NewProductInput
+	created domain.NewProductInput
 	version int
-	changes core.Changes
-	search  core.Search
+	changes domain.Changes
+	search  domain.Search
 	cats    []string
 }
 
-func (f *fakeService) Create(_ context.Context, in core.NewProductInput) (core.Product, error) {
+func (f *fakeService) Create(_ context.Context, in domain.NewProductInput) (domain.Product, error) {
 	f.creates++
 	f.created = in
 	p := sample()
@@ -52,9 +53,9 @@ func (f *fakeService) Create(_ context.Context, in core.NewProductInput) (core.P
 	return p, f.err
 }
 
-func (f *fakeService) Get(context.Context, string) (core.Product, error) { return sample(), f.err }
+func (f *fakeService) Get(context.Context, string) (domain.Product, error) { return sample(), f.err }
 
-func (f *fakeService) Update(_ context.Context, _ string, version int, c core.Changes) (core.Product, error) {
+func (f *fakeService) Update(_ context.Context, _ string, version int, c domain.Changes) (domain.Product, error) {
 	f.version, f.changes = version, c
 	p := sample()
 	p.Version = version + 1
@@ -66,9 +67,9 @@ func (f *fakeService) Delete(_ context.Context, _ string, version int) error {
 	return f.err
 }
 
-func (f *fakeService) Search(_ context.Context, s core.Search) (core.Page, error) {
+func (f *fakeService) Search(_ context.Context, s domain.Search) (app.Page, error) {
 	f.search = s
-	return core.Page{Items: []core.Product{sample()}, Page: s.Page, PageSize: s.PageSize, Total: 41}, f.err
+	return app.Page{Items: []domain.Product{sample()}, Page: s.Page, PageSize: s.PageSize, Total: 41}, f.err
 }
 
 func (f *fakeService) Categories(context.Context) ([]string, error) { return f.cats, f.err }
@@ -211,7 +212,7 @@ func TestSearch(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "50%", svc.search.Q)
-	require.Equal(t, core.SortPrice, svc.search.Sort)
+	require.Equal(t, domain.SortPrice, svc.search.Sort)
 	var page struct {
 		Items    []map[string]any `json:"items"`
 		Page     int              `json:"page"`
@@ -252,10 +253,10 @@ func TestErrorTable(t *testing.T) {
 		"domain rules":            {fieldErr("name", "required"), http.MethodPost, "/api/v1/products", validBody, nil, 422, "validation_failed"},
 		"sku in patch":            {fieldErr("sku", "immutable"), http.MethodPatch, "/api/v1/products/" + id, `{"sku":"X"}`, []string{"If-Match", `"3"`}, 422, "validation_failed"},
 		"invalid search":          {nil, http.MethodGet, "/api/v1/products?page=0&sort=stock", "", nil, 422, "validation_failed"},
-		"not found":               {core.ErrNotFound, http.MethodGet, "/api/v1/products/" + id, "", nil, 404, "not_found"},
-		"sku taken":               {core.ErrSKUTaken, http.MethodPost, "/api/v1/products", validBody, nil, 409, "sku_taken"},
-		"version conflict patch":  {core.ErrVersionConflict, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, []string{"If-Match", `"1"`}, 412, "version_conflict"},
-		"version conflict delete": {core.ErrVersionConflict, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", `"1"`}, 412, "version_conflict"},
+		"not found":               {app.ErrNotFound, http.MethodGet, "/api/v1/products/" + id, "", nil, 404, "not_found"},
+		"sku taken":               {app.ErrSKUTaken, http.MethodPost, "/api/v1/products", validBody, nil, 409, "sku_taken"},
+		"version conflict patch":  {app.ErrVersionConflict, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, []string{"If-Match", `"1"`}, 412, "version_conflict"},
+		"version conflict delete": {app.ErrVersionConflict, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", `"1"`}, 412, "version_conflict"},
 		"patch without if-match":  {nil, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, nil, 428, "precondition_required"},
 		"delete without if-match": {nil, http.MethodDelete, "/api/v1/products/" + id, "", nil, 428, "precondition_required"},
 		"if-match wildcard":       {nil, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", "*"}, 428, "precondition_required"},

@@ -39,7 +39,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	healthSvc.Register("postgres", dbChecker)
 
 	limits := catalog.ImportLimits{MaxBytes: cfg.Import.MaxBytes, MaxRows: cfg.Import.MaxRows}
-	products, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: log, Metrics: tel, Import: limits})
+	products, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: log, Metrics: tel, Tracer: tel, Import: limits})
 	if err != nil {
 		return nil, err
 	}

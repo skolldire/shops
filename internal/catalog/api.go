@@ -101,6 +101,17 @@ type UpdateInput struct {
 	WeightKg    *decimal.Decimal
 }
 
+type SearchParams struct {
+	Q        string
+	Category string
+	MinPrice string
+	MaxPrice string
+	InStock  string
+	Sort     string
+	Page     string
+	PageSize string
+}
+
 type SearchQuery struct {
 	Q        string
 	Category string

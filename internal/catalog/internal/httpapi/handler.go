@@ -8,7 +8,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/httpquery"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
@@ -16,11 +17,11 @@ import (
 )
 
 type Service interface {
-	Create(ctx context.Context, in core.NewProductInput) (core.Product, error)
-	Get(ctx context.Context, id string) (core.Product, error)
-	Update(ctx context.Context, id string, version int, c core.Changes) (core.Product, error)
+	Create(ctx context.Context, in domain.NewProductInput) (domain.Product, error)
+	Get(ctx context.Context, id string) (domain.Product, error)
+	Update(ctx context.Context, id string, version int, c domain.Changes) (domain.Product, error)
 	Delete(ctx context.Context, id string, version int) error
-	Search(ctx context.Context, s core.Search) (core.Page, error)
+	Search(ctx context.Context, s domain.Search) (app.Page, error)
 	Categories(ctx context.Context) ([]string, error)
 }
 
@@ -69,7 +70,7 @@ type pageJSON struct {
 	Total    int           `json:"total"`
 }
 
-func toJSON(p core.Product) productJSON {
+func toJSON(p domain.Product) productJSON {
 	return productJSON{
 		ID:          p.ID,
 		SKU:         p.SKU,
@@ -111,7 +112,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	in, formatErrs := body.createInput()
 	if len(formatErrs) > 0 {
-		_, domainErr := core.NewProduct(in)
+		_, domainErr := domain.NewProduct(in)
 		h.writeError(w, r, validation.Merge(formatErrs, domainErr))
 		return
 	}
@@ -146,7 +147,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	changes, formatErrs := body.changes()
 	if len(formatErrs) > 0 {
-		_, domainErr := core.ValidateChanges(changes)
+		_, domainErr := domain.ValidateChanges(changes)
 		h.writeError(w, r, validation.Merge(formatErrs, domainErr))
 		return
 	}
@@ -183,7 +184,7 @@ func (h *Handler) categories(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, categories)
 }
 
-func (h *Handler) writeProduct(w http.ResponseWriter, status int, p core.Product) {
+func (h *Handler) writeProduct(w http.ResponseWriter, status int, p domain.Product) {
 	w.Header().Set("ETag", etag(p.Version))
 	httpx.WriteJSON(w, status, toJSON(p))
 }

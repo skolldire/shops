@@ -1,19 +1,21 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
-	"io/fs"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
+	"github.com/skolldire/shops/internal/platform/logger"
 )
 
 const importHeader = "name,sku,description,category,price,stock,weight_kg\n"
@@ -86,19 +88,17 @@ func TestModuleImportErrorsArePublic(t *testing.T) {
 }
 
 func TestModuleSeed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "demo-products.csv")
-	require.NoError(t, os.WriteFile(path, []byte(importHeader+"Shoes,RS-1,,Sports,9.99,1,0.3\nBad,BAD-1,,Sports,free,1,0.3\n"), 0o600))
+	const content = importHeader + "Shoes,RS-1,,Sports,9.99,1,0.3\nBad,BAD-1,,Sports,free,1,0.3\n"
 	ctx := context.Background()
 
 	t.Run("imports the file when there are no products", func(t *testing.T) {
 		m, repo := newTestModule(t)
 
-		report, seeded, err := m.Seed(ctx, path)
+		report, seeded, err := m.Seed(ctx, strings.NewReader(content))
 
 		require.NoError(t, err)
 		require.True(t, seeded)
 		require.Equal(t, "seed.csv", report.File.Name)
-		require.NotEqual(t, "seed.csv", filepath.Base(path), "the report does not carry the configured file name")
 		require.Equal(t, 1, report.Created)
 		require.Equal(t, 1, report.Rejected, "rejected rows are not a failure")
 		require.Len(t, repo.products, 1)
@@ -106,27 +106,16 @@ func TestModuleSeed(t *testing.T) {
 
 	t.Run("does nothing when there are products already", func(t *testing.T) {
 		m, repo := newTestModule(t)
-		repo.products["existing"] = core.Product{ID: "existing", SKU: "OLD-1"}
+		repo.products["existing"] = domain.Product{ID: "existing", SKU: "OLD-1"}
+		file := strings.NewReader(content)
 
-		report, seeded, err := m.Seed(ctx, path)
+		report, seeded, err := m.Seed(ctx, file)
 
 		require.NoError(t, err)
 		require.False(t, seeded)
 		require.Equal(t, ImportReport{}, report)
 		require.Len(t, repo.products, 1)
-	})
-
-	t.Run("fails when the file is missing, even with products", func(t *testing.T) {
-		m, repo := newTestModule(t)
-		repo.products["existing"] = core.Product{ID: "existing", SKU: "OLD-1"}
-		missing := filepath.Join(t.TempDir(), "nope.csv")
-
-		_, seeded, err := m.Seed(ctx, missing)
-
-		require.ErrorIs(t, err, fs.ErrNotExist)
-		require.EqualError(t, err, "catalog: open seed file: no such file or directory")
-		require.NotContains(t, err.Error(), "nope.csv", "the configured path stays out of the error")
-		require.False(t, seeded)
+		require.Equal(t, len(content), file.Len(), "the file is not read")
 	})
 
 	t.Run("returns what was applied when the import is interrupted", func(t *testing.T) {
@@ -134,7 +123,7 @@ func TestModuleSeed(t *testing.T) {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
 
-		report, seeded, err := m.Seed(cancelled, path)
+		report, seeded, err := m.Seed(cancelled, strings.NewReader(content))
 
 		require.ErrorIs(t, err, context.Canceled)
 		require.ErrorContains(t, err, "catalog: import seed file: ")
@@ -146,16 +135,55 @@ func TestModuleSeed(t *testing.T) {
 
 	t.Run("fails when the file is not a valid import", func(t *testing.T) {
 		m, _ := newTestModule(t)
-		broken := filepath.Join(t.TempDir(), "broken.csv")
-		require.NoError(t, os.WriteFile(broken, []byte("sku,name\n"), 0o600))
 
-		report, seeded, err := m.Seed(ctx, broken)
+		report, seeded, err := m.Seed(ctx, strings.NewReader("sku,name\n"))
 
 		require.ErrorIs(t, err, ErrInvalidHeader)
 		require.Equal(t, ImportReport{}, report, "a file rejected as a whole has no report")
-		require.NotContains(t, err.Error(), "broken.csv")
 		require.False(t, seeded)
 	})
+}
+
+func TestModuleImportRouteTranslatesFileRejections(t *testing.T) {
+	post := func(content string) *httptest.ResponseRecorder {
+		m, _ := newTestModule(t)
+		r := chi.NewRouter()
+		r.Route("/api/v1", m.RegisterImportRoutes)
+		var body bytes.Buffer
+		form := multipart.NewWriter(&body)
+		part, err := form.CreateFormFile("file", "products.csv")
+		require.NoError(t, err)
+		_, err = part.Write([]byte(content))
+		require.NoError(t, err)
+		require.NoError(t, form.Close())
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/imports", &body)
+		req.Header.Set("Content-Type", form.FormDataContentType())
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+	tests := map[string]struct {
+		content string
+		status  int
+		code    string
+	}{
+		"another header": {"sku,name\n", 400, "invalid_header"},
+		"malformed csv":  {importHeader + "A,\"A-1,,A,5,1,1\n", 400, "invalid_csv"},
+		"too many rows":  {importHeader + strings.Repeat(",,,,,,\n", 101), 400, "too_many_rows"},
+		"too large":      {importHeader + strings.Repeat(" ", 1<<20), 413, "request_too_large"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			rec := post(tt.content)
+
+			require.Equal(t, tt.status, rec.Code, rec.Body.String())
+			require.Contains(t, rec.Body.String(), `"code":"`+tt.code+`"`)
+		})
+	}
+
+	ok := post(importHeader + "Shoes,RS-1,,Sports,9.99,1,0.3\n")
+	require.Equal(t, http.StatusOK, ok.Code, ok.Body.String())
+	require.Contains(t, ok.Body.String(), `"created":1`)
 }
 
 func TestModuleRegistersImportRoutes(t *testing.T) {
@@ -168,4 +196,98 @@ func TestModuleRegistersImportRoutes(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "invalid_request")
+}
+
+type spanRecorder struct {
+	names []string
+	open  []string
+	paths []string
+}
+
+func (r *spanRecorder) Span(ctx context.Context, name string, fn func(ctx context.Context) error, _ ...attribute.KeyValue) error {
+	r.names = append(r.names, name)
+	r.open = append(r.open, name)
+	r.paths = append(r.paths, strings.Join(r.open, " > "))
+	err := fn(ctx)
+	r.open = r.open[:len(r.open)-1]
+	return err
+}
+
+func TestModuleImportIsTracedAsOneSpan(t *testing.T) {
+	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
+	require.NoError(t, err)
+	spans := &spanRecorder{}
+	deps := testDeps(log)
+	deps.Tracer = spans
+	m, err := newModule(&memoryRepo{products: map[string]domain.Product{}}, deps)
+	require.NoError(t, err)
+
+	_, err = m.Import(context.Background(), strings.NewReader(importHeader+"Shoes,RS-1,,Sports,9.99,1,0.3\n"), ImportOptions{FileName: "products.csv"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"catalog.import"}, spans.paths, "one span for the whole import")
+
+	spans.paths = nil
+	_, err = m.Import(context.Background(), strings.NewReader("sku,name\n"), ImportOptions{})
+	require.ErrorIs(t, err, ErrInvalidHeader)
+	require.Equal(t, []string{"catalog.import"}, spans.paths, "a rejected file is traced the same way")
+}
+
+type meter struct {
+	histograms map[string]int
+	counters   map[string]int64
+}
+
+func (m *meter) Counter(_ context.Context, name string, value int64, attrs ...attribute.KeyValue) {
+	for _, attr := range attrs {
+		name += "{" + string(attr.Key) + "=" + attr.Value.AsString() + "}"
+	}
+	m.counters[name] += value
+}
+
+func (m *meter) Gauge(context.Context, string, float64, ...attribute.KeyValue) {}
+
+func (m *meter) Histogram(_ context.Context, name string, _ float64, _ ...attribute.KeyValue) {
+	m.histograms[name]++
+}
+
+func TestModuleImportRecordsItsDurationOnEveryAttempt(t *testing.T) {
+	valid := importHeader + "Shoes,RS-1,,Sports,9.99,1,0.3\nBad,BAD-1,,Sports,free,1,0.3\n"
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := map[string]struct {
+		ctx     context.Context
+		body    string
+		target  error
+		created int64
+	}{
+		"success":                {context.Background(), valid, nil, 1},
+		"invalid header":         {context.Background(), "sku,name\n", ErrInvalidHeader, 0},
+		"cancelled before apply": {cancelled, valid, context.Canceled, 0},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
+			require.NoError(t, err)
+			metrics := &meter{histograms: map[string]int{}, counters: map[string]int64{}}
+			deps := testDeps(log)
+			deps.Metrics = metrics
+			m, err := newModule(&memoryRepo{products: map[string]domain.Product{}}, deps)
+			require.NoError(t, err)
+
+			report, err := m.Import(tt.ctx, strings.NewReader(tt.body), ImportOptions{FileName: "products.csv"})
+
+			if tt.target == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tt.target)
+			}
+			require.Equal(t, map[string]int{"import_duration_seconds": 1}, metrics.histograms, "one duration per attempt, whatever its outcome")
+			require.Equal(t, tt.created, metrics.counters["import_rows_total{outcome=created}"])
+			if tt.target == context.Canceled {
+				require.Equal(t, 2, report.Records, "the result reflects what was read before the interruption")
+				require.Zero(t, report.Created)
+				require.EqualValues(t, 1, metrics.counters["import_rows_total{outcome=rejected}"], "only confirmed outcomes are counted")
+			}
+		})
+	}
 }

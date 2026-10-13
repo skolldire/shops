@@ -80,7 +80,7 @@ Every pull request to `master` runs:
 
 | Check | What it enforces |
 |---|---|
-| Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS), module boundaries, tidy modules, hadolint on the Dockerfile |
+| Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS), the dependency rules described in [Architecture](#architecture), tidy modules, hadolint on the Dockerfile |
 | Unit tests | Race detector on the `go.mod` version and on the latest stable Go |
 | Integration tests | Repositories, transactions and an HTTP acceptance test of the product lifecycle against PostgreSQL |
 | govulncheck | Known vulnerabilities in reachable code |
@@ -89,6 +89,40 @@ Every pull request to `master` runs:
 | CodeQL | Static security analysis, also weekly |
 
 CodeRabbit reviews every pull request with the rules in `.coderabbit.yaml` and approves it once its findings are resolved. Dependabot keeps Go modules, actions and base images up to date.
+
+## Architecture
+
+A modular monolith. Each business module is one directory under `internal/` with a public facade (`module.go` and `api.go`) and its own `internal/` packages, so the compiler keeps other modules out of its implementation.
+
+Inside the catalog module the dependencies point towards the business rules:
+
+| Package | Role | May import |
+|---|---|---|
+| `domain` | Products, search criteria, the decimal and whole number grammars, and their invariants. No ports, no I/O | A closed list: a few standard packages, `shopspring/decimal` and `platform/validation` |
+| `app` | Use cases (product service, import) and the ports they need: `Repository`, `ProductUpserter`, `ImportRecorder`, `ImportFailureReporter` | A closed list: `domain`, a few standard packages and `platform/validation` |
+| `httpapi`, `httpquery`, `csvimport` | Input adapters: JSON, query strings and CSV files are decoded here and handed over as plain values | `app`, `domain` and `platform`; `httpapi` also imports `httpquery` to read the search parameters and `csvimport` to translate its file errors into a status and a code |
+| `postgres` | Output adapter: implements `Repository` and `ProductUpserter` for PostgreSQL | `app`, `domain` and `platform` |
+| `observe` | What the module tells operators about an import. `ImportRecorder` and `FailureReporter` implement the ports `ImportRecorder` and `ImportFailureReporter`; `InstrumentedImporter` decorates the import with its duration and its span | `app` and `platform` |
+| `module.go` | Composition: builds the adapters, wires them into the use cases and exposes the facade | Everything in the module |
+
+`domain` and `app` do not read files, parse formats, log, measure time or call a telemetry SDK:
+
+- The CSV adapter reads the upload, enforces the size and row limits, hashes the file, maps the columns and reads the numbers. The import use case receives typed product values, together with the fields the adapter could not read, and never sees a CSV cell. The errors that reject a whole file (another header, malformed CSV, too many rows, too many bytes) belong to the CSV adapter; the HTTP handler turns them into a status and a code, and the facade into public errors.
+- When the import recovers from a failed batch, or the database refuses a row, the use case reports it through `ImportFailureReporter` and `observe.FailureReporter` writes one log line: a warning for the recovery, an error for the row that is finally rejected.
+- `observe.InstrumentedImporter` wraps the whole import, reading included. It opens the `catalog.import` span, and records `import_duration_seconds` after the span closes, also for files rejected before any row is applied and for cancelled requests. `domain` and `app` do not import OpenTelemetry.
+- The facade takes search parameters as plain text and the seed as a reader; query strings stay in the HTTP adapters and the seed file is opened by `cmd/api`.
+
+The import is composed in `module.go`, from the outside in:
+
+```
+HTTP handler or facade
+  -> observe.InstrumentedImporter   duration and the catalog.import span
+       -> csvimport.Importer        reads, limits, hashes, maps columns, reads numbers
+            -> app.Importer         validates every row, then applies the valid ones in batches
+                 -> postgres        one transaction per batch, one span per statement
+```
+
+`make lint-arch` enforces this on every pull request. It fails if `domain` or `app` import anything outside their closed lists (so `domain` cannot import `app`, and neither can import an adapter), if they reach transport, persistence, logging or telemetry packages even indirectly, or if `internal/platform` imports a business module.
 
 ## Endpoints
 
@@ -295,7 +329,6 @@ The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
 - **The search total is not transactionally consistent with the items.** They come from two separate queries, so with concurrent writes the `total` can differ from the items of a page.
 - **An import sets stock to the value in the file.** Stock is absolute, not a delta: once purchases exist, an import can overwrite stock that recent sales had just reduced.
-- **The import use case reads the CSV itself.** `core`, the domain package of the catalog, depends on `csvimport`, which turns bytes into rows, and also measures and hashes the file. This is a deliberate shortcut: `csvimport` uses only the standard library and holds no business rule, and the rules stay in `core`. The stricter layering, where the module reads the file and `core` receives the rows, is left for the documentation and cleanup phase.
 - **No authentication.** Anyone who can reach port 8080 can create, edit, delete and import products through `/api/v1` and `/admin`. Do not expose the published listener to untrusted clients without access control in front of it, such as an authenticating reverse proxy or a private network.
 - **No CSRF protection.** There is no session cookie yet, so there are no credentials another site could ride on. CSRF tokens become necessary as soon as authentication is added.
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
@@ -327,6 +360,6 @@ Secret fields (the database password) must be a placeholder without a default, s
 
 ## Observability
 
-- **Logs:** JSON on stdout with `timestamp`, `severity` and `message`. Every request line carries `request_id`, `trace_id` and `span_id`. Sensitive fields and values (passwords, tokens, bearer credentials, card numbers) are redacted. The configuration is never logged.
-- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish. Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`.
-- **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route.
+- **Logs:** JSON on stdout with `timestamp`, `severity` and `message`. Every request line carries `request_id`, `trace_id` and `span_id`. Sensitive fields and values (passwords, tokens, bearer credentials, card numbers) are redacted. The configuration is never logged. An import that recovers from a failed batch logs it once as a warning; a row the database finally rejects is logged once as an error.
+- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish. Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole.
+- **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route. Under the request span, an import adds one `catalog.import` span for the whole operation, and every statement sent to PostgreSQL adds a `postgres <OPERATION>` child span, such as `postgres SELECT` or `postgres COMMIT`. The trace shows how long the import took, which statements ran, how long each one took and which one failed; the time not spent in PostgreSQL is reading, validating and preparing the rows. Spans carry the operation name only: never the SQL text, its arguments, a file name or a product value. A file rejected as a whole is an expected rejection: the caller still gets the error, but the span is not marked as failed.

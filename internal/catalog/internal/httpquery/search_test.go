@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/httpquery"
 	"github.com/skolldire/shops/internal/platform/validation"
 )
@@ -29,7 +29,7 @@ func TestParseSearchDefaults(t *testing.T) {
 	s, err := httpquery.ParseSearch(url.Values{})
 
 	require.NoError(t, err)
-	require.Equal(t, core.Search{Sort: core.SortName, Page: 1, PageSize: 20}, s)
+	require.Equal(t, domain.Search{Sort: domain.SortName, Page: 1, PageSize: 20}, s)
 	require.Equal(t, 0, s.Offset())
 }
 
@@ -51,7 +51,7 @@ func TestParseSearchValues(t *testing.T) {
 	require.Equal(t, "10", s.MinPrice.String())
 	require.Equal(t, "99.5", s.MaxPrice.String())
 	require.True(t, s.InStock)
-	require.Equal(t, core.SortPrice, s.Sort)
+	require.Equal(t, domain.SortPrice, s.Sort)
 	require.True(t, s.Descending)
 	require.Equal(t, 50, s.Offset())
 }
@@ -91,7 +91,7 @@ func TestParseSearchErrors(t *testing.T) {
 			s, err := httpquery.ParseSearch(tt.values)
 
 			require.Equal(t, map[string]string{tt.field: tt.code}, fieldCodes(t, err))
-			require.Equal(t, core.Search{}, s)
+			require.Equal(t, domain.Search{}, s)
 		})
 	}
 }
@@ -105,6 +105,29 @@ func TestParseSearchReportsFormatAndDomainErrorsTogether(t *testing.T) {
 		"page": "invalid_format", "page_size": "out_of_range", "sort": "invalid_format",
 		"min_price": "invalid_format", "q": "too_long",
 	}, fieldCodes(t, err))
+}
+
+func TestParseParamsTakesTheSameTextsWithoutAQueryString(t *testing.T) {
+	s, err := httpquery.ParseParams(httpquery.Params{Q: " tent ", MinPrice: "10", InStock: "true", Sort: "-price", Page: "2", PageSize: "5"})
+
+	require.NoError(t, err)
+	require.Equal(t, "tent", s.Q)
+	require.Equal(t, "10", s.MinPrice.String())
+	require.True(t, s.InStock)
+	require.Equal(t, domain.SortPrice, s.Sort)
+	require.Equal(t, 5, s.Offset())
+
+	_, err = httpquery.ParseParams(httpquery.Params{Page: "+2", MaxPrice: "free"})
+	require.Equal(t, map[string]string{"page": "invalid_format", "max_price": "invalid_format"}, fieldCodes(t, err))
+}
+
+func TestFromValuesReadsEveryParameter(t *testing.T) {
+	got := httpquery.FromValues(url.Values{
+		"q": {"a"}, "category": {"b"}, "min_price": {"c"}, "max_price": {"d"},
+		"in_stock": {"e"}, "sort": {"f"}, "page": {"g"}, "page_size": {"h"}, "other": {"ignored"},
+	})
+
+	require.Equal(t, httpquery.Params{Q: "a", Category: "b", MinPrice: "c", MaxPrice: "d", InStock: "e", Sort: "f", Page: "g", PageSize: "h"}, got)
 }
 
 func TestParseSearchUsesTheSharedNumberMessages(t *testing.T) {

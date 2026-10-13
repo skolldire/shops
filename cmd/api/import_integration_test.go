@@ -267,7 +267,7 @@ func TestDemoSeed(t *testing.T) {
 
 	missing := filepath.Join(t.TempDir(), "missing.csv")
 	err = seedDemo(ctx, c.log, c.app.catalog, missing)
-	require.EqualError(t, err, "demo seed: catalog: open seed file: no such file or directory")
+	require.EqualError(t, err, "demo seed: open seed file: no such file or directory")
 	require.NotContains(t, err.Error(), missing)
 }
 
@@ -289,7 +289,7 @@ func TestStartSeedsBeforeServingAndFailsWithoutTheFile(t *testing.T) {
 
 		err = start(t.Context(), failing, log, lc)
 
-		require.EqualError(t, err, "demo seed: catalog: open seed file: no such file or directory")
+		require.EqualError(t, err, "demo seed: open seed file: no such file or directory")
 		require.NoError(t, lc.Close(context.Background()))
 		total, _, _ := c.products()
 		require.Zero(t, total)

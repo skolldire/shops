@@ -1,4 +1,4 @@
-package core
+package domain
 
 import (
 	"strings"
@@ -49,13 +49,6 @@ type SearchInput struct {
 	Sort     string
 	Page     int
 	PageSize int
-}
-
-type Page struct {
-	Items    []Product
-	Page     int
-	PageSize int
-	Total    int
 }
 
 func NewSearch(in SearchInput) (Search, error) {

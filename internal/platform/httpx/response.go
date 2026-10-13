@@ -20,15 +20,21 @@ type ErrorResponse struct {
 	Errors []validation.FieldError
 }
 
+type fieldProblem struct {
+	Field   string `json:"field"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type problem struct {
-	Type      string                  `json:"type"`
-	Title     string                  `json:"title"`
-	Status    int                     `json:"status"`
-	Detail    string                  `json:"detail,omitempty"`
-	Code      string                  `json:"code,omitempty"`
-	Instance  string                  `json:"instance"`
-	RequestID string                  `json:"request_id,omitempty"`
-	Errors    []validation.FieldError `json:"errors,omitempty"`
+	Type      string         `json:"type"`
+	Title     string         `json:"title"`
+	Status    int            `json:"status"`
+	Detail    string         `json:"detail,omitempty"`
+	Code      string         `json:"code,omitempty"`
+	Instance  string         `json:"instance"`
+	RequestID string         `json:"request_id,omitempty"`
+	Errors    []fieldProblem `json:"errors,omitempty"`
 }
 
 func WriteJSON(w http.ResponseWriter, status int, v any) {
@@ -52,8 +58,19 @@ func WriteError(w http.ResponseWriter, r *http.Request, e ErrorResponse) {
 		Code:      e.Code,
 		Instance:  r.URL.Path,
 		RequestID: RequestIDFrom(r.Context()),
-		Errors:    e.Errors,
+		Errors:    fieldProblems(e.Errors),
 	})
+}
+
+func fieldProblems(errs []validation.FieldError) []fieldProblem {
+	if len(errs) == 0 {
+		return nil
+	}
+	out := make([]fieldProblem, len(errs))
+	for i, fe := range errs {
+		out[i] = fieldProblem{Field: fe.Field, Code: fe.Code, Message: fe.Message}
+	}
+	return out
 }
 
 func writeBody(w http.ResponseWriter, status int, contentType string, v any) {

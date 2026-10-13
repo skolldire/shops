@@ -12,7 +12,8 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/postgres"
 	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/database/dbtest"
@@ -45,9 +46,9 @@ func (f fixture) reset(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func (f fixture) create(t *testing.T, sku, name, category, price string, stock int) core.Product {
+func (f fixture) create(t *testing.T, sku, name, category, price string, stock int) domain.Product {
 	t.Helper()
-	p, err := f.repo.Create(context.Background(), core.Product{
+	p, err := f.repo.Create(context.Background(), domain.Product{
 		SKU: sku, Name: name, Description: "about " + name, Category: category,
 		Price: d(price), Stock: stock, WeightKg: d("1.500"),
 	})
@@ -55,9 +56,9 @@ func (f fixture) create(t *testing.T, sku, name, category, price string, stock i
 	return p
 }
 
-func search(t *testing.T, f fixture, in core.SearchInput) ([]string, int) {
+func search(t *testing.T, f fixture, in domain.SearchInput) ([]string, int) {
 	t.Helper()
-	s, err := core.NewSearch(in)
+	s, err := domain.NewSearch(in)
 	require.NoError(t, err)
 	items, total, err := f.repo.Search(context.Background(), s)
 	require.NoError(t, err)
@@ -74,7 +75,7 @@ func TestRepository(t *testing.T) {
 
 	t.Run("create and get round trip decimals", func(t *testing.T) {
 		f.reset(t)
-		created, err := f.repo.Create(ctx, core.Product{
+		created, err := f.repo.Create(ctx, domain.Product{
 			SKU: "RS-001", Name: "Running Shoes", Category: "Sports",
 			Price: d("29.99"), Stock: 10, WeightKg: d("0.001"),
 		})
@@ -92,7 +93,7 @@ func TestRepository(t *testing.T) {
 
 	t.Run("maximum values are stored without rounding", func(t *testing.T) {
 		f.reset(t)
-		created, err := f.repo.Create(ctx, core.Product{
+		created, err := f.repo.Create(ctx, domain.Product{
 			SKU: "MAX", Name: "Max", Category: "Limits",
 			Price: d("9999999999.99"), Stock: 2147483647, WeightKg: d("9999999.999"),
 		})
@@ -107,12 +108,12 @@ func TestRepository(t *testing.T) {
 	t.Run("duplicate sku is rejected, also against a deleted product", func(t *testing.T) {
 		f.reset(t)
 		p := f.create(t, "DUP-1", "First", "A", "1.00", 1)
-		_, err := f.repo.Create(ctx, core.Product{SKU: "DUP-1", Name: "Second", Category: "A", Price: d("1"), WeightKg: d("0")})
-		require.ErrorIs(t, err, core.ErrSKUTaken)
+		_, err := f.repo.Create(ctx, domain.Product{SKU: "DUP-1", Name: "Second", Category: "A", Price: d("1"), WeightKg: d("0")})
+		require.ErrorIs(t, err, app.ErrSKUTaken)
 
 		require.NoError(t, f.repo.Delete(ctx, p.ID, p.Version))
-		_, err = f.repo.Create(ctx, core.Product{SKU: "DUP-1", Name: "Third", Category: "A", Price: d("1"), WeightKg: d("0")})
-		require.ErrorIs(t, err, core.ErrSKUTaken)
+		_, err = f.repo.Create(ctx, domain.Product{SKU: "DUP-1", Name: "Third", Category: "A", Price: d("1"), WeightKg: d("0")})
+		require.ErrorIs(t, err, app.ErrSKUTaken)
 	})
 
 	t.Run("update changes only provided fields and bumps version", func(t *testing.T) {
@@ -120,7 +121,7 @@ func TestRepository(t *testing.T) {
 		p := f.create(t, "UPD-1", "Old", "Audio", "10.00", 5)
 		time.Sleep(10 * time.Millisecond)
 
-		updated, err := f.repo.Update(ctx, p.ID, p.Version, core.Changes{Name: sp("New"), Price: dp("12.50")})
+		updated, err := f.repo.Update(ctx, p.ID, p.Version, domain.Changes{Name: sp("New"), Price: dp("12.50")})
 		require.NoError(t, err)
 		require.Equal(t, "New", updated.Name)
 		require.Equal(t, "12.5", updated.Price.String())
@@ -132,7 +133,7 @@ func TestRepository(t *testing.T) {
 		require.True(t, updated.UpdatedAt.After(p.UpdatedAt))
 		require.Equal(t, p.CreatedAt, updated.CreatedAt)
 
-		stocked, err := f.repo.Update(ctx, p.ID, updated.Version, core.Changes{Stock: ip(0)})
+		stocked, err := f.repo.Update(ctx, p.ID, updated.Version, domain.Changes{Stock: ip(0)})
 		require.NoError(t, err)
 		require.Equal(t, 0, stocked.Stock)
 		require.Equal(t, 3, stocked.Version)
@@ -141,19 +142,19 @@ func TestRepository(t *testing.T) {
 	t.Run("version conflict and not found are distinguished", func(t *testing.T) {
 		f.reset(t)
 		p := f.create(t, "VER-1", "Versioned", "A", "1.00", 1)
-		_, err := f.repo.Update(ctx, p.ID, p.Version, core.Changes{Stock: ip(2)})
+		_, err := f.repo.Update(ctx, p.ID, p.Version, domain.Changes{Stock: ip(2)})
 		require.NoError(t, err)
 
-		_, err = f.repo.Update(ctx, p.ID, p.Version, core.Changes{Stock: ip(3)})
-		require.ErrorIs(t, err, core.ErrVersionConflict)
-		require.ErrorIs(t, f.repo.Delete(ctx, p.ID, p.Version), core.ErrVersionConflict)
+		_, err = f.repo.Update(ctx, p.ID, p.Version, domain.Changes{Stock: ip(3)})
+		require.ErrorIs(t, err, app.ErrVersionConflict)
+		require.ErrorIs(t, f.repo.Delete(ctx, p.ID, p.Version), app.ErrVersionConflict)
 
 		missing := "00000000-0000-4000-8000-000000000000"
-		_, err = f.repo.Update(ctx, missing, 1, core.Changes{Stock: ip(1)})
-		require.ErrorIs(t, err, core.ErrNotFound)
-		require.ErrorIs(t, f.repo.Delete(ctx, missing, 1), core.ErrNotFound)
+		_, err = f.repo.Update(ctx, missing, 1, domain.Changes{Stock: ip(1)})
+		require.ErrorIs(t, err, app.ErrNotFound)
+		require.ErrorIs(t, f.repo.Delete(ctx, missing, 1), app.ErrNotFound)
 		_, err = f.repo.Get(ctx, missing)
-		require.ErrorIs(t, err, core.ErrNotFound)
+		require.ErrorIs(t, err, app.ErrNotFound)
 	})
 
 	t.Run("delete is logical", func(t *testing.T) {
@@ -163,11 +164,11 @@ func TestRepository(t *testing.T) {
 		require.NoError(t, f.repo.Delete(ctx, p.ID, p.Version))
 
 		_, err := f.repo.Get(ctx, p.ID)
-		require.ErrorIs(t, err, core.ErrNotFound)
-		_, err = f.repo.Update(ctx, p.ID, p.Version+1, core.Changes{Stock: ip(1)})
-		require.ErrorIs(t, err, core.ErrNotFound)
-		require.ErrorIs(t, f.repo.Delete(ctx, p.ID, p.Version+1), core.ErrNotFound)
-		skus, total := search(t, f, core.SearchInput{})
+		require.ErrorIs(t, err, app.ErrNotFound)
+		_, err = f.repo.Update(ctx, p.ID, p.Version+1, domain.Changes{Stock: ip(1)})
+		require.ErrorIs(t, err, app.ErrNotFound)
+		require.ErrorIs(t, f.repo.Delete(ctx, p.ID, p.Version+1), app.ErrNotFound)
+		skus, total := search(t, f, domain.SearchInput{})
 		require.Empty(t, skus)
 		require.Zero(t, total)
 
@@ -195,24 +196,24 @@ func TestRepository(t *testing.T) {
 		require.NoError(t, err)
 
 		tests := map[string]struct {
-			in    core.SearchInput
+			in    domain.SearchInput
 			skus  []string
 			total int
 		}{
-			"all active by name":          {core.SearchInput{}, []string{"BOK-1", "AUD-2", "TV-1", "AUD-1"}, 4},
-			"q in name, case insensitive": {core.SearchInput{Q: "studio"}, []string{"AUD-1"}, 1},
-			"q in sku":                    {core.SearchInput{Q: "bok"}, []string{"BOK-1"}, 1},
-			"q in description":            {core.SearchInput{Q: "about smart"}, []string{"TV-1"}, 1},
-			"category case insensitive":   {core.SearchInput{Category: "audio"}, []string{"AUD-2", "AUD-1"}, 2},
-			"acronym category":            {core.SearchInput{Category: "tv"}, []string{"TV-1"}, 1},
-			"price range":                 {core.SearchInput{MinPrice: dp("40"), MaxPrice: dp("100")}, []string{"AUD-2", "AUD-1"}, 2},
-			"in stock":                    {core.SearchInput{Category: "Audio", InStock: true}, []string{"AUD-1"}, 1},
-			"sort by price":               {core.SearchInput{Sort: "price"}, []string{"BOK-1", "AUD-2", "AUD-1", "TV-1"}, 4},
-			"sort by price descending":    {core.SearchInput{Sort: "-price"}, []string{"TV-1", "AUD-1", "AUD-2", "BOK-1"}, 4},
-			"sort by created_at":          {core.SearchInput{Sort: "created_at"}, []string{"AUD-1", "AUD-2", "BOK-1", "TV-1"}, 4},
-			"first page":                  {core.SearchInput{Sort: "price", PageSize: 3}, []string{"BOK-1", "AUD-2", "AUD-1"}, 4},
-			"second page":                 {core.SearchInput{Sort: "price", Page: 2, PageSize: 3}, []string{"TV-1"}, 4},
-			"page past the end":           {core.SearchInput{Page: 9, PageSize: 3}, []string{}, 4},
+			"all active by name":          {domain.SearchInput{}, []string{"BOK-1", "AUD-2", "TV-1", "AUD-1"}, 4},
+			"q in name, case insensitive": {domain.SearchInput{Q: "studio"}, []string{"AUD-1"}, 1},
+			"q in sku":                    {domain.SearchInput{Q: "bok"}, []string{"BOK-1"}, 1},
+			"q in description":            {domain.SearchInput{Q: "about smart"}, []string{"TV-1"}, 1},
+			"category case insensitive":   {domain.SearchInput{Category: "audio"}, []string{"AUD-2", "AUD-1"}, 2},
+			"acronym category":            {domain.SearchInput{Category: "tv"}, []string{"TV-1"}, 1},
+			"price range":                 {domain.SearchInput{MinPrice: dp("40"), MaxPrice: dp("100")}, []string{"AUD-2", "AUD-1"}, 2},
+			"in stock":                    {domain.SearchInput{Category: "Audio", InStock: true}, []string{"AUD-1"}, 1},
+			"sort by price":               {domain.SearchInput{Sort: "price"}, []string{"BOK-1", "AUD-2", "AUD-1", "TV-1"}, 4},
+			"sort by price descending":    {domain.SearchInput{Sort: "-price"}, []string{"TV-1", "AUD-1", "AUD-2", "BOK-1"}, 4},
+			"sort by created_at":          {domain.SearchInput{Sort: "created_at"}, []string{"AUD-1", "AUD-2", "BOK-1", "TV-1"}, 4},
+			"first page":                  {domain.SearchInput{Sort: "price", PageSize: 3}, []string{"BOK-1", "AUD-2", "AUD-1"}, 4},
+			"second page":                 {domain.SearchInput{Sort: "price", Page: 2, PageSize: 3}, []string{"TV-1"}, 4},
+			"page past the end":           {domain.SearchInput{Page: 9, PageSize: 3}, []string{}, 4},
 		}
 		for name, tt := range tests {
 			t.Run(name, func(t *testing.T) {
@@ -231,11 +232,11 @@ func TestRepository(t *testing.T) {
 		f.create(t, "P-SNK", "snakeXcase mug", "Deals", "1.00", 1)
 		f.create(t, "P-BSL", `back\slash poster`, "Deals", "1.00", 1)
 
-		skus, _ := search(t, f, core.SearchInput{Q: "50%"})
+		skus, _ := search(t, f, domain.SearchInput{Q: "50%"})
 		require.Equal(t, []string{"P-50"}, skus)
-		skus, _ = search(t, f, core.SearchInput{Q: "snake_case"})
+		skus, _ = search(t, f, domain.SearchInput{Q: "snake_case"})
 		require.Equal(t, []string{"P-UND"}, skus)
-		skus, _ = search(t, f, core.SearchInput{Q: `back\slash`})
+		skus, _ = search(t, f, domain.SearchInput{Q: `back\slash`})
 		require.Equal(t, []string{"P-BSL"}, skus)
 	})
 
@@ -246,7 +247,7 @@ func TestRepository(t *testing.T) {
 		}
 		var seen []string
 		for page := 1; page <= 3; page++ {
-			skus, total := search(t, f, core.SearchInput{Sort: "price", Page: page, PageSize: 2})
+			skus, total := search(t, f, domain.SearchInput{Sort: "price", Page: page, PageSize: 2})
 			require.Equal(t, 5, total)
 			seen = append(seen, skus...)
 		}
@@ -282,7 +283,7 @@ func TestRepository(t *testing.T) {
 		require.Equal(t, categories, again)
 
 		for _, form := range []string{"Sports", "sports", "SPORTS"} {
-			skus, total := search(t, f, core.SearchInput{Category: form})
+			skus, total := search(t, f, domain.SearchInput{Category: form})
 			require.Equal(t, 2, total, form)
 			require.ElementsMatch(t, []string{"K-1", "K-2"}, skus, form)
 		}
@@ -295,13 +296,13 @@ func TestRepository(t *testing.T) {
 		rollback := errors.New("rollback")
 
 		err = tm.WithinTx(ctx, func(ctx context.Context) error {
-			_, err := f.repo.Create(ctx, core.Product{SKU: "TX-1", Name: "Tx", Category: "A", Price: d("1"), WeightKg: d("0")})
+			_, err := f.repo.Create(ctx, domain.Product{SKU: "TX-1", Name: "Tx", Category: "A", Price: d("1"), WeightKg: d("0")})
 			require.NoError(t, err)
 			return rollback
 		})
 
 		require.ErrorIs(t, err, rollback)
-		skus, _ := search(t, f, core.SearchInput{})
+		skus, _ := search(t, f, domain.SearchInput{})
 		require.Empty(t, skus)
 	})
 }

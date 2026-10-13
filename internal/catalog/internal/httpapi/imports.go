@@ -9,7 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
@@ -17,7 +18,7 @@ import (
 const importField = "file"
 
 type Importer interface {
-	Import(ctx context.Context, r io.Reader, fileName string) (core.ImportReport, error)
+	Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error)
 }
 
 type ImportHandler struct {
@@ -26,10 +27,10 @@ type ImportHandler struct {
 }
 
 func NewImports(importer Importer, log logger.Service) (*ImportHandler, error) {
-	if importer == nil {
+	switch {
+	case importer == nil:
 		return nil, errors.New("catalog: import handler requires an importer")
-	}
-	if log == nil {
+	case log == nil:
 		return nil, errors.New("catalog: import handler requires a logger")
 	}
 	return &ImportHandler{importer: importer, log: log}, nil
@@ -79,7 +80,7 @@ func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
 		if part.FormName() != importField {
 			continue
 		}
-		report, err := h.importer.Import(r.Context(), part, core.CleanFileName(part.FileName()))
+		report, err := h.importer.Import(r.Context(), part, part.FileName())
 		if err != nil {
 			h.writeError(w, r, err)
 			return
@@ -89,7 +90,7 @@ func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func reportJSON(report core.ImportReport) importReportJSON {
+func reportJSON(report app.ImportReport) importReportJSON {
 	out := importReportJSON{
 		File:      importFileJSON{Name: report.File.Name, Bytes: report.File.Bytes, SHA256: report.File.SHA256},
 		Records:   report.Records,
@@ -125,16 +126,16 @@ func (h *ImportHandler) partError(w http.ResponseWriter, r *http.Request, err er
 func (h *ImportHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
 		tooLarge *http.MaxBytesError
-		invalid  *core.InvalidCSVError
+		format   *csvimport.FormatError
 	)
 	switch {
-	case errors.Is(err, core.ErrFileTooLarge), errors.As(err, &tooLarge):
+	case errors.Is(err, csvimport.ErrFileTooLarge), errors.As(err, &tooLarge):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusRequestEntityTooLarge, Code: "request_too_large", Detail: "The CSV file is larger than the import limit."})
-	case errors.Is(err, core.ErrInvalidHeader):
+	case errors.Is(err, csvimport.ErrInvalidHeader):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_header", Detail: "The first line must be exactly name,sku,description,category,price,stock,weight_kg."})
-	case errors.As(err, &invalid):
-		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_csv", Detail: fmt.Sprintf("Line %d: %s.", invalid.Line, invalid.Reason)})
-	case errors.Is(err, core.ErrTooManyRows):
+	case errors.As(err, &format):
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_csv", Detail: fmt.Sprintf("Line %d: %s.", format.Line, format.Reason)})
+	case errors.Is(err, csvimport.ErrTooManyRows):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "too_many_rows", Detail: "The CSV has more rows than the import limit."})
 	default:
 		h.log.Error(r.Context(), err, map[string]any{"component": "catalog"})

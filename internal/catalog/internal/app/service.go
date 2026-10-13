@@ -1,9 +1,11 @@
-package core
+package app
 
 import (
 	"context"
 	"errors"
 	"regexp"
+
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 )
 
 var idPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -19,39 +21,39 @@ func NewService(repo Repository) (*Service, error) {
 	return &Service{repo: repo}, nil
 }
 
-func (s *Service) Create(ctx context.Context, in NewProductInput) (Product, error) {
-	p, err := NewProduct(in)
+func (s *Service) Create(ctx context.Context, in domain.NewProductInput) (domain.Product, error) {
+	p, err := domain.NewProduct(in)
 	if err != nil {
-		return Product{}, err
+		return domain.Product{}, err
 	}
 	return s.repo.Create(ctx, p)
 }
 
-func (s *Service) Get(ctx context.Context, id string) (Product, error) {
+func (s *Service) Get(ctx context.Context, id string) (domain.Product, error) {
 	if !idPattern.MatchString(id) {
-		return Product{}, ErrNotFound
+		return domain.Product{}, ErrNotFound
 	}
 	return s.repo.Get(ctx, id)
 }
 
-func (s *Service) Update(ctx context.Context, id string, version int, c Changes) (Product, error) {
+func (s *Service) Update(ctx context.Context, id string, version int, c domain.Changes) (domain.Product, error) {
 	if !idPattern.MatchString(id) {
-		return Product{}, ErrNotFound
+		return domain.Product{}, ErrNotFound
 	}
-	changes, err := ValidateChanges(c)
+	changes, err := domain.ValidateChanges(c)
 	if err != nil {
-		return Product{}, err
+		return domain.Product{}, err
 	}
 	if version < 1 {
-		return Product{}, ErrVersionConflict
+		return domain.Product{}, ErrVersionConflict
 	}
 	if changes.Empty() {
 		current, err := s.repo.Get(ctx, id)
 		if err != nil {
-			return Product{}, err
+			return domain.Product{}, err
 		}
 		if current.Version != version {
-			return Product{}, ErrVersionConflict
+			return domain.Product{}, ErrVersionConflict
 		}
 		return current, nil
 	}
@@ -68,7 +70,7 @@ func (s *Service) Delete(ctx context.Context, id string, version int) error {
 	return s.repo.Delete(ctx, id, version)
 }
 
-func (s *Service) Search(ctx context.Context, search Search) (Page, error) {
+func (s *Service) Search(ctx context.Context, search domain.Search) (Page, error) {
 	items, total, err := s.repo.Search(ctx, search)
 	if err != nil {
 		return Page{}, err

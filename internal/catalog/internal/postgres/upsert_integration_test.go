@@ -5,7 +5,6 @@ package postgres_test
 import (
 	"context"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -13,17 +12,22 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/core"
-	"github.com/skolldire/shops/internal/platform/logger"
+	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 )
 
 type noRecorder struct{}
 
-func (noRecorder) RecordRows(context.Context, string, int)       {}
-func (noRecorder) RecordDuration(context.Context, time.Duration) {}
+func (noRecorder) RecordRows(context.Context, string, int) {}
 
-func item(sku, name, price string, stock int) core.Product {
-	return core.Product{SKU: sku, Name: name, Description: "about " + name, Category: "Imports", Price: d(price), Stock: stock, WeightKg: d("1.5")}
+type noFailures struct{}
+
+func (noFailures) BatchRetried(context.Context, int, error)        {}
+func (noFailures) RowRejected(context.Context, int, string, error) {}
+
+func item(sku, name, price string, stock int) domain.Product {
+	return domain.Product{SKU: sku, Name: name, Description: "about " + name, Category: "Imports", Price: d(price), Stock: stock, WeightKg: d("1.5")}
 }
 
 type stored struct {
@@ -50,11 +54,11 @@ func (f fixture) count(t *testing.T) int {
 	return n
 }
 
-func (f fixture) importer(t *testing.T) *core.Importer {
+func (f fixture) importer(t *testing.T) *csvimport.Importer {
 	t.Helper()
-	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
+	rows, err := app.NewImporter(f.repo, noRecorder{}, noFailures{})
 	require.NoError(t, err)
-	importer, err := core.NewImporter(f.repo, noRecorder{}, log, core.ImportLimits{MaxBytes: 10 << 20, MaxRows: 10000})
+	importer, err := csvimport.NewImporter(rows, csvimport.Limits{MaxBytes: 10 << 20, MaxRows: 10000})
 	require.NoError(t, err)
 	return importer
 }
@@ -74,18 +78,18 @@ func TestUpsert(t *testing.T) {
 
 	t.Run("creates, updates and leaves unchanged rows alone", func(t *testing.T) {
 		f.reset(t)
-		first, err := f.repo.Upsert(ctx, []core.Product{item("A-1", "Alpha", "1.00", 1), item("B-1", "Beta", "2.00", 2)})
+		first, err := f.repo.Upsert(ctx, []domain.Product{item("A-1", "Alpha", "1.00", 1), item("B-1", "Beta", "2.00", 2)})
 		require.NoError(t, err)
-		require.Equal(t, map[string]core.UpsertOutcome{"A-1": core.OutcomeCreated, "B-1": core.OutcomeCreated}, first)
+		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeCreated, "B-1": app.OutcomeCreated}, first)
 		before := f.stored(t, "A-1")
 
-		second, err := f.repo.Upsert(ctx, []core.Product{
+		second, err := f.repo.Upsert(ctx, []domain.Product{
 			item("A-1", "Alpha", "1.0", 1), item("B-1", "Beta", "2.00", 9), item("C-1", "Gamma", "3.00", 3),
 		})
 
 		require.NoError(t, err)
-		require.Equal(t, map[string]core.UpsertOutcome{
-			"A-1": core.OutcomeUnchanged, "B-1": core.OutcomeUpdated, "C-1": core.OutcomeCreated,
+		require.Equal(t, map[string]app.UpsertOutcome{
+			"A-1": app.OutcomeUnchanged, "B-1": app.OutcomeUpdated, "C-1": app.OutcomeCreated,
 		}, second)
 		require.Equal(t, before, f.stored(t, "A-1"), "an unchanged row keeps its version and updated_at")
 		changed := f.stored(t, "B-1")
@@ -96,7 +100,7 @@ func TestUpsert(t *testing.T) {
 
 	t.Run("importing the same rows again changes nothing", func(t *testing.T) {
 		f.reset(t)
-		rows := []core.Product{item("A-1", "Alpha", "1.00", 1), item("B-1", "Beta", "2.00", 2)}
+		rows := []domain.Product{item("A-1", "Alpha", "1.00", 1), item("B-1", "Beta", "2.00", 2)}
 		_, err := f.repo.Upsert(ctx, rows)
 		require.NoError(t, err)
 		before := []stored{f.stored(t, "A-1"), f.stored(t, "B-1")}
@@ -104,7 +108,7 @@ func TestUpsert(t *testing.T) {
 		again, err := f.repo.Upsert(ctx, rows)
 
 		require.NoError(t, err)
-		require.Equal(t, map[string]core.UpsertOutcome{"A-1": core.OutcomeUnchanged, "B-1": core.OutcomeUnchanged}, again)
+		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeUnchanged, "B-1": app.OutcomeUnchanged}, again)
 		require.Equal(t, before, []stored{f.stored(t, "A-1"), f.stored(t, "B-1")})
 	})
 
@@ -114,16 +118,16 @@ func TestUpsert(t *testing.T) {
 		require.NoError(t, f.repo.Delete(ctx, gone.ID, gone.Version))
 		before := f.stored(t, "GONE-1")
 
-		outcomes, err := f.repo.Upsert(ctx, []core.Product{item("GONE-1", "Back again", "5.00", 5), item("NEW-1", "New", "1.00", 1)})
+		outcomes, err := f.repo.Upsert(ctx, []domain.Product{item("GONE-1", "Back again", "5.00", 5), item("NEW-1", "New", "1.00", 1)})
 
 		require.NoError(t, err)
-		require.Equal(t, map[string]core.UpsertOutcome{"GONE-1": core.OutcomeDeleted, "NEW-1": core.OutcomeCreated}, outcomes)
+		require.Equal(t, map[string]app.UpsertOutcome{"GONE-1": app.OutcomeDeleted, "NEW-1": app.OutcomeCreated}, outcomes)
 		require.Equal(t, before, f.stored(t, "GONE-1"))
 		require.Equal(t, "DELETED", before.Status)
 
-		only, err := f.repo.Upsert(ctx, []core.Product{item("GONE-1", "Back again", "5.00", 5)})
+		only, err := f.repo.Upsert(ctx, []domain.Product{item("GONE-1", "Back again", "5.00", 5)})
 		require.NoError(t, err)
-		require.Equal(t, map[string]core.UpsertOutcome{"GONE-1": core.OutcomeDeleted}, only)
+		require.Equal(t, map[string]app.UpsertOutcome{"GONE-1": app.OutcomeDeleted}, only)
 	})
 
 	t.Run("a product deleted while the upsert waits for it is reported as deleted", func(t *testing.T) {
@@ -136,12 +140,12 @@ func TestUpsert(t *testing.T) {
 		require.NoError(t, err)
 
 		type result struct {
-			outcomes map[string]core.UpsertOutcome
+			outcomes map[string]app.UpsertOutcome
 			err      error
 		}
 		done := make(chan result, 1)
 		go func() {
-			outcomes, err := f.repo.Upsert(ctx, []core.Product{item("RACE-1", "Race again", "9.00", 9), item("RACE-2", "Other", "1.00", 1)})
+			outcomes, err := f.repo.Upsert(ctx, []domain.Product{item("RACE-1", "Race again", "9.00", 9), item("RACE-2", "Other", "1.00", 1)})
 			done <- result{outcomes, err}
 		}()
 		require.Eventually(t, func() bool {
@@ -154,7 +158,7 @@ func TestUpsert(t *testing.T) {
 
 		got := <-done
 		require.NoError(t, got.err)
-		require.Equal(t, map[string]core.UpsertOutcome{"RACE-1": core.OutcomeDeleted, "RACE-2": core.OutcomeCreated}, got.outcomes)
+		require.Equal(t, map[string]app.UpsertOutcome{"RACE-1": app.OutcomeDeleted, "RACE-2": app.OutcomeCreated}, got.outcomes)
 		after := f.stored(t, "RACE-1")
 		require.Equal(t, "DELETED", after.Status)
 		require.Equal(t, "Race", after.Name)
@@ -169,7 +173,7 @@ func TestUpsert(t *testing.T) {
 
 	t.Run("a batch the database rejects applies none of its rows", func(t *testing.T) {
 		f.reset(t)
-		_, err := f.repo.Upsert(ctx, []core.Product{item("OK-1", "Fine", "1.00", 1), item("BAD-1", "Free", "0", 1)})
+		_, err := f.repo.Upsert(ctx, []domain.Product{item("OK-1", "Fine", "1.00", 1), item("BAD-1", "Free", "0", 1)})
 
 		require.Error(t, err)
 		require.Zero(t, f.count(t))
@@ -226,14 +230,14 @@ func TestImportIntoPostgres(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, report.Created)
 		require.Equal(t, 1, report.Rejected)
-		require.Equal(t, []core.RowError{{Line: 3, SKU: "BAD-1", Field: "row", Code: core.CodeRejectedByDatabase, Message: "could not be saved"}}, report.Errors)
+		require.Equal(t, []app.RowError{{Line: 3, SKU: "BAD-1", Field: "row", Code: app.CodeRejectedByDatabase, Message: "could not be saved"}}, report.Errors)
 		require.Equal(t, 2, f.count(t))
 	})
 
 	t.Run("two imports of the same file at once do not deadlock", func(t *testing.T) {
 		f.reset(t)
 		body := generated(1500)
-		reports := make([]core.ImportReport, 4)
+		reports := make([]app.ImportReport, 4)
 		errs := make([]error, len(reports))
 		importer := f.importer(t)
 		var wg sync.WaitGroup
