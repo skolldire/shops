@@ -78,11 +78,7 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	tracedRows, err := observe.NewRowImporter(rows, d.Tracer)
-	if err != nil {
-		return nil, err
-	}
-	files, err := csvimport.NewImporter(tracedRows, csvimport.Limits{MaxBytes: d.Import.MaxBytes, MaxRows: d.Import.MaxRows})
+	files, err := csvimport.NewImporter(rows, csvimport.Limits{MaxBytes: d.Import.MaxBytes, MaxRows: d.Import.MaxRows})
 	if err != nil {
 		return nil, err
 	}

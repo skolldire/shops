@@ -213,7 +213,7 @@ func (r *spanRecorder) Span(ctx context.Context, name string, fn func(ctx contex
 	return err
 }
 
-func TestModuleImportIsTracedAsOneSpanWithTheRowsInside(t *testing.T) {
+func TestModuleImportIsTracedAsOneSpan(t *testing.T) {
 	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
 	require.NoError(t, err)
 	spans := &spanRecorder{}
@@ -224,10 +224,10 @@ func TestModuleImportIsTracedAsOneSpanWithTheRowsInside(t *testing.T) {
 
 	_, err = m.Import(context.Background(), strings.NewReader(importHeader+"Shoes,RS-1,,Sports,9.99,1,0.3\n"), ImportOptions{FileName: "products.csv"})
 	require.NoError(t, err)
-	require.Equal(t, []string{"catalog.import", "catalog.import > catalog.import.apply"}, spans.paths)
+	require.Equal(t, []string{"catalog.import"}, spans.paths, "one span for the whole import")
 
 	spans.paths = nil
 	_, err = m.Import(context.Background(), strings.NewReader("sku,name\n"), ImportOptions{})
 	require.ErrorIs(t, err, ErrInvalidHeader)
-	require.Equal(t, []string{"catalog.import"}, spans.paths, "a rejected file never reaches the use case")
+	require.Equal(t, []string{"catalog.import"}, spans.paths, "a rejected file is traced the same way")
 }
