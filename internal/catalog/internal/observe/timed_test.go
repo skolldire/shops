@@ -1,4 +1,4 @@
-package metrics_test
+package observe_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
-	"github.com/skolldire/shops/internal/catalog/internal/metrics"
+	"github.com/skolldire/shops/internal/catalog/internal/observe"
 )
 
 type fakeCounters struct {
@@ -73,7 +73,7 @@ func TestTimedImporterRecordsTheDurationOfEveryOutcome(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			next := &fakeFileImporter{report: tt.report, err: tt.err}
 			histograms := &fakeHistograms{}
-			timed, err := metrics.NewTimedImporter(next, histograms)
+			timed, err := observe.NewTimedImporter(next, histograms)
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), requestKey{}, "req-1"))
 			defer cancel()
@@ -99,15 +99,15 @@ func TestTimedImporterRecordsTheDurationOfEveryOutcome(t *testing.T) {
 }
 
 func TestNewTimedImporterRequiresItsDependencies(t *testing.T) {
-	_, err := metrics.NewTimedImporter(nil, &fakeHistograms{})
+	_, err := observe.NewTimedImporter(nil, &fakeHistograms{})
 	require.EqualError(t, err, "catalog: timed importer requires an importer")
-	_, err = metrics.NewTimedImporter(&fakeFileImporter{}, nil)
+	_, err = observe.NewTimedImporter(&fakeFileImporter{}, nil)
 	require.EqualError(t, err, "catalog: timed importer requires histograms")
 }
 
 func TestImportRecorderCountsRowsByOutcome(t *testing.T) {
 	counters := &fakeCounters{}
-	recorder, err := metrics.NewImportRecorder(counters)
+	recorder, err := observe.NewImportRecorder(counters)
 	require.NoError(t, err)
 
 	recorder.RecordRows(context.Background(), "created", 82)

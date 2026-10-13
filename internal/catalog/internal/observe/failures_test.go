@@ -1,4 +1,4 @@
-package importlog_test
+package observe_test
 
 import (
 	"bytes"
@@ -9,16 +9,16 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/skolldire/shops/internal/catalog/internal/importlog"
+	"github.com/skolldire/shops/internal/catalog/internal/observe"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
 
-func newReporter(t *testing.T) (*importlog.Reporter, *bytes.Buffer) {
+func newReporter(t *testing.T) (*observe.FailureReporter, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
-	reporter, err := importlog.New(log)
+	reporter, err := observe.NewFailureReporter(log)
 	require.NoError(t, err)
 	return reporter, &logs
 }
@@ -61,7 +61,7 @@ func TestRowRejectedIsAnErrorWithTheCauseAndTheRow(t *testing.T) {
 	require.Equal(t, "RS-001", got[0]["sku"])
 }
 
-func TestNewRequiresALogger(t *testing.T) {
-	_, err := importlog.New(nil)
+func TestNewFailureReporterRequiresALogger(t *testing.T) {
+	_, err := observe.NewFailureReporter(nil)
 	require.EqualError(t, err, "catalog: import failure reporter requires a logger")
 }

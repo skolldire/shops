@@ -15,10 +15,8 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
 	"github.com/skolldire/shops/internal/catalog/internal/httpquery"
-	"github.com/skolldire/shops/internal/catalog/internal/importlog"
-	"github.com/skolldire/shops/internal/catalog/internal/metrics"
+	"github.com/skolldire/shops/internal/catalog/internal/observe"
 	"github.com/skolldire/shops/internal/catalog/internal/postgres"
-	"github.com/skolldire/shops/internal/catalog/internal/tracing"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
 )
@@ -45,7 +43,7 @@ type store interface {
 
 type Module struct {
 	svc      *app.Service
-	importer *metrics.TimedImporter
+	importer *observe.TimedImporter
 	seed     seedGuard
 	http     *httpapi.Handler
 	imports  *httpapi.ImportHandler
@@ -68,11 +66,11 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	recorder, err := metrics.NewImportRecorder(d.Metrics)
+	recorder, err := observe.NewImportRecorder(d.Metrics)
 	if err != nil {
 		return nil, err
 	}
-	failures, err := importlog.New(d.Log)
+	failures, err := observe.NewFailureReporter(d.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +78,7 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	tracedRows, err := tracing.NewRowImporter(rows, d.Tracer)
+	tracedRows, err := observe.NewRowImporter(rows, d.Tracer)
 	if err != nil {
 		return nil, err
 	}
@@ -88,11 +86,11 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	tracedFiles, err := tracing.NewFileImporter(files, d.Tracer, csvimport.IsRejection)
+	tracedFiles, err := observe.NewFileImporter(files, d.Tracer, csvimport.IsRejection)
 	if err != nil {
 		return nil, err
 	}
-	importer, err := metrics.NewTimedImporter(tracedFiles, d.Metrics)
+	importer, err := observe.NewTimedImporter(tracedFiles, d.Metrics)
 	if err != nil {
 		return nil, err
 	}

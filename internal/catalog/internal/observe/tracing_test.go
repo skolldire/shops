@@ -1,4 +1,4 @@
-package tracing_test
+package observe_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
-	"github.com/skolldire/shops/internal/catalog/internal/tracing"
+	"github.com/skolldire/shops/internal/catalog/internal/observe"
 )
 
 type spanKey struct{}
@@ -86,7 +86,7 @@ func TestFileImporterWrapsTheImportInASpan(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			next := &fakeFiles{report: tt.report, err: tt.err}
 			spans := &fakeSpans{}
-			traced, err := tracing.NewFileImporter(next, spans, rejected)
+			traced, err := observe.NewFileImporter(next, spans, rejected)
 			require.NoError(t, err)
 
 			report, err := traced.Import(context.Background(), strings.NewReader("name,sku\n"), "products.csv")
@@ -113,7 +113,7 @@ func TestRowImporterWrapsTheUseCaseInASpan(t *testing.T) {
 			want := app.ImportReport{File: file, Records: 3, Created: 2}
 			next := &fakeRows{report: want, err: wantErr}
 			spans := &fakeSpans{}
-			traced, err := tracing.NewRowImporter(next, spans)
+			traced, err := observe.NewRowImporter(next, spans)
 			require.NoError(t, err)
 
 			report, err := traced.Import(context.Background(), file, rows)
@@ -132,15 +132,15 @@ func TestRowImporterWrapsTheUseCaseInASpan(t *testing.T) {
 }
 
 func TestConstructorsRequireTheirDependencies(t *testing.T) {
-	_, err := tracing.NewFileImporter(nil, &fakeSpans{}, rejected)
+	_, err := observe.NewFileImporter(nil, &fakeSpans{}, rejected)
 	require.EqualError(t, err, "catalog: traced file importer requires an importer")
-	_, err = tracing.NewFileImporter(&fakeFiles{}, nil, rejected)
+	_, err = observe.NewFileImporter(&fakeFiles{}, nil, rejected)
 	require.EqualError(t, err, "catalog: traced file importer requires spans")
-	_, err = tracing.NewFileImporter(&fakeFiles{}, &fakeSpans{}, nil)
+	_, err = observe.NewFileImporter(&fakeFiles{}, &fakeSpans{}, nil)
 	require.EqualError(t, err, "catalog: traced file importer requires a rejection test")
 
-	_, err = tracing.NewRowImporter(nil, &fakeSpans{})
+	_, err = observe.NewRowImporter(nil, &fakeSpans{})
 	require.EqualError(t, err, "catalog: traced row importer requires an importer")
-	_, err = tracing.NewRowImporter(&fakeRows{}, nil)
+	_, err = observe.NewRowImporter(&fakeRows{}, nil)
 	require.EqualError(t, err, "catalog: traced row importer requires spans")
 }

@@ -1,4 +1,4 @@
-package metrics
+package observe
 
 import (
 	"context"
@@ -10,10 +10,6 @@ import (
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
 )
-
-type FileImporter interface {
-	Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error)
-}
 
 type Histograms interface {
 	Histogram(ctx context.Context, name string, value float64, attrs ...attribute.KeyValue)
