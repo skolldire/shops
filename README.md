@@ -107,7 +107,7 @@ Inside the catalog module the dependencies point towards the business rules:
 
 `domain` and `app` do not read files, parse formats, log, measure time or call a telemetry SDK:
 
-- The CSV adapter reads the upload, enforces the size and row limits, hashes the file, maps the columns and reads the numbers. The import use case receives typed product values, together with the fields the adapter could not read, and never sees a CSV cell. The errors that reject a whole file (another header, malformed CSV, too many rows, too many bytes) belong to the CSV adapter; the HTTP handler and the facade translate them.
+- The CSV adapter reads the upload, enforces the size and row limits, hashes the file, maps the columns and reads the numbers. The import use case receives typed product values, together with the fields the adapter could not read, and never sees a CSV cell. The errors that reject a whole file (another header, malformed CSV, too many rows, too many bytes) belong to the CSV adapter. The module composition classifies them, the HTTP handler turns each kind into its status and code, and the facade turns it into a public error, so neither `app` nor the HTTP adapter depends on the CSV adapter.
 - When the import recovers from a failed batch, or the database refuses a row, the use case reports it through `ImportFailureReporter` and the `importlog` adapter writes the log line.
 - The duration of an import is measured by a decorator in the `metrics` adapter around the whole operation, so it also covers files that are rejected before any row is applied.
 - Spans come from decorators in the `tracing` adapter and from the database package of the platform. `domain` and `app` do not import OpenTelemetry.
