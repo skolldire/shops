@@ -385,6 +385,8 @@ func TestImportRetriesAFailedBatchRowByRow(t *testing.T) {
 	require.Equal(t, []string{"3 rows: batch exploded: host=10.0.0.5"}, failures.batches, "the retry is reported once with its cause")
 	require.Equal(t, []string{"3 B-1: row exploded: host=10.0.0.5"}, failures.rows, "the cause goes to the reporter, not to the report")
 	require.Equal(t, [][]string{{"A-1", "B-1", "C-1"}, {"A-1"}, {"B-1"}, {"C-1"}}, store.batches)
+	require.Equal(t, map[string]int{"created": 2, "updated": 0, "unchanged": 0, "skipped": 0, "rejected": 1}, rec.rows,
+		"each row is counted once although its batch was tried again row by row")
 }
 
 func TestImportStopsWhenTheContextIsCancelled(t *testing.T) {

@@ -231,3 +231,63 @@ func TestModuleImportIsTracedAsOneSpan(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidHeader)
 	require.Equal(t, []string{"catalog.import"}, spans.paths, "a rejected file is traced the same way")
 }
+
+type meter struct {
+	histograms map[string]int
+	counters   map[string]int64
+}
+
+func (m *meter) Counter(_ context.Context, name string, value int64, attrs ...attribute.KeyValue) {
+	for _, attr := range attrs {
+		name += "{" + string(attr.Key) + "=" + attr.Value.AsString() + "}"
+	}
+	m.counters[name] += value
+}
+
+func (m *meter) Gauge(context.Context, string, float64, ...attribute.KeyValue) {}
+
+func (m *meter) Histogram(_ context.Context, name string, _ float64, _ ...attribute.KeyValue) {
+	m.histograms[name]++
+}
+
+func TestModuleImportRecordsItsDurationOnEveryAttempt(t *testing.T) {
+	valid := importHeader + "Shoes,RS-1,,Sports,9.99,1,0.3\nBad,BAD-1,,Sports,free,1,0.3\n"
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := map[string]struct {
+		ctx     context.Context
+		body    string
+		target  error
+		created int64
+	}{
+		"success":                {context.Background(), valid, nil, 1},
+		"invalid header":         {context.Background(), "sku,name\n", ErrInvalidHeader, 0},
+		"cancelled before apply": {cancelled, valid, context.Canceled, 0},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
+			require.NoError(t, err)
+			metrics := &meter{histograms: map[string]int{}, counters: map[string]int64{}}
+			deps := testDeps(log)
+			deps.Metrics = metrics
+			m, err := newModule(&memoryRepo{products: map[string]domain.Product{}}, deps)
+			require.NoError(t, err)
+
+			report, err := m.Import(tt.ctx, strings.NewReader(tt.body), ImportOptions{FileName: "products.csv"})
+
+			if tt.target == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tt.target)
+			}
+			require.Equal(t, map[string]int{"import_duration_seconds": 1}, metrics.histograms, "one duration per attempt, whatever its outcome")
+			require.Equal(t, tt.created, metrics.counters["import_rows_total{outcome=created}"])
+			if tt.target == context.Canceled {
+				require.Equal(t, 2, report.Records, "the result reflects what was read before the interruption")
+				require.Zero(t, report.Created)
+				require.EqualValues(t, 1, metrics.counters["import_rows_total{outcome=rejected}"], "only confirmed outcomes are counted")
+			}
+		})
+	}
+}
