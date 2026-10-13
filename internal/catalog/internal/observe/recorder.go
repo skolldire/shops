@@ -8,9 +8,8 @@ import (
 )
 
 const (
-	importRows     = "import_rows_total"
-	importDuration = "import_duration_seconds"
-	outcomeKey     = "outcome"
+	importRows = "import_rows_total"
+	outcomeKey = "outcome"
 )
 
 type Counters interface {

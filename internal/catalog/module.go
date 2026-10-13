@@ -43,7 +43,7 @@ type store interface {
 
 type Module struct {
 	svc      *app.Service
-	importer *observe.TimedImporter
+	importer *observe.InstrumentedImporter
 	seed     seedGuard
 	http     *httpapi.Handler
 	imports  *httpapi.ImportHandler
@@ -86,11 +86,7 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	tracedFiles, err := observe.NewFileImporter(files, d.Tracer, csvimport.IsRejection)
-	if err != nil {
-		return nil, err
-	}
-	importer, err := observe.NewTimedImporter(tracedFiles, d.Metrics)
+	importer, err := observe.NewInstrumentedImporter(files, d.Tracer, d.Metrics, csvimport.IsRejection)
 	if err != nil {
 		return nil, err
 	}
