@@ -278,7 +278,7 @@ func TestStartSeedsBeforeServingAndFailsWithoutTheFile(t *testing.T) {
 	cfg.HTTP.Addr = "127.0.0.1:0"
 	cfg.Metrics.Addr = "127.0.0.1:0"
 	cfg.Demo.Seed = true
-	var logs bytes.Buffer
+	var logs syncBuffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
 
@@ -305,10 +305,9 @@ func TestStartSeedsBeforeServingAndFailsWithoutTheFile(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- start(ctx, seeded, log, lc) }()
 
-		require.Eventually(t, func() bool {
-			total, _, _ := c.products()
-			return total == 82
-		}, 20*time.Second, 50*time.Millisecond)
+		require.Eventually(t, func() bool { return strings.Contains(logs.String(), "server listening") }, 20*time.Second, 20*time.Millisecond)
+		total, _, _ := c.products()
+		require.Equal(t, 82, total)
 		cancel()
 		select {
 		case err := <-done:
