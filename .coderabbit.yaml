@@ -19,7 +19,7 @@ reviews:
         instructions: |
           Fail only for a demonstrated violation introduced or materially changed by this PR:
           - No comments in Go, SQL, YAML, Dockerfile or Makefile files. Required //go:build and //go:embed directives are allowed.
-          - Loaded configuration, secrets and resolved configuration values are never logged or exposed through errors or responses.
+          - Loaded configuration, secrets and resolved configuration values are never logged or exposed through errors or responses. The only public configuration is demo.users: the web UI deliberately renders the configured demo user names in its header selector, and nothing else may expose them, so no error, log line or API response lists them. Secrets and internal operational settings (hosts, ports, credentials, paths, limits, timeouts) stay private, and the configuration is never serialized as a whole.
           - Business modules communicate through public module contracts, without importing another module's implementation packages.
           - internal/platform imports no business module. No cross-module foreign keys or direct access to another module's tables.
           - Dependencies are wired manually in cmd/api or explicit module composition constructors. No mutable global application state, init-based wiring or package-level logger instances. Immutable constants and read-only lookup values are allowed.
