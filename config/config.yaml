@@ -34,3 +34,9 @@ import:
 demo:
   seed: ${SEED_DEMO:-true}
   seed_file: ${SEED_FILE:-/etc/shop/seed.csv}
+  users: [alice, bob, carol]
+checkout:
+  reserve_timeout: 3s
+  charge_timeout: 6s
+  finalize_timeout: 3s
+  recovery_timeout: 60s

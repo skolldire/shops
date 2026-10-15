@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skolldire/shops/internal/catalog"
+	"github.com/skolldire/shops/internal/ordering"
+	"github.com/skolldire/shops/internal/payment"
 	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/health"
 	"github.com/skolldire/shops/internal/platform/httpx"
@@ -22,9 +24,10 @@ const (
 )
 
 type app struct {
-	api     http.Handler
-	metrics http.Handler
-	catalog *catalog.Module
+	api      http.Handler
+	metrics  http.Handler
+	catalog  *catalog.Module
+	ordering *ordering.Module
 }
 
 func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *telemetry.Provider) (*app, error) {
@@ -40,6 +43,16 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 
 	limits := catalog.ImportLimits{MaxBytes: cfg.Import.MaxBytes, MaxRows: cfg.Import.MaxRows}
 	products, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: log, Metrics: tel, Tracer: tel, Import: limits})
+	if err != nil {
+		return nil, err
+	}
+	orders, err := ordering.NewModule(ordering.Deps{
+		Pool: pool, Catalog: products, Payments: payment.NewModule(), Log: log, Metrics: tel,
+		Budgets: ordering.Budgets{
+			Reserve: cfg.Checkout.ReserveTimeout, Charge: cfg.Checkout.ChargeTimeout,
+			Finalize: cfg.Checkout.FinalizeTimeout, Recovery: cfg.Checkout.RecoveryTimeout,
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +82,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	metrics := http.NewServeMux()
 	metrics.Handle("GET /metrics", tel.MetricsHandler())
 
-	return &app{api: tel.HTTPMiddleware()(router), metrics: metrics, catalog: products}, nil
+	return &app{api: tel.HTTPMiddleware()(router), metrics: metrics, catalog: products, ordering: orders}, nil
 }
 
 func contextFields(ctx context.Context) map[string]any {

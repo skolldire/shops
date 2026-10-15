@@ -115,3 +115,57 @@ func TestValidate(t *testing.T) {
 		require.ErrorContains(t, err, want)
 	}
 }
+
+func TestShippedConfigCheckoutDefaults(t *testing.T) {
+	cfg := shippedConfig(t)
+	require.Equal(t, []string{"alice", "bob", "carol"}, cfg.Demo.Users)
+	require.Equal(t, 3*time.Second, cfg.Checkout.ReserveTimeout)
+	require.Equal(t, 6*time.Second, cfg.Checkout.ChargeTimeout)
+	require.Equal(t, 3*time.Second, cfg.Checkout.FinalizeTimeout)
+	require.Equal(t, 60*time.Second, cfg.Checkout.RecoveryTimeout)
+
+	local, err := loadConfig(t, "../../config/config.local.yaml", map[string]string{"DB_PASSWORD": testPassword}, nil)
+	require.NoError(t, err)
+	require.Equal(t, cfg.Demo.Users, local.Demo.Users)
+	require.Equal(t, cfg.Checkout, local.Checkout)
+}
+
+func TestValidateDemoUsers(t *testing.T) {
+	tests := map[string]struct {
+		users []string
+		want  string
+	}{
+		"empty list":  {nil, "demo.users must list at least one user"},
+		"empty value": {[]string{"alice", " "}, "demo.users[1] must not be empty"},
+		"repeated":    {[]string{"alice", "bob", "alice"}, "demo.users[2] repeats demo.users[0]"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := shippedConfig(t)
+			cfg.Demo.Users = tc.users
+			err := cfg.Validate()
+			require.ErrorContains(t, err, tc.want)
+			require.NotContains(t, err.Error(), "alice", "errors do not echo configured users")
+		})
+	}
+}
+
+func TestValidateCheckoutBudgets(t *testing.T) {
+	cfg := shippedConfig(t)
+	cfg.Checkout.ChargeTimeout = 0
+	require.ErrorContains(t, cfg.Validate(), "checkout.charge_timeout must be positive")
+
+	cfg = shippedConfig(t)
+	cfg.Checkout.RecoveryTimeout = -time.Second
+	require.ErrorContains(t, cfg.Validate(), "checkout.recovery_timeout must be positive")
+
+	cfg = shippedConfig(t)
+	cfg.HTTP.ShutdownTimeout = 13 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "must not exceed http.shutdown_timeout")
+	cfg.HTTP.ShutdownTimeout = 14 * time.Second
+	require.NoError(t, cfg.Validate(), "3s + 6s + 3s + 2s fits exactly")
+
+	cfg = shippedConfig(t)
+	cfg.HTTP.WriteTimeout = 10 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "must not exceed http.write_timeout")
+}
