@@ -39,15 +39,17 @@ func (h *MovementsHandler) Routes(r chi.Router) {
 }
 
 type movementJSON struct {
-	ID         int64     `json:"id"`
-	ProductID  string    `json:"product_id"`
-	Delta      int       `json:"delta"`
-	StockAfter int       `json:"stock_after"`
-	Reason     string    `json:"reason"`
-	Reference  *string   `json:"reference"`
-	DBUser     string    `json:"db_user"`
-	TxID       string    `json:"tx_id"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID            int64     `json:"id"`
+	ProductID     string    `json:"product_id"`
+	Delta         int       `json:"delta"`
+	StockAfter    int       `json:"stock_after"`
+	ReservedDelta int       `json:"reserved_delta"`
+	ReservedAfter int       `json:"reserved_after"`
+	Reason        string    `json:"reason"`
+	Reference     *string   `json:"reference"`
+	DBUser        string    `json:"db_user"`
+	TxID          string    `json:"tx_id"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type movementPageJSON struct {
@@ -71,7 +73,8 @@ func (h *MovementsHandler) list(w http.ResponseWriter, r *http.Request) {
 	out := movementPageJSON{Items: make([]movementJSON, len(page.Items)), Page: page.Page, PageSize: page.PageSize, Total: page.Total}
 	for i, m := range page.Items {
 		out.Items[i] = movementJSON{
-			ID: m.ID, ProductID: m.ProductID, Delta: m.Delta, StockAfter: m.StockAfter, Reason: m.Reason,
+			ID: m.ID, ProductID: m.ProductID, Delta: m.Delta, StockAfter: m.StockAfter,
+			ReservedDelta: m.ReservedDelta, ReservedAfter: m.ReservedAfter, Reason: m.Reason,
 			DBUser: m.DBUser, TxID: m.TxID, CreatedAt: m.CreatedAt.UTC(),
 		}
 		if m.Reference != "" {

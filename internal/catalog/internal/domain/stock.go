@@ -20,13 +20,15 @@ type StockLine struct {
 }
 
 type Movement struct {
-	ID         int64
-	ProductID  string
-	Delta      int
-	StockAfter int
-	Reason     string
-	Reference  string
-	DBUser     string
-	TxID       string
-	CreatedAt  time.Time
+	ID            int64
+	ProductID     string
+	Delta         int
+	StockAfter    int
+	ReservedDelta int
+	ReservedAfter int
+	Reason        string
+	Reference     string
+	DBUser        string
+	TxID          string
+	CreatedAt     time.Time
 }

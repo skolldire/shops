@@ -29,7 +29,7 @@ func (f *fakeInventory) Movements(_ context.Context, productID string, p domain.
 	}
 	at := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	return app.MovementPage{Items: []domain.Movement{
-		{ID: 2, ProductID: productID, Delta: -1, StockAfter: 4, Reason: "sale", Reference: "p-1", DBUser: "shop", TxID: "900", CreatedAt: at},
+		{ID: 2, ProductID: productID, Delta: -1, StockAfter: 4, ReservedDelta: -1, ReservedAfter: 2, Reason: "sale", Reference: "p-1", DBUser: "shop", TxID: "900", CreatedAt: at},
 		{ID: 1, ProductID: productID, Delta: 5, StockAfter: 5, Reason: "initial_stock", DBUser: "shop", TxID: "800", CreatedAt: at},
 	}, Page: p.Page, PageSize: p.PageSize, Total: 2}, nil
 }
@@ -60,6 +60,9 @@ func TestMovementsNewestFirstWithPaging(t *testing.T) {
 	require.Equal(t, "sale", first["reason"])
 	require.Equal(t, "p-1", first["reference"])
 	require.InDelta(t, -1, first["delta"], 0)
+	require.InDelta(t, -1, first["reserved_delta"], 0)
+	require.InDelta(t, 2, first["reserved_after"], 0)
+	require.InDelta(t, 0, second["reserved_delta"], 0)
 	require.Nil(t, second["reference"])
 	require.Equal(t, "shop", second["db_user"])
 }

@@ -256,7 +256,8 @@ func (m *Module) Movements(ctx context.Context, productID string, p Paging) (Mov
 	out := MovementPage{Items: make([]Movement, len(page.Items)), Page: page.Page, PageSize: page.PageSize, Total: page.Total}
 	for i, mv := range page.Items {
 		out.Items[i] = Movement{
-			ID: mv.ID, ProductID: mv.ProductID, Delta: mv.Delta, StockAfter: mv.StockAfter, Reason: mv.Reason,
+			ID: mv.ID, ProductID: mv.ProductID, Delta: mv.Delta, StockAfter: mv.StockAfter,
+			ReservedDelta: mv.ReservedDelta, ReservedAfter: mv.ReservedAfter, Reason: mv.Reason,
 			Reference: mv.Reference, DBUser: mv.DBUser, TxID: mv.TxID, CreatedAt: mv.CreatedAt,
 		}
 	}

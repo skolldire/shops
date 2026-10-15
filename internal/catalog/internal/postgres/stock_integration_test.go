@@ -181,6 +181,7 @@ func TestInventoryAudit(t *testing.T) {
 		require.Len(t, items, 2)
 		require.Equal(t, "p-3", items[0].Reference)
 		require.Equal(t, 5, items[0].StockAfter)
+		require.Equal(t, []int{1, 3}, []int{items[0].ReservedDelta, items[0].ReservedAfter})
 		require.Equal(t, "shop", items[0].DBUser)
 		require.NotEmpty(t, items[0].TxID)
 		items, _, err = f.repo.Movements(ctx, a.ID, domain.Paging{Page: 2, PageSize: 2})

@@ -12,7 +12,7 @@
 <div class="table-wrap">
 <table>
 <thead>
-<tr><th>When</th><th class="numeric">Change</th><th class="numeric">Stock after</th><th>Reason</th><th class="optional">Reference</th><th class="optional">Database role</th></tr>
+<tr><th>When</th><th class="numeric">Change</th><th class="numeric">Stock after</th><th class="numeric">Reserved change</th><th class="numeric">Reserved after</th><th>Reason</th><th class="optional">Reference</th><th class="optional">Database role</th></tr>
 </thead>
 <tbody>
 {{range .Data.Page.Items}}
@@ -20,6 +20,8 @@
 <td>{{.CreatedAt.UTC.Format "2006-01-02 15:04:05"}} UTC</td>
 <td class="numeric">{{if gt .Delta 0}}+{{end}}{{.Delta}}</td>
 <td class="numeric">{{.StockAfter}}</td>
+<td class="numeric">{{if gt .ReservedDelta 0}}+{{end}}{{.ReservedDelta}}</td>
+<td class="numeric">{{.ReservedAfter}}</td>
 <td>{{.Reason}}</td>
 <td class="optional">{{.Reference}}</td>
 <td class="optional">{{.DBUser}}</td>

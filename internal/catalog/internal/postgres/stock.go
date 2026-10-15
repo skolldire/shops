@@ -117,7 +117,7 @@ func (r *Repository) Movements(ctx context.Context, productID string, p domain.P
 		return nil, 0, app.ErrNotFound
 	}
 	rows, err := q.Query(ctx,
-		`SELECT id, product_id::text, delta, stock_after, reason, COALESCE(reference, ''), db_user, tx_id::text, created_at
+		`SELECT id, product_id::text, delta, stock_after, reserved_delta, reserved_after, reason, COALESCE(reference, ''), db_user, tx_id::text, created_at
 		 FROM inventory_movements WHERE product_id = $1::uuid
 		 ORDER BY id DESC LIMIT $2 OFFSET $3`, productID, p.PageSize, p.Offset())
 	if err != nil {
@@ -125,7 +125,7 @@ func (r *Repository) Movements(ctx context.Context, productID string, p domain.P
 	}
 	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Movement, error) {
 		var m domain.Movement
-		err := row.Scan(&m.ID, &m.ProductID, &m.Delta, &m.StockAfter, &m.Reason, &m.Reference, &m.DBUser, &m.TxID, &m.CreatedAt)
+		err := row.Scan(&m.ID, &m.ProductID, &m.Delta, &m.StockAfter, &m.ReservedDelta, &m.ReservedAfter, &m.Reason, &m.Reference, &m.DBUser, &m.TxID, &m.CreatedAt)
 		return m, err
 	})
 	if err != nil {

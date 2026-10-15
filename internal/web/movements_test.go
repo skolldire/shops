@@ -14,9 +14,10 @@ import (
 func TestAdminMovementsPage(t *testing.T) {
 	at := time.Date(2026, 10, 14, 12, 30, 0, 0, time.UTC)
 	cat := &fakeCatalog{
-		products: map[string]catalog.Product{"p1": {ID: "p1", SKU: "RS-001", Name: "Running Shoes", Price: decimal.RequireFromString("29.99"), Stock: 4}},
+		products: map[string]catalog.Product{"p1": {ID: "p1", SKU: "RS-001", Name: "Running Shoes", Price: decimal.RequireFromString("29.99"), Stock: 4, Reserved: 3}},
 		movements: []catalog.Movement{
-			{ID: 2, Delta: -1, StockAfter: 4, Reason: "sale", Reference: "purchase-9", DBUser: "shop", CreatedAt: at},
+			{ID: 3, Delta: 0, StockAfter: 4, ReservedDelta: 3, ReservedAfter: 3, Reason: "reservation", Reference: "purchase-9", DBUser: "shop", CreatedAt: at},
+			{ID: 2, Delta: -1, StockAfter: 4, ReservedDelta: -1, ReservedAfter: 0, Reason: "sale", Reference: "purchase-8", DBUser: "shop", CreatedAt: at},
 			{ID: 1, Delta: 5, StockAfter: 5, Reason: "initial_stock", DBUser: "shop", CreatedAt: at},
 		},
 		total: 45,
@@ -30,6 +31,9 @@ func TestAdminMovementsPage(t *testing.T) {
 	require.Contains(t, body, "Stock movements of Running Shoes")
 	require.Contains(t, body, "purchase-9")
 	require.Contains(t, body, "+5")
+	require.Contains(t, body, "stock 4 · reserved 3")
+	require.Contains(t, body, `<td class="numeric">+3</td>`)
+	require.Contains(t, body, "reservation")
 	require.Contains(t, body, "initial_stock")
 	require.Contains(t, body, "2026-10-14 12:30:00 UTC")
 	require.Contains(t, body, `href="/admin/products/p1/movements?page=1&amp;page_size=20"`)
