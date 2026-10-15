@@ -11,12 +11,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/httpapi"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
@@ -78,6 +80,7 @@ func upload(t *testing.T, h http.Handler, field, name, content string, extra ...
 
 func TestImportReturnsTheReportEvenWithRejectedRows(t *testing.T) {
 	importer := &fakeImporter{report: app.ImportReport{
+		ID: "11111111-1111-4111-8111-111111111111", Mode: domain.ImportReplace,
 		File:    app.ImportFile{Name: "products.csv", Bytes: 10240, SHA256: "6fc46b84"},
 		Records: 97, Skipped: 2, Created: 80, Updated: 1, Unchanged: 1, Rejected: 13,
 		Errors: []app.RowError{
@@ -92,6 +95,7 @@ func TestImportReturnsTheReportEvenWithRejectedRows(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 	require.JSONEq(t, `{
+		"import_id": "11111111-1111-4111-8111-111111111111", "mode": "replace", "preview_changed": false,
 		"file": {"name": "products.csv", "bytes": 10240, "sha256": "6fc46b84"},
 		"records": 97, "skipped": 2, "created": 80, "updated": 1, "unchanged": 1, "rejected": 13,
 		"errors": [
@@ -119,12 +123,18 @@ func TestImportErrorTable(t *testing.T) {
 		code   string
 		detail string
 	}{
-		"another header":     {csvimport.ErrInvalidHeader, 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
-		"wrapped header":     {fmt.Errorf("reading: %w", csvimport.ErrInvalidHeader), 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
-		"malformed csv":      {&csvimport.FormatError{Line: 7, Reason: "bare quote"}, 400, "invalid_csv", "Line 7: bare quote."},
-		"wrapped malformed":  {fmt.Errorf("reading: %w", &csvimport.FormatError{Line: 9, Reason: "bare quote"}), 400, "invalid_csv", "Line 9: bare quote."},
-		"too many rows":      {csvimport.ErrTooManyRows, 400, "too_many_rows", "more rows"},
-		"file too large":     {csvimport.ErrFileTooLarge, 413, "request_too_large", "larger than the import limit"},
+		"another header":    {csvimport.ErrInvalidHeader, 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
+		"wrapped header":    {fmt.Errorf("reading: %w", csvimport.ErrInvalidHeader), 400, "invalid_header", "name,sku,description,category,price,stock,weight_kg"},
+		"malformed csv":     {&csvimport.FormatError{Line: 7, Reason: "bare quote"}, 400, "invalid_csv", "Line 7: bare quote."},
+		"wrapped malformed": {fmt.Errorf("reading: %w", &csvimport.FormatError{Line: 9, Reason: "bare quote"}), 400, "invalid_csv", "Line 9: bare quote."},
+		"too many rows":     {csvimport.ErrTooManyRows, 400, "too_many_rows", "more rows"},
+		"file too large":    {csvimport.ErrFileTooLarge, 413, "request_too_large", "larger than the import limit"},
+		"bad key":           {app.ErrInvalidIdempotencyKey, 400, "invalid_idempotency_key", "UUID"},
+		"key conflict":      {fmt.Errorf("add: %w", app.ErrIdempotencyConflict), 409, "idempotency_conflict", "another file or mode"},
+		"repeated file": {&app.DuplicateFileError{Previous: domain.ImportStamp{AppliedAt: time.Date(2026, 10, 14, 9, 30, 0, 0, time.UTC)}},
+			409, "duplicate_file", "already added on 2026-10-14T09:30:00Z. Send allow_duplicate=true"},
+		"cancelled import":   {app.ErrImportCancelled, 409, "import_cancelled", "cancelled"},
+		"expired preview":    {app.ErrPreviewExpired, 410, "preview_expired", "Upload the file again"},
 		"unexpected failure": {errors.New("db exploded: host=10.0.0.5"), 500, "internal_error", "unexpected"},
 	}
 	for name, tt := range tests {
@@ -143,6 +153,50 @@ func TestImportErrorTable(t *testing.T) {
 				require.Empty(t, logs.String(), "an expected rejection is not logged as a failure")
 			}
 		})
+	}
+}
+
+func uploadWith(t *testing.T, h http.Handler, path string, headers ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	part, err := form.CreateFormFile("file", "stock.csv")
+	require.NoError(t, err)
+	_, err = part.Write([]byte("name\n"))
+	require.NoError(t, err)
+	require.NoError(t, form.Close())
+	req := httptest.NewRequest(http.MethodPost, path, &body)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestImportReadsTheModeTheKeyAndTheDuplicateConfirmation(t *testing.T) {
+	const key = "6f1c1d3e-2a4b-4c5d-8e9f-0a1b2c3d4e5f"
+	importer := &fakeImporter{}
+	h, _ := newImportServer(t, importer, 1<<20)
+
+	require.Equal(t, http.StatusOK, uploadWith(t, h, "/api/v1/imports").Code)
+	require.Equal(t, app.ImportOptions{FileName: "stock.csv", Mode: domain.ImportReplace}, importer.opts, "replace without a key keeps working as before")
+
+	rec := uploadWith(t, h, "/api/v1/imports?mode=add&allow_duplicate=true", "Idempotency-Key", key)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, app.ImportOptions{FileName: "stock.csv", Mode: domain.ImportAdd, Key: key, AllowDuplicate: true}, importer.opts)
+
+	for path, code := range map[string]string{
+		"/api/v1/imports?mode=sum":                         "invalid_mode",
+		"/api/v1/imports?mode=add":                         "invalid_idempotency_key",
+		"/api/v1/imports?mode=replace&allow_duplicate=yes": "invalid_request",
+	} {
+		calls := importer.calls
+		rec := uploadWith(t, h, path)
+		require.Equal(t, http.StatusBadRequest, rec.Code, path)
+		require.Equal(t, code, decodeProblem(t, rec).Code, path)
+		require.Equal(t, calls, importer.calls, "the file is not read: %s", path)
 	}
 }
 

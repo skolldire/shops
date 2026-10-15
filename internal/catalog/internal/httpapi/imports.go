@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -56,17 +58,25 @@ type rowErrorJSON struct {
 }
 
 type importReportJSON struct {
-	File      importFileJSON `json:"file"`
-	Records   int            `json:"records"`
-	Skipped   int            `json:"skipped"`
-	Created   int            `json:"created"`
-	Updated   int            `json:"updated"`
-	Unchanged int            `json:"unchanged"`
-	Rejected  int            `json:"rejected"`
-	Errors    []rowErrorJSON `json:"errors"`
+	ImportID       string         `json:"import_id"`
+	Mode           string         `json:"mode"`
+	PreviewChanged bool           `json:"preview_changed"`
+	File           importFileJSON `json:"file"`
+	Records        int            `json:"records"`
+	Skipped        int            `json:"skipped"`
+	Created        int            `json:"created"`
+	Updated        int            `json:"updated"`
+	Unchanged      int            `json:"unchanged"`
+	Rejected       int            `json:"rejected"`
+	Errors         []rowErrorJSON `json:"errors"`
 }
 
 func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
+	opts, problem := importOptions(r)
+	if problem != nil {
+		httpx.WriteError(w, r, *problem)
+		return
+	}
 	parts, err := r.MultipartReader()
 	if err != nil {
 		h.invalidRequest(w, r)
@@ -81,7 +91,8 @@ func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
 		if part.FormName() != importField {
 			continue
 		}
-		report, err := h.importer.Import(r.Context(), part, app.ImportOptions{FileName: part.FileName(), Mode: domain.ImportReplace})
+		opts.FileName = part.FileName()
+		report, err := h.importer.Import(r.Context(), part, opts)
 		if err != nil {
 			h.writeError(w, r, err)
 			return
@@ -91,16 +102,40 @@ func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func importOptions(r *http.Request) (app.ImportOptions, *httpx.ErrorResponse) {
+	query := r.URL.Query()
+	mode, err := domain.ParseImportMode(query.Get("mode"))
+	if err != nil {
+		return app.ImportOptions{}, &httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_mode", Detail: "mode must be add or replace; it is replace when omitted."}
+	}
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if mode == domain.ImportAdd && key == "" {
+		return app.ImportOptions{}, &httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_idempotency_key", Detail: "An add import requires an Idempotency-Key header with a UUID."}
+	}
+	allow := false
+	switch raw := query.Get("allow_duplicate"); raw {
+	case "", "false":
+	case "true":
+		allow = true
+	default:
+		return app.ImportOptions{}, &httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_request", Detail: "allow_duplicate must be true or false."}
+	}
+	return app.ImportOptions{Mode: mode, Key: key, AllowDuplicate: allow}, nil
+}
+
 func reportJSON(report app.ImportReport) importReportJSON {
 	out := importReportJSON{
-		File:      importFileJSON{Name: report.File.Name, Bytes: report.File.Bytes, SHA256: report.File.SHA256},
-		Records:   report.Records,
-		Skipped:   report.Skipped,
-		Created:   report.Created,
-		Updated:   report.Updated,
-		Unchanged: report.Unchanged,
-		Rejected:  report.Rejected,
-		Errors:    make([]rowErrorJSON, len(report.Errors)),
+		ImportID:       report.ID,
+		Mode:           string(report.Mode),
+		PreviewChanged: report.PreviewChanged,
+		File:           importFileJSON{Name: report.File.Name, Bytes: report.File.Bytes, SHA256: report.File.SHA256},
+		Records:        report.Records,
+		Skipped:        report.Skipped,
+		Created:        report.Created,
+		Updated:        report.Updated,
+		Unchanged:      report.Unchanged,
+		Rejected:       report.Rejected,
+		Errors:         make([]rowErrorJSON, len(report.Errors)),
 	}
 	for i, e := range report.Errors {
 		out.Errors[i] = rowErrorJSON{Line: e.Line, SKU: e.SKU, Field: e.Field, Code: e.Code, Message: e.Message}
@@ -126,10 +161,22 @@ func (h *ImportHandler) partError(w http.ResponseWriter, r *http.Request, err er
 
 func (h *ImportHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
-		tooLarge *http.MaxBytesError
-		format   *csvimport.FormatError
+		tooLarge  *http.MaxBytesError
+		format    *csvimport.FormatError
+		duplicate *app.DuplicateFileError
 	)
 	switch {
+	case errors.Is(err, app.ErrInvalidIdempotencyKey), errors.Is(err, app.ErrIdempotencyKeyRequired):
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_idempotency_key", Detail: "Idempotency-Key must be a UUID, and an add import requires one."})
+	case errors.Is(err, app.ErrIdempotencyConflict):
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "idempotency_conflict", Detail: "This Idempotency-Key was already used with another file or mode."})
+	case errors.As(err, &duplicate):
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "duplicate_file", Detail: fmt.Sprintf(
+			"The same file was already added on %s. Send allow_duplicate=true to add it again.", duplicate.Previous.AppliedAt.UTC().Format(time.RFC3339))})
+	case errors.Is(err, app.ErrImportCancelled):
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "import_cancelled", Detail: "The import with this Idempotency-Key was cancelled."})
+	case errors.Is(err, app.ErrPreviewExpired):
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusGone, Code: "preview_expired", Detail: "The import with this Idempotency-Key expired. Upload the file again with another key."})
 	case errors.Is(err, csvimport.ErrFileTooLarge), errors.As(err, &tooLarge):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusRequestEntityTooLarge, Code: "request_too_large", Detail: "The CSV file is larger than the import limit."})
 	case errors.Is(err, csvimport.ErrInvalidHeader):
