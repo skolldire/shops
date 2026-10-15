@@ -10,7 +10,7 @@ import (
 const (
 	reasonInitialStock       = "initial_stock"
 	reasonManualAdjustment   = "manual_adjustment"
-	reasonImport             = "import"
+	reasonImportReplace      = "import_replace"
 	reasonSale               = "sale"
 	reasonReservation        = "reservation"
 	reasonReservationRelease = "reservation_release"

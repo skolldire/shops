@@ -84,10 +84,10 @@ func TestInventoryAudit(t *testing.T) {
 		require.Equal(t, []movementRow{
 			{5, 5, "initial_stock", "<null>"},
 			{3, 8, "manual_adjustment", "<null>"},
-			{-2, 6, "import", "sha-1"},
+			{-2, 6, "import_replace", "sha-1"},
 		}, f.movements(t, a.ID), "renaming and reimporting an unchanged row add no movement")
 		created := f.idOf(t, "N-1")
-		require.Equal(t, []movementRow{{4, 4, "import", "sha-1"}}, f.movements(t, created), "a product created by import has a single import movement")
+		require.Equal(t, []movementRow{{4, 4, "import_replace", "sha-1"}}, f.movements(t, created), "a product created by import has a single import movement")
 		require.Empty(t, f.movements(t, f.idOf(t, "N-0")))
 
 		var unattributed int

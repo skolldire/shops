@@ -42,7 +42,7 @@ func (r *Repository) Upsert(ctx context.Context, products []domain.Product, refe
 	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
 		clear(outcomes)
 		q := database.Q(ctx, r.pool)
-		if err := setStockReason(ctx, q, reasonImport, reference); err != nil {
+		if err := setStockReason(ctx, q, reasonImportReplace, reference); err != nil {
 			return err
 		}
 
