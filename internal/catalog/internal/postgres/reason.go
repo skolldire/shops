@@ -8,11 +8,13 @@ import (
 )
 
 const (
-	reasonInitialStock     = "initial_stock"
-	reasonManualAdjustment = "manual_adjustment"
-	reasonImport           = "import"
-	reasonSale             = "sale"
-	reasonSaleReversal     = "sale_reversal"
+	reasonInitialStock       = "initial_stock"
+	reasonManualAdjustment   = "manual_adjustment"
+	reasonImport             = "import"
+	reasonSale               = "sale"
+	reasonReservation        = "reservation"
+	reasonReservationRelease = "reservation_release"
+	reasonSaleReversal       = "sale_reversal"
 )
 
 func setStockReason(ctx context.Context, q database.Querier, reason, reference string) error {

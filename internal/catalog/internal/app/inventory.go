@@ -45,6 +45,30 @@ func (i *Inventory) ReturnStock(ctx context.Context, items []domain.StockRequest
 	return i.store.ReturnStock(ctx, sorted, reference)
 }
 
+func (i *Inventory) ReserveStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
+	sorted, err := sortedRequests(items)
+	if err != nil {
+		return nil, err
+	}
+	return i.store.ReserveStock(ctx, sorted, reference)
+}
+
+func (i *Inventory) ReleaseStock(ctx context.Context, items []domain.StockRequest, reference string) error {
+	sorted, err := sortedRequests(items)
+	if err != nil {
+		return err
+	}
+	return i.store.ReleaseStock(ctx, sorted, reference)
+}
+
+func (i *Inventory) CommitStock(ctx context.Context, items []domain.StockRequest, reference string) error {
+	sorted, err := sortedRequests(items)
+	if err != nil {
+		return err
+	}
+	return i.store.CommitStock(ctx, sorted, reference)
+}
+
 func (i *Inventory) Movements(ctx context.Context, productID string, p domain.Paging) (MovementPage, error) {
 	if !idPattern.MatchString(productID) {
 		return MovementPage{}, ErrNotFound

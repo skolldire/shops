@@ -22,6 +22,77 @@ const returnStock = `UPDATE products
 SET stock = stock + $2, version = version + 1, updated_at = now()
 WHERE id = $1::uuid`
 
+const reserveStock = `UPDATE products
+SET reserved = reserved + $2
+WHERE id = $1::uuid AND status = 'ACTIVE' AND stock - reserved >= $2
+RETURNING sku, name, price::text`
+
+const releaseStock = `UPDATE products
+SET reserved = reserved - $2
+WHERE id = $1::uuid AND reserved >= $2`
+
+const commitStock = `UPDATE products
+SET stock = stock - $2, reserved = reserved - $2, version = version + 1, updated_at = now()
+WHERE id = $1::uuid AND reserved >= $2`
+
+func (r *Repository) ReserveStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
+	lines := make([]domain.StockLine, 0, len(items))
+	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
+		lines = lines[:0]
+		q := database.Q(ctx, r.pool)
+		if err := setStockReason(ctx, q, reasonReservation, reference); err != nil {
+			return err
+		}
+		for _, it := range items {
+			line := domain.StockLine{ProductID: it.ProductID, Quantity: it.Quantity}
+			var price string
+			err := q.QueryRow(ctx, reserveStock, it.ProductID, it.Quantity).Scan(&line.SKU, &line.Name, &price)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return r.stockShortage(ctx, q, it.ProductID)
+			}
+			if err != nil {
+				return fmt.Errorf("catalog: reserve stock: %w", err)
+			}
+			if line.Price, err = decimal.NewFromString(price); err != nil {
+				return fmt.Errorf("catalog: parse price: %w", err)
+			}
+			lines = append(lines, line)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
+
+func (r *Repository) ReleaseStock(ctx context.Context, items []domain.StockRequest, reference string) error {
+	return r.settle(ctx, items, reasonReservationRelease, reference, releaseStock)
+}
+
+func (r *Repository) CommitStock(ctx context.Context, items []domain.StockRequest, reference string) error {
+	return r.settle(ctx, items, reasonSale, reference, commitStock)
+}
+
+func (r *Repository) settle(ctx context.Context, items []domain.StockRequest, reason, reference, statement string) error {
+	return r.tx.WithinTx(ctx, func(ctx context.Context) error {
+		q := database.Q(ctx, r.pool)
+		if err := setStockReason(ctx, q, reason, reference); err != nil {
+			return err
+		}
+		for _, it := range items {
+			tag, err := q.Exec(ctx, statement, it.ProductID, it.Quantity)
+			if err != nil {
+				return fmt.Errorf("catalog: %s: %w", reason, err)
+			}
+			if tag.RowsAffected() == 0 {
+				return &app.StockInvariantError{ProductID: it.ProductID, Quantity: it.Quantity}
+			}
+		}
+		return nil
+	})
+}
+
 func (r *Repository) TakeStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
 	lines := make([]domain.StockLine, 0, len(items))
 	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
@@ -55,10 +126,10 @@ func (r *Repository) TakeStock(ctx context.Context, items []domain.StockRequest,
 
 func (r *Repository) stockShortage(ctx context.Context, q database.Querier, id string) error {
 	var (
-		status string
-		stock  int
+		status    string
+		available int
 	)
-	err := q.QueryRow(ctx, `SELECT status, stock FROM products WHERE id = $1::uuid`, id).Scan(&status, &stock)
+	err := q.QueryRow(ctx, `SELECT status, stock - reserved FROM products WHERE id = $1::uuid`, id).Scan(&status, &available)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return &app.ProductUnavailableError{ProductID: id}
@@ -67,7 +138,7 @@ func (r *Repository) stockShortage(ctx context.Context, q database.Querier, id s
 	case status != "ACTIVE":
 		return &app.ProductUnavailableError{ProductID: id}
 	}
-	return &app.InsufficientStockError{ProductID: id, Available: stock}
+	return &app.InsufficientStockError{ProductID: id, Available: available}
 }
 
 func (r *Repository) ReturnStock(ctx context.Context, items []domain.StockRequest, reference string) error {

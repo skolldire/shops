@@ -15,6 +15,7 @@ var (
 
 	ErrProductUnavailable  = errors.New("catalog: product unavailable")
 	ErrInvalidStockRequest = errors.New("catalog: invalid stock request")
+	ErrStockInvariant      = errors.New("catalog: the reservation does not match the stock")
 
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")

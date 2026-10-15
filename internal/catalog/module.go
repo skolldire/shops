@@ -232,6 +232,26 @@ func (m *Module) ReturnStock(ctx context.Context, items []StockRequest, referenc
 	return publicError(m.inventory.ReturnStock(ctx, toStockRequests(items), reference))
 }
 
+func (m *Module) ReserveStock(ctx context.Context, items []StockRequest, reference string) ([]StockLine, error) {
+	lines, err := m.inventory.ReserveStock(ctx, toStockRequests(items), reference)
+	if err != nil {
+		return nil, publicError(err)
+	}
+	out := make([]StockLine, len(lines))
+	for i, l := range lines {
+		out[i] = StockLine{ProductID: l.ProductID, SKU: l.SKU, Name: l.Name, Price: l.Price, Quantity: l.Quantity}
+	}
+	return out, nil
+}
+
+func (m *Module) ReleaseStock(ctx context.Context, items []StockRequest, reference string) error {
+	return publicError(m.inventory.ReleaseStock(ctx, toStockRequests(items), reference))
+}
+
+func (m *Module) CommitStock(ctx context.Context, items []StockRequest, reference string) error {
+	return publicError(m.inventory.CommitStock(ctx, toStockRequests(items), reference))
+}
+
 func ParsePaging(page, pageSize string) (Paging, error) {
 	p, err := httpquery.ParsePagingParams(page, pageSize)
 	if err != nil {
@@ -318,6 +338,7 @@ func publicError(err error) error {
 	var (
 		short       *app.InsufficientStockError
 		unavailable *app.ProductUnavailableError
+		invariant   *app.StockInvariantError
 	)
 	switch {
 	case errors.As(err, &short):
@@ -326,6 +347,8 @@ func publicError(err error) error {
 		return &ProductUnavailableError{ProductID: unavailable.ProductID}
 	case errors.Is(err, app.ErrInvalidStockRequest):
 		return ErrInvalidStockRequest
+	case errors.As(err, &invariant):
+		return fmt.Errorf("%w: product %s has fewer than %d reserved units to settle", ErrStockInvariant, invariant.ProductID, invariant.Quantity)
 	case errors.Is(err, app.ErrNotFound):
 		return ErrNotFound
 	case errors.Is(err, app.ErrSKUTaken):

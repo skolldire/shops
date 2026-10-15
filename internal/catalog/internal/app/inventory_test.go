@@ -16,10 +16,11 @@ const (
 )
 
 type fakeStock struct {
-	taken, returned []domain.StockRequest
-	reference       string
-	paging          domain.Paging
-	productID       string
+	taken, returned               []domain.StockRequest
+	reserved, released, committed []domain.StockRequest
+	reference                     string
+	paging                        domain.Paging
+	productID                     string
 }
 
 func (f *fakeStock) TakeStock(_ context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
@@ -29,6 +30,21 @@ func (f *fakeStock) TakeStock(_ context.Context, items []domain.StockRequest, re
 
 func (f *fakeStock) ReturnStock(_ context.Context, items []domain.StockRequest, reference string) error {
 	f.returned, f.reference = items, reference
+	return nil
+}
+
+func (f *fakeStock) ReserveStock(_ context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
+	f.reserved, f.reference = items, reference
+	return []domain.StockLine{}, nil
+}
+
+func (f *fakeStock) ReleaseStock(_ context.Context, items []domain.StockRequest, reference string) error {
+	f.released, f.reference = items, reference
+	return nil
+}
+
+func (f *fakeStock) CommitStock(_ context.Context, items []domain.StockRequest, reference string) error {
+	f.committed, f.reference = items, reference
 	return nil
 }
 
@@ -64,6 +80,22 @@ func TestInventorySortsAndNormalizesStockRequests(t *testing.T) {
 	require.Equal(t, "ref-2", store.reference)
 }
 
+func TestInventorySortsReservationsReleasesAndCommits(t *testing.T) {
+	inv, store := newInventory(t)
+	ctx := context.Background()
+	unsorted := []domain.StockRequest{{ProductID: "22222222-2222-4222-8222-22222222222A", Quantity: 2}, {ProductID: firstID, Quantity: 1}}
+	sorted := []domain.StockRequest{{ProductID: firstID, Quantity: 1}, {ProductID: "22222222-2222-4222-8222-22222222222a", Quantity: 2}}
+
+	_, err := inv.ReserveStock(ctx, unsorted, "purchase-1")
+	require.NoError(t, err)
+	require.Equal(t, sorted, store.reserved)
+	require.NoError(t, inv.ReleaseStock(ctx, unsorted, "purchase-2"))
+	require.Equal(t, sorted, store.released)
+	require.NoError(t, inv.CommitStock(ctx, unsorted, "purchase-3"))
+	require.Equal(t, sorted, store.committed)
+	require.Equal(t, "purchase-3", store.reference)
+}
+
 func TestInventoryRejectsInvalidStockRequests(t *testing.T) {
 	tests := map[string][]domain.StockRequest{
 		"no items":          nil,
@@ -79,8 +111,15 @@ func TestInventoryRejectsInvalidStockRequests(t *testing.T) {
 			_, err := inv.TakeStock(context.Background(), items, "ref")
 			require.ErrorIs(t, err, app.ErrInvalidStockRequest)
 			require.ErrorIs(t, inv.ReturnStock(context.Background(), items, "ref"), app.ErrInvalidStockRequest)
+			_, err = inv.ReserveStock(context.Background(), items, "ref")
+			require.ErrorIs(t, err, app.ErrInvalidStockRequest)
+			require.ErrorIs(t, inv.ReleaseStock(context.Background(), items, "ref"), app.ErrInvalidStockRequest)
+			require.ErrorIs(t, inv.CommitStock(context.Background(), items, "ref"), app.ErrInvalidStockRequest)
 			require.Nil(t, store.taken)
 			require.Nil(t, store.returned)
+			require.Nil(t, store.reserved)
+			require.Nil(t, store.released)
+			require.Nil(t, store.committed)
 		})
 	}
 }

@@ -28,6 +28,7 @@ type memoryRepo struct {
 	search    domain.Search
 	taken     []domain.StockRequest
 	returned  []domain.StockRequest
+	settled   []domain.StockRequest
 	reference string
 	movements []domain.Movement
 }
@@ -52,6 +53,29 @@ func (m *memoryRepo) TakeStock(_ context.Context, items []domain.StockRequest, r
 func (m *memoryRepo) ReturnStock(_ context.Context, items []domain.StockRequest, reference string) error {
 	m.reference = reference
 	m.returned = append(m.returned, items...)
+	return nil
+}
+
+func (m *memoryRepo) ReserveStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
+	return m.TakeStock(ctx, items, reference)
+}
+
+func (m *memoryRepo) ReleaseStock(ctx context.Context, items []domain.StockRequest, reference string) error {
+	return m.settle(items, reference)
+}
+
+func (m *memoryRepo) CommitStock(ctx context.Context, items []domain.StockRequest, reference string) error {
+	return m.settle(items, reference)
+}
+
+func (m *memoryRepo) settle(items []domain.StockRequest, reference string) error {
+	m.reference = reference
+	for _, it := range items {
+		if it.Quantity > m.products[it.ProductID].Stock {
+			return &app.StockInvariantError{ProductID: it.ProductID, Quantity: it.Quantity}
+		}
+	}
+	m.settled = append(m.settled, items...)
 	return nil
 }
 
@@ -303,6 +327,32 @@ func TestModuleStockTranslatesErrors(t *testing.T) {
 
 	require.NoError(t, m.ReturnStock(context.Background(), []StockRequest{{ProductID: p.ID, Quantity: 2}}, "purchase-1"))
 	require.Equal(t, []domain.StockRequest{{ProductID: p.ID, Quantity: 2}}, repo.returned)
+}
+
+func TestModuleReservationsTranslateErrors(t *testing.T) {
+	m, repo := newTestModule(t)
+	ctx := context.Background()
+	p, err := m.Create(ctx, validCreate())
+	require.NoError(t, err)
+
+	lines, err := m.ReserveStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 2}}, "purchase-1")
+	require.NoError(t, err)
+	require.Equal(t, []StockLine{{ProductID: p.ID, SKU: p.SKU, Name: p.Name, Price: p.Price, Quantity: 2}}, lines)
+	_, err = m.ReserveStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 1000}}, "purchase-2")
+	var short *InsufficientStockError
+	require.ErrorAs(t, err, &short)
+	_, err = m.ReserveStock(ctx, []StockRequest{{ProductID: missingID, Quantity: 1}}, "purchase-3")
+	require.ErrorIs(t, err, ErrProductUnavailable)
+
+	require.NoError(t, m.ReleaseStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 2}}, "purchase-1"))
+	require.NoError(t, m.CommitStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 2}}, "purchase-4"))
+	require.Equal(t, "purchase-4", repo.reference)
+	require.Len(t, repo.settled, 2)
+
+	err = m.CommitStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 1000}}, "purchase-5")
+	require.ErrorIs(t, err, ErrStockInvariant)
+	require.EqualError(t, err, "catalog: the reservation does not match the stock: product "+p.ID+" has fewer than 1000 reserved units to settle")
+	require.ErrorIs(t, m.ReleaseStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 0}}, "purchase-6"), ErrInvalidStockRequest)
 }
 
 func TestModuleMovements(t *testing.T) {
