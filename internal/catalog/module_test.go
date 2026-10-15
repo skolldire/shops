@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -141,9 +140,9 @@ func testDeps(log logger.Service) Deps {
 	return Deps{Log: log, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(), Import: ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}}
 }
 
-func (m *memoryRepo) Upsert(ctx context.Context, _ domain.ImportMode, products []domain.Product, _ string) (map[string]app.UpsertOutcome, error) {
+func (m *memoryRepo) Upsert(ctx context.Context, _ domain.ImportMode, products []domain.Product, _ string) (app.UpsertResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return app.UpsertResult{}, err
 	}
 	out := make(map[string]app.UpsertOutcome, len(products))
 	for _, p := range products {
@@ -151,17 +150,7 @@ func (m *memoryRepo) Upsert(ctx context.Context, _ domain.ImportMode, products [
 		p.ID, p.Version = p.SKU, 1
 		m.products[p.ID] = p
 	}
-	return out, nil
-}
-
-func (m *memoryRepo) ImportTargets(_ context.Context, skus []string) (map[string]domain.ImportTarget, error) {
-	out := map[string]domain.ImportTarget{}
-	for _, p := range m.products {
-		if slices.Contains(skus, p.SKU) {
-			out[p.SKU] = domain.ImportTarget{Stock: p.Stock, Reserved: p.Reserved}
-		}
-	}
-	return out, nil
+	return app.UpsertResult{Outcomes: out}, nil
 }
 
 func (m *memoryRepo) HasProducts(context.Context) (bool, error) {

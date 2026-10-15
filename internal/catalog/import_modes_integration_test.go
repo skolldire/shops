@@ -27,7 +27,7 @@ type replicas struct {
 	a, b *catalog.Module
 }
 
-func twoReplicas(t *testing.T, maxPreviews int) replicas {
+func twoReplicas(t *testing.T) replicas {
 	t.Helper()
 	pool, _ := dbtest.Start(t)
 	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
@@ -35,7 +35,7 @@ func twoReplicas(t *testing.T, maxPreviews int) replicas {
 	module := func() *catalog.Module {
 		m, err := catalog.NewModule(catalog.Deps{
 			Pool: pool, Log: log, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(),
-			Import: catalog.ImportLimits{MaxBytes: 1 << 20, MaxRows: 1000, PreviewTTL: time.Hour, MaxActivePreviews: maxPreviews},
+			Import: catalog.ImportLimits{MaxBytes: 1 << 20, MaxRows: 1000},
 		})
 		require.NoError(t, err)
 		return m
@@ -62,13 +62,12 @@ func add(key string, allow bool) catalog.ImportOptions {
 }
 
 const (
-	keyOne   = "11111111-1111-4111-8111-111111111111"
-	keyTwo   = "22222222-2222-4222-8222-222222222222"
-	keyThree = "33333333-3333-4333-8333-333333333333"
+	keyOne = "11111111-1111-4111-8111-111111111111"
+	keyTwo = "22222222-2222-4222-8222-222222222222"
 )
 
 func TestAddImportsAreIdempotentAndAskBeforeRepeatingAFile(t *testing.T) {
-	r := twoReplicas(t, 20)
+	r := twoReplicas(t)
 	ctx := context.Background()
 	_, err := r.a.Import(ctx, strings.NewReader(header+"Tent,TN-1,,Camping,99.00,5,3\n"), catalog.ImportOptions{FileName: "base.csv"})
 	require.NoError(t, err)
@@ -97,7 +96,7 @@ func TestAddImportsAreIdempotentAndAskBeforeRepeatingAFile(t *testing.T) {
 	require.Equal(t, 8, r.stock(t, "TN-1"))
 
 	again, err := r.b.Import(ctx, strings.NewReader(delivery), add(keyTwo, true))
-	require.NoError(t, err)
+	require.NoError(t, err, "the same key works again, because the refused import left no row")
 	require.NotEqual(t, reports[0].ID, again.ID)
 	require.Equal(t, 11, r.stock(t, "TN-1"), "a confirmed repetition adds the units again")
 
@@ -108,7 +107,7 @@ func TestAddImportsAreIdempotentAndAskBeforeRepeatingAFile(t *testing.T) {
 }
 
 func TestAnAddImportThatFailsHalfwayChangesNothing(t *testing.T) {
-	r := twoReplicas(t, 20)
+	r := twoReplicas(t)
 	ctx := context.Background()
 	_, err := r.a.Import(ctx, strings.NewReader(header+"A,A-1,,Tests,1.00,5,1\nZ,Z-9,,Tests,1.00,5,1\n"), catalog.ImportOptions{FileName: "base.csv"})
 	require.NoError(t, err)
@@ -140,100 +139,123 @@ func TestAnAddImportThatFailsHalfwayChangesNothing(t *testing.T) {
 	require.Zero(t, r.count(t, `SELECT count(*) FROM imports WHERE mode = 'add'`), "no trace of an import that did not happen")
 }
 
-func TestAPreviewIsConfirmedFromAnotherReplicaOnce(t *testing.T) {
-	r := twoReplicas(t, 20)
-	ctx := context.Background()
-	_, err := r.a.Import(ctx, strings.NewReader(header+"Tent,TN-1,,Camping,99.00,5,3\n"), catalog.ImportOptions{FileName: "base.csv"})
-	require.NoError(t, err)
-
-	id, err := r.a.PreviewImport(ctx, strings.NewReader(header+"Tent,TN-1,,Camping,99.00,9,3\nLamp,LP-1,,Camping,9.00,2,1\n"),
-		catalog.ImportOptions{FileName: "count.csv", Mode: catalog.ImportReplace, IdempotencyKey: keyOne})
-	require.NoError(t, err)
-	preview, err := r.b.ImportPreview(ctx, id)
-	require.NoError(t, err)
-	require.Equal(t, catalog.ImportPreviewing, preview.Status)
-	require.Equal(t, []int{1, 1}, []int{preview.New, preview.Existing})
-	require.Equal(t, []catalog.PreviewRow{{SKU: "TN-1", StockBefore: 5, StockAfter: 9}}, preview.Rows)
-	require.Equal(t, 5, r.stock(t, "TN-1"), "a preview changes nothing")
-
-	lock, err := r.pool.Acquire(ctx)
-	require.NoError(t, err)
-	defer lock.Release()
-	_, err = lock.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('catalog.import:' || $1, 0))`, id)
-	require.NoError(t, err)
-	var (
-		wg      sync.WaitGroup
-		reports = make([]catalog.ImportReport, 2)
-		errs    = make([]error, 2)
-	)
-	for i, m := range []*catalog.Module{r.a, r.b} {
-		wg.Go(func() { reports[i], errs[i] = m.ConfirmImport(ctx, id, false) })
+func replaceFile(rows int) string {
+	var body strings.Builder
+	body.WriteString(header)
+	for i := 1; i <= rows; i++ {
+		fmt.Fprintf(&body, "Item,N-%04d,,Tests,1.00,%d,1\n", i, i)
 	}
+	return body.String()
+}
+
+func replace(key string) catalog.ImportOptions {
+	return catalog.ImportOptions{FileName: "count.csv", Mode: catalog.ImportReplace, IdempotencyKey: key}
+}
+
+func (r replicas) holdProduct(t *testing.T, sku string) func() {
+	t.Helper()
+	tx, err := r.pool.Begin(context.Background())
+	require.NoError(t, err)
+	_, err = tx.Exec(context.Background(), `SELECT 1 FROM products WHERE sku = $1 FOR UPDATE`, sku)
+	require.NoError(t, err)
+	return func() { require.NoError(t, tx.Rollback(context.Background())) }
+}
+
+func (r replicas) waitFor(t *testing.T, query string, want int) {
+	t.Helper()
 	require.Eventually(t, func() bool {
-		return r.count(t, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`) == 2
-	}, 10*time.Second, 10*time.Millisecond, "both confirmations wait for the import lock")
-	_, err = lock.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended('catalog.import:' || $1, 0))`, id)
-	require.NoError(t, err)
-	wg.Wait()
-
-	require.NoError(t, errs[0])
-	require.NoError(t, errs[1])
-	require.Equal(t, reports[0], reports[1])
-	require.Equal(t, []int{1, 1}, []int{reports[0].Created, reports[0].Updated})
-	require.Equal(t, 9, r.stock(t, "TN-1"))
-	require.Equal(t, 1, r.count(t, `SELECT count(*) FROM inventory_movements WHERE reference = $1 AND delta = 4`, id), "applied once")
-	require.Equal(t, 1, r.count(t, `SELECT count(*) FROM imports WHERE id = $1::uuid AND status = 'APPLIED' AND content IS NULL`, id))
-	require.ErrorIs(t, r.a.CancelImport(ctx, id), catalog.ErrImportNotCancellable)
+		var n int
+		return r.pool.QueryRow(context.Background(), query).Scan(&n) == nil && n == want
+	}, 10*time.Second, 10*time.Millisecond, query)
 }
 
-func TestAReplaceLeftApplyingIsResumedFromItsStoredContent(t *testing.T) {
-	r := twoReplicas(t, 20)
+const blockedImport = `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%INSERT INTO products%'`
+
+func TestAnInterruptedReplaceIsResumedByUploadingTheFileAgain(t *testing.T) {
+	r := twoReplicas(t)
 	ctx := context.Background()
-	id, err := r.a.PreviewImport(ctx, strings.NewReader(header+"Tent,TN-1,,Camping,99.00,5,3\n"),
-		catalog.ImportOptions{FileName: "count.csv", Mode: catalog.ImportReplace, IdempotencyKey: keyOne})
+	_, err := r.a.Import(ctx, strings.NewReader(header+"Item,N-0550,,Tests,1.00,1,1\n"), catalog.ImportOptions{FileName: "base.csv"})
 	require.NoError(t, err)
-	_, err = r.pool.Exec(ctx, `UPDATE imports SET status = 'APPLYING' WHERE id = $1::uuid`, id)
-	require.NoError(t, err)
-	require.ErrorIs(t, r.a.CancelImport(ctx, id), catalog.ErrImportNotCancellable, "the batches already applied cannot be undone")
+	file := replaceFile(600)
 
-	report, err := r.b.ConfirmImport(ctx, id, false)
-	require.NoError(t, err)
-	require.Equal(t, 1, report.Created)
-	require.Equal(t, 5, r.stock(t, "TN-1"))
+	release := r.holdProduct(t, "N-0550")
+	interrupted, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.a.Import(interrupted, strings.NewReader(file), replace(keyOne))
+		done <- err
+	}()
+	r.waitFor(t, blockedImport, 1)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	release()
 
-	again, err := r.a.Import(ctx, strings.NewReader(header+"Tent,TN-1,,Camping,99.00,5,3\n"),
-		catalog.ImportOptions{FileName: "count.csv", Mode: catalog.ImportReplace, IdempotencyKey: keyOne})
+	require.Equal(t, 1, r.count(t, `SELECT count(*) FROM imports WHERE status = 'APPLYING'`))
+	require.Equal(t, 1, r.stock(t, "N-0001"), "the first batch was applied")
+	require.Equal(t, 1, r.stock(t, "N-0550"), "the second batch was not")
+
+	report, err := r.b.Import(ctx, strings.NewReader(file), replace(keyOne))
 	require.NoError(t, err)
-	require.Equal(t, report, again, "a retry with the same key answers the stored report")
+	require.Equal(t, []int{599, 1, 0}, []int{report.Created + report.Unchanged, report.Updated, report.Rejected})
+	require.Equal(t, 550, r.stock(t, "N-0550"))
+	require.Equal(t, 600, r.stock(t, "N-0600"))
+	require.Zero(t, r.count(t, `SELECT count(*) FROM imports WHERE status = 'APPLYING'`), "the resumed import finished")
+	require.Zero(t, r.count(t, `
+		SELECT count(*) FROM (SELECT product_id FROM inventory_movements WHERE reason = 'import_replace' AND reference = $1
+		                      GROUP BY product_id HAVING count(*) > 1) duplicated`, report.ID), "no product moved twice")
+	require.Equal(t, 600, r.count(t, `SELECT count(*) FROM inventory_movements WHERE reference = $1`, report.ID))
 }
 
-func TestPreviewsExpireAndAreLimited(t *testing.T) {
-	r := twoReplicas(t, 2)
+func TestTwoReplicasApplyTheSameReplaceKeyOnce(t *testing.T) {
+	r := twoReplicas(t)
 	ctx := context.Background()
-	upload := func(key string) (string, error) {
-		return r.a.PreviewImport(ctx, strings.NewReader(header+"Tent,TN-1,,Camping,99.00,5,3\n"),
-			catalog.ImportOptions{FileName: "count.csv", Mode: catalog.ImportReplace, IdempotencyKey: key})
+	_, err := r.a.Import(ctx, strings.NewReader(header+"Item,N-0002,,Tests,1.00,9,1\n"), catalog.ImportOptions{FileName: "base.csv"})
+	require.NoError(t, err)
+	file := replaceFile(3)
+
+	release := r.holdProduct(t, "N-0002")
+	type result struct {
+		report catalog.ImportReport
+		err    error
 	}
-	first, err := upload(keyOne)
-	require.NoError(t, err)
-	_, err = upload(keyTwo)
-	require.NoError(t, err)
-	_, err = upload(keyThree)
-	require.ErrorIs(t, err, catalog.ErrTooManyPreviews)
-	same, err := upload(keyOne)
-	require.NoError(t, err)
-	require.Equal(t, first, same, "repeating an upload does not count against the limit")
+	first, second := make(chan result, 1), make(chan result, 1)
+	go func() {
+		report, err := r.a.Import(ctx, strings.NewReader(file), replace(keyOne))
+		first <- result{report, err}
+	}()
+	r.waitFor(t, blockedImport, 1)
+	go func() {
+		report, err := r.b.Import(ctx, strings.NewReader(file), replace(keyOne))
+		second <- result{report, err}
+	}()
+	r.waitFor(t, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`, 1)
+	release()
 
-	_, err = r.pool.Exec(ctx, `UPDATE imports SET created_at = now() - interval '2 hours' WHERE id = $1::uuid`, first)
-	require.NoError(t, err)
-	_, err = r.b.ConfirmImport(ctx, first, false)
-	require.ErrorIs(t, err, catalog.ErrPreviewExpired)
-	expired, err := r.b.ImportPreview(ctx, first)
-	require.NoError(t, err)
-	require.Equal(t, []any{catalog.ImportCancelled, "expired"}, []any{expired.Status, expired.CancelReason})
-	require.Zero(t, r.count(t, `SELECT count(*) FROM imports WHERE id = $1::uuid AND content IS NOT NULL`, first), "its content is freed")
+	a, b := <-first, <-second
+	require.NoError(t, a.err)
+	require.NoError(t, b.err)
+	require.Equal(t, a.report, b.report, "the second replica answers the report of the first")
+	require.Equal(t, []int{2, 1}, []int{a.report.Created, a.report.Updated})
+	require.Equal(t, 1, r.count(t, `SELECT count(*) FROM imports WHERE idempotency_key = $1::uuid`, keyOne))
+	require.Equal(t, 3, r.count(t, `SELECT count(*) FROM inventory_movements WHERE reference = $1`, a.report.ID), "applied once")
+}
 
-	_, err = upload(keyThree)
-	require.NoError(t, err, "the expired preview no longer counts")
-	require.Zero(t, r.count(t, `SELECT count(*) FROM products`))
+func TestTheReportShowsStockAndPriceBeforeAndAfter(t *testing.T) {
+	r := twoReplicas(t)
+	ctx := context.Background()
+	_, err := r.a.Import(ctx, strings.NewReader(header+"Tent,TN-1,,Camping,29.99,50,3\nLamp,LP-1,,Camping,9.00,2,1\n"), catalog.ImportOptions{FileName: "base.csv"})
+	require.NoError(t, err)
+
+	report, err := r.b.Import(ctx, strings.NewReader(header+"Tent,TN-1,,Camping,39.99,10,3\nLamp,LP-1,,Camping,9.00,0,1\nNew,NW-1,,Camping,1.00,1,1\n"), add(keyOne, false))
+
+	require.NoError(t, err)
+	require.Len(t, report.Changes, 2, "only existing products")
+	tent, lamp := report.Changes[1], report.Changes[0]
+	require.Equal(t, []any{"TN-1", 50, 60, "29.99", "39.99"}, []any{tent.SKU, tent.StockBefore, tent.StockAfter, tent.PriceBefore.StringFixed(2), tent.PriceAfter.StringFixed(2)})
+	require.Equal(t, []any{"LP-1", 2, 2, "9.00", "9.00"}, []any{lamp.SKU, lamp.StockBefore, lamp.StockAfter, lamp.PriceBefore.StringFixed(2), lamp.PriceAfter.StringFixed(2)})
+
+	again, err := r.a.Import(ctx, strings.NewReader(header+"Tent,TN-1,,Camping,39.99,10,3\nLamp,LP-1,,Camping,9.00,0,1\nNew,NW-1,,Camping,1.00,1,1\n"), add(keyOne, false))
+	require.NoError(t, err)
+	require.Equal(t, report.Changes[0].SKU, again.Changes[0].SKU)
+	require.True(t, report.Changes[1].PriceBefore.Equal(again.Changes[1].PriceBefore), "a repetition answers the stored report, changes included")
 }

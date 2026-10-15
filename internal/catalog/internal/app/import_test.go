@@ -31,7 +31,7 @@ type fakeStore struct {
 	onBatch    func(applied int)
 }
 
-func (f *fakeStore) Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (map[string]app.UpsertOutcome, error) {
+func (f *fakeStore) Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (app.UpsertResult, error) {
 	f.references = append(f.references, reference)
 	f.modes = append(f.modes, mode)
 	skus := make([]string, len(products))
@@ -40,20 +40,20 @@ func (f *fakeStore) Upsert(ctx context.Context, mode domain.ImportMode, products
 	}
 	f.batches = append(f.batches, skus)
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return app.UpsertResult{}, err
 	}
 	if f.onBatch != nil {
 		defer f.onBatch(len(f.batches))
 	}
 	if f.failBatch && len(products) > 1 {
-		return nil, errors.New("batch exploded: host=10.0.0.5")
+		return app.UpsertResult{}, errors.New("batch exploded: host=10.0.0.5")
 	}
 	out := make(map[string]app.UpsertOutcome, len(products))
 	for _, p := range products {
 		current, found := f.existing[p.SKU]
 		switch {
 		case f.failSKU[p.SKU]:
-			return nil, errors.New("row exploded: host=10.0.0.5")
+			return app.UpsertResult{}, errors.New("row exploded: host=10.0.0.5")
 		case f.deleted[p.SKU]:
 			out[p.SKU] = app.OutcomeDeleted
 		case p.Stock < f.reserved[p.SKU]:
@@ -73,7 +73,7 @@ func (f *fakeStore) Upsert(ctx context.Context, mode domain.ImportMode, products
 			f.existing[p.SKU] = p
 		}
 	}
-	return out, nil
+	return app.UpsertResult{Outcomes: out}, nil
 }
 
 type fakeRecorder struct {
@@ -353,7 +353,7 @@ func TestImportOfNoRowsIsAnEmptyReport(t *testing.T) {
 	report, err := importer.Import(context.Background(), app.ImportRequest{File: productsFile, Rows: nil, Mode: domain.ImportReplace})
 
 	require.NoError(t, err)
-	require.Equal(t, app.ImportReport{ID: report.ID, Mode: domain.ImportReplace, File: productsFile, Errors: []app.RowError{}}, report)
+	require.Equal(t, app.ImportReport{ID: report.ID, Mode: domain.ImportReplace, File: productsFile, Errors: []app.RowError{}, Changes: []domain.ImportChange{}}, report)
 	require.NotEmpty(t, report.ID)
 }
 
@@ -486,13 +486,12 @@ func TestAReplaceImportIsAppliedWhileItIsApplyingAndKeepsItWhenInterrupted(t *te
 		fmt.Fprintf(&body, "Item,SKU-%04d,,A,5,1,1\n", i)
 	}
 
-	report, err := importer.Import(ctx, app.ImportRequest{File: productsFile, Content: []byte("csv"), Rows: rowsOf(body.String()), Mode: domain.ImportReplace})
+	report, err := importer.Import(ctx, app.ImportRequest{File: productsFile, Rows: rowsOf(body.String()), Mode: domain.ImportReplace})
 
 	require.ErrorIs(t, err, context.Canceled)
 	stored, getErr := log.Get(context.Background(), report.ID)
 	require.NoError(t, getErr)
-	require.Equal(t, domain.ImportApplying, stored.Status, "the first batch was applied, so it is not a preview any more")
-	require.Equal(t, []byte("csv"), stored.Content, "the content stays to resume it")
+	require.Equal(t, domain.ImportApplying, stored.Status, "an interrupted import stays applying")
 	require.Empty(t, log.Finished)
 }
 
@@ -502,7 +501,7 @@ const (
 )
 
 func keyed(mode domain.ImportMode, key, hash, body string) app.ImportRequest {
-	return app.ImportRequest{File: app.ImportFile{Name: "stock.csv", SHA256: hash}, Content: []byte(body), Rows: rowsOf(body), Mode: mode, Key: key}
+	return app.ImportRequest{File: app.ImportFile{Name: "stock.csv", SHA256: hash}, Rows: rowsOf(body), Mode: mode, Key: key}
 }
 
 func TestAnAddImportNeedsAValidKey(t *testing.T) {
@@ -548,7 +547,7 @@ func TestARetriedReplaceResumesAnImportLeftApplying(t *testing.T) {
 	require.NoError(t, err)
 	body := csvHeader + "A,A-1,,A,5,1,1\nB,B-1,,A,5,1,1\n"
 	log.Set(app.ImportRecord{ID: "00000000-0000-4000-8000-000000000099", Key: importKey, Mode: domain.ImportReplace,
-		Status: domain.ImportApplying, File: app.ImportFile{Name: "stock.csv", SHA256: "h"}, Content: []byte(body)})
+		Status: domain.ImportApplying, File: app.ImportFile{Name: "stock.csv", SHA256: "h"}})
 
 	report, err := importer.Import(context.Background(), keyed(domain.ImportReplace, otherKey, "h", body))
 	require.NoError(t, err)
@@ -562,7 +561,6 @@ func TestARetriedReplaceResumesAnImportLeftApplying(t *testing.T) {
 	stored, err := log.Get(context.Background(), report.ID)
 	require.NoError(t, err)
 	require.Equal(t, domain.ImportApplied, stored.Status)
-	require.Nil(t, stored.Content)
 }
 
 func TestAddingTheSameFileAgainNeedsAnExplicitConfirmation(t *testing.T) {
@@ -578,7 +576,7 @@ func TestAddingTheSameFileAgainNeedsAnExplicitConfirmation(t *testing.T) {
 	require.ErrorIs(t, err, app.ErrDuplicateFile)
 	require.Len(t, store.batches, 1, "nothing is applied without the confirmation")
 
-	confirmed := keyed(domain.ImportAdd, otherKey, "h", body)
+	confirmed := keyed(domain.ImportAdd, "9f1c1d3e-2a4b-4c5d-8e9f-0a1b2c3d4e5f", "h", body)
 	confirmed.AllowDuplicate = true
 	_, err = importer.Import(context.Background(), confirmed)
 	require.NoError(t, err)
@@ -586,6 +584,30 @@ func TestAddingTheSameFileAgainNeedsAnExplicitConfirmation(t *testing.T) {
 
 	_, err = importer.Import(context.Background(), keyed(domain.ImportReplace, "8f1c1d3e-2a4b-4c5d-8e9f-0a1b2c3d4e5f", "h", body))
 	require.NoError(t, err, "replacing with the same file again is harmless and needs no confirmation")
+}
+
+func TestTheReportListsTheExistingProductsBeforeAndAfter(t *testing.T) {
+	old := app.UpsertResult{
+		Outcomes: map[string]app.UpsertOutcome{"A-1": app.OutcomeUpdated, "B-1": app.OutcomeUnchanged, "N-1": app.OutcomeCreated, "G-1": app.OutcomeDeleted},
+		Changes: map[string]domain.ImportChange{
+			"A-1": {SKU: "A-1", StockBefore: 50, StockAfter: 60, PriceBefore: decimal.RequireFromString("29.99"), PriceAfter: decimal.RequireFromString("39.99")},
+			"B-1": {SKU: "B-1", StockBefore: 3, StockAfter: 3, PriceBefore: decimal.RequireFromString("1"), PriceAfter: decimal.RequireFromString("1")},
+		},
+	}
+	importer, err := app.NewImporter(fixedStore{old}, apptest.NewLog(), apptest.Tx{}, &fakeRecorder{}, &fakeFailures{})
+	require.NoError(t, err)
+	body := csvHeader + "A,A-1,,A,39.99,10,1\nB,B-1,,A,1,0,1\nN,N-1,,A,1,1,1\nG,G-1,,A,1,1,1\n"
+
+	report, err := importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "h", body))
+
+	require.NoError(t, err)
+	require.Equal(t, []domain.ImportChange{old.Changes["A-1"], old.Changes["B-1"]}, report.Changes, "only existing products, in sku order")
+}
+
+type fixedStore struct{ result app.UpsertResult }
+
+func (f fixedStore) Upsert(context.Context, domain.ImportMode, []domain.Product, string) (app.UpsertResult, error) {
+	return f.result, nil
 }
 
 func TestNewImporterRequiresItsDependencies(t *testing.T) {

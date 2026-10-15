@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog"
@@ -58,13 +58,15 @@ func TestImportFormAsksForTheModeBeforeTheFile(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	requireSafeHTML(t, rec)
 	body := rec.Body.String()
-	require.Contains(t, body, `<form class="form-card" action="/admin/imports" method="post" enctype="multipart/form-data">`)
+	require.Contains(t, body, `<form class="form-card import-form" action="/admin/imports" method="post" enctype="multipart/form-data">`)
 	require.Regexp(t, `<input type="hidden" name="idempotency_key" value="[0-9a-f-]{36}">`, body)
 	require.Contains(t, body, `<input id="mode-add" name="mode" type="radio" value="add" required>`)
 	require.Contains(t, body, `<input id="mode-replace" name="mode" type="radio" value="replace" required>`)
 	require.NotContains(t, body, "checked", "no mode is chosen for the user")
-	require.Contains(t, body, "Add to the current inventory")
-	require.Contains(t, body, "Replace the inventory")
+	require.Contains(t, body, "There are 50 and the file says 10: 60 remain.")
+	require.Contains(t, body, "There are 50 and the file says 10: 10 remain.")
+	require.Contains(t, body, `<span class="when-add">Import adding</span><span class="when-replace">Import replacing</span>`)
+	require.NotContains(t, body, "allow_duplicate")
 	key, mode, file := strings.Index(body, `name="idempotency_key"`), strings.Index(body, `name="mode"`), strings.Index(body, `name="file"`)
 	require.True(t, key < file && mode < file, "browsers send the parts in this order, so the mode arrives before the file")
 	require.NotContains(t, body, "hx-")
@@ -72,16 +74,40 @@ func TestImportFormAsksForTheModeBeforeTheFile(t *testing.T) {
 	require.NotEqual(t, body, get(h, adminImports).Body.String(), "every form gets its own key")
 }
 
-func TestUploadingAFileCreatesAPreviewAndShowsIt(t *testing.T) {
-	cat := &fakeCatalog{}
+func report() catalog.ImportReport {
+	return catalog.ImportReport{
+		ID: "5a0b2c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b", Mode: catalog.ImportAdd,
+		File:    catalog.ImportFile{Name: "products.csv", Bytes: 8930, SHA256: "6fc46b84"},
+		Records: 97, Skipped: 2, Created: 80, Updated: 1, Unchanged: 1, Rejected: 13,
+		Errors: []catalog.RowError{
+			{Line: 11, SKU: "BS-021", Field: "sku", Code: "duplicate_in_file", Message: "also used on lines 56 and 89"},
+			{Line: 4, SKU: "WM-042", Field: "price", Code: "invalid_format", Message: "must be a plain decimal number such as 29.99"},
+		},
+		Changes: []catalog.ImportChange{
+			{SKU: "RS-001", StockBefore: 50, StockAfter: 60, PriceBefore: decimal.RequireFromString("29.99"), PriceAfter: decimal.RequireFromString("39.99")},
+		},
+	}
+}
+
+func TestAnImportIsAppliedAndReportedInTheSameRequest(t *testing.T) {
+	cat := &fakeCatalog{report: report()}
 	h, _ := newTestUI(t, cat)
 
-	rec := uploadCSV(t, h, "add", "name,sku\n")
+	rec := uploadParts(t, h, part{"idempotency_key", formKey}, part{"mode", "add"}, part{"note", "ignored"}, part{"file", "name,sku\n"})
 
-	require.Equal(t, http.StatusSeeOther, rec.Code)
-	require.Equal(t, adminImports+"/"+importID, rec.Header().Get("Location"))
+	require.Equal(t, http.StatusOK, rec.Code)
+	requireSafeHTML(t, rec)
 	require.Equal(t, catalog.ImportOptions{FileName: "products.csv", Mode: catalog.ImportAdd, IdempotencyKey: formKey}, cat.importOpts)
 	require.Equal(t, "name,sku\n", cat.importBody)
+	body := rec.Body.String()
+	require.Contains(t, body, "<h2>Result for products.csv</h2>")
+	require.Contains(t, body, "Added to the inventory: 80 created, 1 updated, 1 unchanged, 13 rejected and 2 empty rows skipped, out of 97 records.")
+	require.Contains(t, body, `<tr><td>RS-001</td><td class="numeric">50</td><td class="numeric">60</td><td class="numeric">$29.99</td><td class="numeric">$39.99</td></tr>`)
+	require.Contains(t, body, `<tr><td class="numeric">11</td><td>BS-021</td><td>sku</td><td>duplicate_in_file</td><td>also used on lines 56 and 89</td></tr>`)
+	require.Contains(t, body, "8930 bytes · SHA-256 6fc46b84")
+	require.NotContains(t, body, "more are not shown")
+	require.Contains(t, body, `<input id="file" name="file" type="file"`, "the form stays on the page for another import")
+	require.NotContains(t, body, formKey, "the next import gets a new key")
 }
 
 func TestTheModeMustArriveBeforeTheFile(t *testing.T) {
@@ -101,152 +127,61 @@ func TestTheModeMustArriveBeforeTheFile(t *testing.T) {
 	}
 }
 
-func preview(status catalog.ImportStatus) catalog.ImportPreview {
-	return catalog.ImportPreview{
-		ID: importID, Status: status, Mode: catalog.ImportReplace,
-		File: catalog.ImportFile{Name: "stock.csv", Bytes: 120, SHA256: "6fc46b84"},
-		New:  1, Existing: 2,
-		Report: catalog.ImportReport{Records: 5, Rejected: 2, Errors: []catalog.RowError{
-			{Line: 3, SKU: "HELD-1", Field: "stock", Code: "below_reserved", Message: "must be at least the units reserved by pending purchases"},
-			{Line: 4, SKU: "BAD-1", Field: "price", Code: "invalid_format", Message: "must be a plain decimal number such as 29.99"},
-		}},
-		Rows: []catalog.PreviewRow{{SKU: "OLD-1", StockBefore: 10, StockAfter: 3, Reserved: 1}, {SKU: "HELD-1", StockBefore: 5, StockAfter: 1, Reserved: 2}},
-	}
-}
+func TestARepeatedAddAsksForTheFileAgainAndAConfirmation(t *testing.T) {
+	at := time.Date(2026, 10, 14, 9, 30, 0, 0, time.UTC)
+	cat := &fakeCatalog{importErr: &catalog.DuplicateFileError{AppliedAt: at}}
+	h, _ := newTestUI(t, cat)
 
-func TestThePreviewShowsTheChangesWithConfirmAndCancel(t *testing.T) {
-	h, _ := newTestUI(t, &fakeCatalog{preview: preview(catalog.ImportPreviewing)})
+	rec := uploadCSV(t, h, "add", "name\n")
 
-	rec := get(h, adminImports+"/"+importID)
-
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusConflict, rec.Code)
 	requireSafeHTML(t, rec)
 	body := rec.Body.String()
-	require.Contains(t, body, "Replace the inventory · 120 bytes · SHA-256 6fc46b84")
-	require.Contains(t, body, "1 new products, 2 existing products and 2 rejected rows, out of 5 records.")
-	require.Contains(t, body, `<tr><td>OLD-1</td><td class="numeric">10</td><td class="numeric">3</td><td class="numeric">1</td></tr>`)
-	require.Contains(t, body, `<td>HELD-1</td><td>stock</td><td>below_reserved</td>`)
-	require.Contains(t, body, `<form action="/admin/imports/`+importID+`/confirm" method="post">`)
-	require.Contains(t, body, `<form action="/admin/imports/`+importID+`/cancel" method="post" class="actions">`)
-	require.NotContains(t, body, "allow_duplicate")
-	require.NotContains(t, body, "import-report")
-}
-
-func TestARepeatedAddNeedsTheConfirmationBox(t *testing.T) {
-	p := preview(catalog.ImportPreviewing)
-	p.Mode = catalog.ImportAdd
-	at := time.Date(2026, 10, 14, 9, 30, 0, 0, time.UTC)
-	p.DuplicateOf = &at
-	cat := &fakeCatalog{preview: p, confirmErr: catalog.ErrDuplicateFile}
-	h, _ := newTestUI(t, cat)
-
-	body := get(h, adminImports+"/"+importID).Body.String()
-	require.Contains(t, body, "This same file was already added to the inventory on 2026-10-14 09:30 UTC.")
+	require.Contains(t, body, "This same file was already added to the inventory on 2026-10-14 09:30 UTC, so nothing was imported.")
+	require.Contains(t, body, `<input type="hidden" name="idempotency_key" value="`+formKey+`">`, "the same key is kept, since nothing was applied")
+	require.Contains(t, body, `<input id="mode-add" name="mode" type="radio" value="add" required checked>`)
 	require.Contains(t, body, `<input id="allow_duplicate" name="allow_duplicate" type="checkbox" value="true" required>`)
+	require.Less(t, strings.Index(body, `name="allow_duplicate"`), strings.Index(body, `name="file"`))
 
-	rec := post(h, adminImports+"/"+importID+"/confirm", url.Values{})
-	require.Equal(t, http.StatusConflict, rec.Code)
-	require.Contains(t, rec.Body.String(), "Tick the confirmation to add the same file again.")
-	post(h, adminImports+"/"+importID+"/confirm", url.Values{"allow_duplicate": {"true"}})
-	require.Equal(t, []bool{false, true}, cat.confirmed)
-}
-
-func TestConfirmingAndCancellingRedirectToTheImport(t *testing.T) {
-	cat := &fakeCatalog{preview: preview(catalog.ImportPreviewing)}
-	h, _ := newTestUI(t, cat)
-
-	rec := post(h, adminImports+"/"+importID+"/confirm", url.Values{})
-	require.Equal(t, http.StatusSeeOther, rec.Code)
-	require.Equal(t, adminImports+"/"+importID, rec.Header().Get("Location"))
-	rec = post(h, adminImports+"/"+importID+"/cancel", url.Values{})
-	require.Equal(t, http.StatusSeeOther, rec.Code)
-	require.Equal(t, 1, cat.cancelled)
-
-	require.Equal(t, http.StatusNotFound, get(h, adminImports+"/other").Code)
-	require.Equal(t, http.StatusNotFound, post(h, adminImports+"/other/confirm", url.Values{}).Code)
-}
-
-func TestConfirmationProblemsStayOnTheImport(t *testing.T) {
-	for name, tc := range map[string]struct {
-		err     error
-		path    string
-		status  int
-		message string
-	}{
-		"expired":          {catalog.ErrPreviewExpired, "/confirm", http.StatusGone, "This preview expired. Upload the file again to import it."},
-		"cancelled":        {catalog.ErrImportCancelled, "/confirm", http.StatusConflict, "This import was cancelled."},
-		"not cancellable":  {catalog.ErrImportNotCancellable, "/cancel", http.StatusConflict, "cannot be cancelled"},
-		"unexpected error": {errors.New("db exploded: host=10.0.0.5"), "/confirm", http.StatusInternalServerError, "Something went wrong"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			h, _ := newTestUI(t, &fakeCatalog{preview: preview(catalog.ImportCancelled), confirmErr: tc.err})
-			rec := post(h, adminImports+"/"+importID+tc.path, url.Values{})
-			require.Equal(t, tc.status, rec.Code)
-			require.Contains(t, rec.Body.String(), tc.message)
-			require.NotContains(t, rec.Body.String(), "10.0.0.5")
-		})
-	}
-}
-
-func TestEachImportStatusHasItsPage(t *testing.T) {
-	for status, want := range map[catalog.ImportStatus]string{
-		catalog.ImportApplying:  "Interrupted: this import stopped while it was being applied",
-		catalog.ImportCancelled: "This import was cancelled. Nothing was changed.",
-		catalog.ImportApplied:   `<section id="import-report">`,
-	} {
-		t.Run(string(status), func(t *testing.T) {
-			p := preview(status)
-			p.CancelReason = "user"
-			h, _ := newTestUI(t, &fakeCatalog{preview: p})
-			body := get(h, adminImports+"/"+importID).Body.String()
-			require.Contains(t, body, want)
-			require.NotContains(t, body, "/cancel\"", "only a preview can be cancelled")
-		})
-	}
-	expired := preview(catalog.ImportCancelled)
-	expired.CancelReason = "expired"
-	h, _ := newTestUI(t, &fakeCatalog{preview: expired})
-	require.Contains(t, get(h, adminImports+"/"+importID).Body.String(), "This preview expired before it was confirmed.")
-
-	changed := preview(catalog.ImportApplied)
-	changed.Report.PreviewChanged = true
-	h, _ = newTestUI(t, &fakeCatalog{preview: changed})
-	require.Contains(t, get(h, adminImports+"/"+importID).Body.String(), "The stock changed between the preview and the confirmation.")
+	uploadParts(t, h, part{"idempotency_key", formKey}, part{"mode", "add"}, part{"allow_duplicate", "true"}, part{"file", "name\n"})
+	require.True(t, cat.importOpts.AllowDuplicate)
 }
 
 func TestImportPagesEscapeValuesFromTheFile(t *testing.T) {
-	p := preview(catalog.ImportPreviewing)
-	p.File.Name = `<script>alert("name")</script>.csv`
-	p.Rows = []catalog.PreviewRow{{SKU: `<script>alert("sku")</script>`}}
-	p.Report.Errors = []catalog.RowError{{Line: 2, Message: `<script>alert("message")</script>`}}
-	h, _ := newTestUI(t, &fakeCatalog{preview: p})
+	r := report()
+	r.File.Name = `<script>alert("name")</script>.csv`
+	r.Changes[0].SKU = `<script>alert("sku")</script>`
+	r.Errors = []catalog.RowError{{Line: 2, Message: `<script>alert("message")</script>`}}
+	h, _ := newTestUI(t, &fakeCatalog{report: r})
 
-	rec := get(h, adminImports+"/"+importID)
+	rec := uploadCSV(t, h, "add", "name\n")
 
 	requireSafeHTML(t, rec)
 	body := rec.Body.String()
 	require.NotContains(t, body, "<script>alert")
 	require.Contains(t, body, `&lt;script&gt;alert(&#34;sku&#34;)&lt;/script&gt;`)
 	require.Contains(t, body, `&lt;script&gt;alert(&#34;message&#34;)&lt;/script&gt;`)
+	require.Contains(t, body, `&lt;script&gt;alert(&#34;name&#34;)&lt;/script&gt;.csv`)
 }
 
 func TestImportPagesShowTheFirstTwoHundredRows(t *testing.T) {
-	p := preview(catalog.ImportPreviewing)
-	p.Report.Errors, p.Rows = make([]catalog.RowError, 250), make([]catalog.PreviewRow, 230)
-	for i := range p.Report.Errors {
-		p.Report.Errors[i] = catalog.RowError{Line: i + 2, SKU: fmt.Sprintf("BAD-%03d", i), Field: "price", Code: "invalid_format", Message: "bad"}
+	r := report()
+	r.Errors, r.Changes = make([]catalog.RowError, 250), make([]catalog.ImportChange, 230)
+	for i := range r.Errors {
+		r.Errors[i] = catalog.RowError{Line: i + 2, SKU: fmt.Sprintf("BAD-%03d", i), Field: "price", Code: "invalid_format", Message: "bad"}
 	}
-	for i := range p.Rows {
-		p.Rows[i] = catalog.PreviewRow{SKU: fmt.Sprintf("OLD-%03d", i)}
+	for i := range r.Changes {
+		r.Changes[i] = catalog.ImportChange{SKU: fmt.Sprintf("OLD-%03d", i)}
 	}
-	h, _ := newTestUI(t, &fakeCatalog{preview: p})
+	h, _ := newTestUI(t, &fakeCatalog{report: r})
 
-	body := get(h, adminImports+"/"+importID).Body.String()
+	body := uploadCSV(t, h, "replace", "name\n").Body.String()
 
 	require.Equal(t, 200, strings.Count(body, "<td>invalid_format</td>"))
 	require.Contains(t, body, "Showing the first 200 errors. 50 more are not shown; the API returns all of them.")
-	require.Equal(t, 200, len(regexp.MustCompile(`<td>OLD-\d{3}</td>`).FindAllString(body, -1)))
-	require.Contains(t, body, "Showing the first 200 existing products. 30 more are not shown.")
+	require.Contains(t, body, "<td>OLD-199</td>")
+	require.NotContains(t, body, "<td>OLD-200</td>")
+	require.Contains(t, body, "Showing the first 200 existing products. 30 more are not shown; the API returns all of them.")
 }
 
 func TestImportWholeFileErrorsStayOnTheForm(t *testing.T) {
@@ -259,8 +194,7 @@ func TestImportWholeFileErrorsStayOnTheForm(t *testing.T) {
 		"malformed csv":  {&catalog.InvalidCSVError{Line: 7, Reason: `bare " in non-quoted field`}, 400, "The file is not a valid UTF-8 CSV. Line 7: bare &#34; in non-quoted field. Nothing was imported."},
 		"too many rows":  {catalog.ErrTooManyRows, 400, "The file has more rows than the import limit. Nothing was imported."},
 		"too large":      {catalog.ErrFileTooLarge, 413, "The file is larger than the import limit. Nothing was imported."},
-		"previews":       {catalog.ErrTooManyPreviews, 429, "Too many imports are waiting for a confirmation."},
-		"key reused":     {catalog.ErrIdempotencyConflict, 409, "This form was already used for another file."},
+		"key reused":     {catalog.ErrIdempotencyConflict, 409, "This form was already used for another file or mode."},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -274,6 +208,7 @@ func TestImportWholeFileErrorsStayOnTheForm(t *testing.T) {
 			require.Contains(t, body, `<p class="notice error" role="alert">`+tt.message)
 			require.Contains(t, body, `<input id="file" name="file" type="file"`)
 			require.NotContains(t, body, "error-status")
+			require.NotContains(t, body, "import-report")
 		})
 	}
 }
@@ -322,14 +257,14 @@ func TestImportHasItsOwnBodyLimit(t *testing.T) {
 }
 
 func TestImportAcceptsUploadsLargerThanOtherForms(t *testing.T) {
-	cat := &fakeCatalog{}
+	cat := &fakeCatalog{report: catalog.ImportReport{Records: 1, Created: 1}}
 	log, _ := newTestLogger(t)
 	ui, err := New(Deps{Catalog: cat, Ordering: &fakeOrdering{}, Users: testUsers, Log: log, MaxImportBodyBytes: 4 << 20})
 	require.NoError(t, err)
 
 	rec := uploadCSV(t, ui.Routes(), "replace", strings.Repeat("x", 2*maxFormBytes))
 
-	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, http.StatusOK, rec.Code)
 	require.Len(t, cat.importBody, 2*maxFormBytes)
 }
 

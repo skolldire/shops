@@ -57,18 +57,26 @@ type rowErrorJSON struct {
 	Message string `json:"message"`
 }
 
+type changeJSON struct {
+	SKU         string `json:"sku"`
+	StockBefore int    `json:"stock_before"`
+	StockAfter  int    `json:"stock_after"`
+	PriceBefore string `json:"price_before"`
+	PriceAfter  string `json:"price_after"`
+}
+
 type importReportJSON struct {
-	ImportID       string         `json:"import_id"`
-	Mode           string         `json:"mode"`
-	PreviewChanged bool           `json:"preview_changed"`
-	File           importFileJSON `json:"file"`
-	Records        int            `json:"records"`
-	Skipped        int            `json:"skipped"`
-	Created        int            `json:"created"`
-	Updated        int            `json:"updated"`
-	Unchanged      int            `json:"unchanged"`
-	Rejected       int            `json:"rejected"`
-	Errors         []rowErrorJSON `json:"errors"`
+	ImportID  string         `json:"import_id"`
+	Mode      string         `json:"mode"`
+	File      importFileJSON `json:"file"`
+	Records   int            `json:"records"`
+	Skipped   int            `json:"skipped"`
+	Created   int            `json:"created"`
+	Updated   int            `json:"updated"`
+	Unchanged int            `json:"unchanged"`
+	Rejected  int            `json:"rejected"`
+	Errors    []rowErrorJSON `json:"errors"`
+	Changes   []changeJSON   `json:"changes"`
 }
 
 func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -125,20 +133,26 @@ func importOptions(r *http.Request) (app.ImportOptions, *httpx.ErrorResponse) {
 
 func reportJSON(report app.ImportReport) importReportJSON {
 	out := importReportJSON{
-		ImportID:       report.ID,
-		Mode:           string(report.Mode),
-		PreviewChanged: report.PreviewChanged,
-		File:           importFileJSON{Name: report.File.Name, Bytes: report.File.Bytes, SHA256: report.File.SHA256},
-		Records:        report.Records,
-		Skipped:        report.Skipped,
-		Created:        report.Created,
-		Updated:        report.Updated,
-		Unchanged:      report.Unchanged,
-		Rejected:       report.Rejected,
-		Errors:         make([]rowErrorJSON, len(report.Errors)),
+		ImportID:  report.ID,
+		Mode:      string(report.Mode),
+		Changes:   make([]changeJSON, len(report.Changes)),
+		File:      importFileJSON{Name: report.File.Name, Bytes: report.File.Bytes, SHA256: report.File.SHA256},
+		Records:   report.Records,
+		Skipped:   report.Skipped,
+		Created:   report.Created,
+		Updated:   report.Updated,
+		Unchanged: report.Unchanged,
+		Rejected:  report.Rejected,
+		Errors:    make([]rowErrorJSON, len(report.Errors)),
 	}
 	for i, e := range report.Errors {
 		out.Errors[i] = rowErrorJSON{Line: e.Line, SKU: e.SKU, Field: e.Field, Code: e.Code, Message: e.Message}
+	}
+	for i, c := range report.Changes {
+		out.Changes[i] = changeJSON{
+			SKU: c.SKU, StockBefore: c.StockBefore, StockAfter: c.StockAfter,
+			PriceBefore: c.PriceBefore.StringFixed(2), PriceAfter: c.PriceAfter.StringFixed(2),
+		}
 	}
 	return out
 }
@@ -173,10 +187,6 @@ func (h *ImportHandler) writeError(w http.ResponseWriter, r *http.Request, err e
 	case errors.As(err, &duplicate):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "duplicate_file", Detail: fmt.Sprintf(
 			"The same file was already added on %s. Send allow_duplicate=true to add it again.", duplicate.Previous.AppliedAt.UTC().Format(time.RFC3339))})
-	case errors.Is(err, app.ErrImportCancelled):
-		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "import_cancelled", Detail: "The import with this Idempotency-Key was cancelled."})
-	case errors.Is(err, app.ErrPreviewExpired):
-		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusGone, Code: "preview_expired", Detail: "The import with this Idempotency-Key expired. Upload the file again with another key."})
 	case errors.Is(err, csvimport.ErrFileTooLarge), errors.As(err, &tooLarge):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusRequestEntityTooLarge, Code: "request_too_large", Detail: "The CSV file is larger than the import limit."})
 	case errors.Is(err, csvimport.ErrInvalidHeader):

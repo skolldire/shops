@@ -22,12 +22,7 @@ var (
 	ErrInvalidIdempotencyKey  = errors.New("catalog: the idempotency key must be a UUID")
 	ErrIdempotencyKeyRequired = errors.New("catalog: an add import requires an idempotency key")
 	ErrIdempotencyConflict    = errors.New("catalog: the idempotency key was used with another file or mode")
-	ErrImportCancelled        = errors.New("catalog: the import was cancelled")
 	ErrDuplicateFile          = errors.New("catalog: the same file was already added")
-	ErrImportNotFound         = errors.New("catalog: import not found")
-	ErrTooManyPreviews        = errors.New("catalog: too many import previews are waiting for a confirmation")
-	ErrPreviewExpired         = errors.New("catalog: the import preview expired, upload the file again")
-	ErrImportNotCancellable   = errors.New("catalog: only an import preview can be cancelled")
 
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")
@@ -122,10 +117,8 @@ type MovementPage struct {
 }
 
 type ImportLimits struct {
-	MaxBytes          int64
-	MaxRows           int
-	PreviewTTL        time.Duration
-	MaxActivePreviews int
+	MaxBytes int64
+	MaxRows  int
 }
 
 type ImportMode string
@@ -142,34 +135,12 @@ type ImportOptions struct {
 	AllowDuplicate bool
 }
 
-type ImportStatus string
-
-const (
-	ImportPreviewing ImportStatus = "PREVIEW"
-	ImportApplying   ImportStatus = "APPLYING"
-	ImportApplied    ImportStatus = "APPLIED"
-	ImportCancelled  ImportStatus = "CANCELLED"
-)
-
-type PreviewRow struct {
+type ImportChange struct {
 	SKU         string
 	StockBefore int
 	StockAfter  int
-	Reserved    int
-}
-
-type ImportPreview struct {
-	ID           string
-	Status       ImportStatus
-	CancelReason string
-	Mode         ImportMode
-	File         ImportFile
-	CreatedAt    time.Time
-	New          int
-	Existing     int
-	Report       ImportReport
-	Rows         []PreviewRow
-	DuplicateOf  *time.Time
+	PriceBefore decimal.Decimal
+	PriceAfter  decimal.Decimal
 }
 
 type DuplicateFileError struct {
@@ -199,17 +170,17 @@ type RowError struct {
 }
 
 type ImportReport struct {
-	ID             string
-	Mode           ImportMode
-	PreviewChanged bool
-	File           ImportFile
-	Records        int
-	Skipped        int
-	Created        int
-	Updated        int
-	Unchanged      int
-	Rejected       int
-	Errors         []RowError
+	ID        string
+	Mode      ImportMode
+	File      ImportFile
+	Records   int
+	Skipped   int
+	Created   int
+	Updated   int
+	Unchanged int
+	Rejected  int
+	Errors    []RowError
+	Changes   []ImportChange
 }
 
 type Product struct {

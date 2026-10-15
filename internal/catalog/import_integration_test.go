@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
@@ -65,7 +64,7 @@ func TestImportTraceReachesPostgres(t *testing.T) {
 	require.NoError(t, err)
 	module, err := catalog.NewModule(catalog.Deps{
 		Pool: pool, Log: log, Metrics: telemetry.Noop(), Tracer: sdkSpans{tracer: provider.Tracer("test")},
-		Import: catalog.ImportLimits{MaxBytes: 10 << 20, MaxRows: 10000, PreviewTTL: time.Hour, MaxActivePreviews: 20},
+		Import: catalog.ImportLimits{MaxBytes: 10 << 20, MaxRows: 10000},
 	})
 	require.NoError(t, err)
 	official, err := os.ReadFile("../../testdata/products.csv")

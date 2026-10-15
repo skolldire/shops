@@ -107,15 +107,6 @@ func (c client) uploadImport(mode string, content []byte) (*http.Response, strin
 	return c.send(req)
 }
 
-func (c client) confirmImport(path string) (*http.Response, string) {
-	c.t.Helper()
-	req, err := http.NewRequestWithContext(c.t.Context(), http.MethodPost, c.base+path+"/confirm", strings.NewReader(""))
-	require.NoError(c.t, err)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Origin", c.base)
-	return c.send(req)
-}
-
 func (c client) send(req *http.Request) (*http.Response, string) {
 	c.t.Helper()
 	resp, err := http.DefaultClient.Do(req)
@@ -215,10 +206,7 @@ func TestOfficialCSVImport(t *testing.T) {
 
 	resp, body = c.uploadImport("replace", official)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Contains(t, body, "0 new products, 81 existing products and 14 rejected rows, out of 97 records.")
-	resp, body = c.confirmImport(resp.Request.URL.Path)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Contains(t, body, "0 created, 0 updated, 81 unchanged, 14 rejected and 2 empty rows skipped, out of 97 records.")
+	require.Contains(t, body, "Replaced the inventory: 0 created, 0 updated, 81 unchanged, 14 rejected and 2 empty rows skipped, out of 97 records.")
 	require.Contains(t, body, `<tr><td class="numeric">89</td><td>BS-021</td><td>sku</td><td>duplicate_in_file</td><td>also used on lines 11 and 56</td></tr>`)
 	require.Contains(t, body, `<tr><td class="numeric">3</td><td>CB-010</td><td>sku</td><td>sku_deleted</td>`)
 	require.Contains(t, body, officialSHA256)

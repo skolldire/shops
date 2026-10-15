@@ -39,7 +39,6 @@ type seedGuard interface {
 type store interface {
 	app.Repository
 	app.ProductUpserter
-	app.ImportTargets
 	app.StockStore
 	seedGuard
 }
@@ -48,8 +47,6 @@ type Module struct {
 	svc       *app.Service
 	inventory *app.Inventory
 	importer  *observe.InstrumentedImporter
-	files     *csvimport.Importer
-	previews  *app.Previews
 	seed      seedGuard
 	http      *httpapi.Handler
 	movements *httpapi.MovementsHandler
@@ -61,7 +58,7 @@ func NewModule(d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	log, err := postgres.NewImportLog(d.Pool, d.Import.PreviewTTL, d.Import.MaxActivePreviews)
+	log, err := postgres.NewImportLog(d.Pool)
 	if err != nil {
 		return nil, err
 	}
@@ -109,16 +106,12 @@ func newModule(s store, log app.ImportLog, tx app.Tx, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	previews, err := app.NewPreviews(rows, log, s, files)
-	if err != nil {
-		return nil, err
-	}
 	imports, err := httpapi.NewImports(importer, d.Log)
 	if err != nil {
 		return nil, err
 	}
 	return &Module{
-		svc: svc, inventory: inventory, importer: importer, files: files, previews: previews,
+		svc: svc, inventory: inventory, importer: importer,
 		seed: s, http: h, movements: movements, imports: imports,
 	}, nil
 }
@@ -147,65 +140,6 @@ func (m *Module) Import(ctx context.Context, r io.Reader, opts ImportOptions) (I
 		return ImportReport{}, publicImportError(err)
 	}
 	return fromReport(report), err
-}
-
-func (m *Module) PreviewImport(ctx context.Context, r io.Reader, opts ImportOptions) (string, error) {
-	mode, err := domain.ParseImportMode(string(opts.Mode))
-	if err != nil {
-		return "", ErrInvalidImportMode
-	}
-	req, err := m.files.Request(r, app.ImportOptions{FileName: opts.FileName, Mode: mode, Key: opts.IdempotencyKey})
-	if err != nil {
-		return "", publicImportError(err)
-	}
-	id, err := m.previews.Create(ctx, req)
-	if err != nil {
-		return "", publicImportError(err)
-	}
-	return id, nil
-}
-
-func (m *Module) ImportPreview(ctx context.Context, id string) (ImportPreview, error) {
-	view, err := m.previews.Get(ctx, id)
-	if err != nil {
-		return ImportPreview{}, publicImportError(err)
-	}
-	return fromPreview(view), nil
-}
-
-func (m *Module) ConfirmImport(ctx context.Context, id string, allowDuplicate bool) (ImportReport, error) {
-	report, err := m.importer.Run(ctx, func(ctx context.Context) (app.ImportReport, error) {
-		return m.previews.Confirm(ctx, id, allowDuplicate)
-	})
-	if err != nil {
-		return ImportReport{}, publicImportError(err)
-	}
-	return fromReport(report), nil
-}
-
-func (m *Module) CancelImport(ctx context.Context, id string) error {
-	return publicImportError(m.previews.Cancel(ctx, id))
-}
-
-func fromPreview(v app.PreviewView) ImportPreview {
-	rec := v.Record
-	out := ImportPreview{
-		ID: rec.ID, Status: ImportStatus(rec.Status), CancelReason: rec.CancelReason, Mode: ImportMode(rec.Mode),
-		File: ImportFile{Name: rec.File.Name, Bytes: rec.File.Bytes, SHA256: rec.File.SHA256}, CreatedAt: rec.Stamp.CreatedAt,
-		Report: fromReport(rec.Report), Rows: []PreviewRow{},
-	}
-	if rec.Status != domain.ImportPreview {
-		return out
-	}
-	out.New, out.Existing, out.Report = v.Current.New, v.Current.Existing, fromReport(v.Current.Report)
-	for _, line := range v.Current.Lines {
-		out.Rows = append(out.Rows, PreviewRow{SKU: line.SKU, StockBefore: line.Before, StockAfter: line.After, Reserved: line.Reserved})
-	}
-	if v.Duplicate != nil {
-		at := v.Duplicate.AppliedAt
-		out.DuplicateOf = &at
-	}
-	return out
 }
 
 func (m *Module) Seed(ctx context.Context, file io.Reader) (ImportReport, bool, error) {
@@ -377,7 +311,7 @@ func fromSearch(s domain.Search) SearchQuery {
 
 func fromReport(r app.ImportReport) ImportReport {
 	out := ImportReport{
-		ID: r.ID, Mode: ImportMode(r.Mode), PreviewChanged: r.PreviewChanged,
+		ID: r.ID, Mode: ImportMode(r.Mode), Changes: make([]ImportChange, len(r.Changes)),
 		File:    ImportFile{Name: r.File.Name, Bytes: r.File.Bytes, SHA256: r.File.SHA256},
 		Records: r.Records, Skipped: r.Skipped, Created: r.Created, Updated: r.Updated,
 		Unchanged: r.Unchanged, Rejected: r.Rejected,
@@ -385,6 +319,9 @@ func fromReport(r app.ImportReport) ImportReport {
 	}
 	for i, e := range r.Errors {
 		out.Errors[i] = RowError{Line: e.Line, SKU: e.SKU, Field: e.Field, Code: e.Code, Message: e.Message}
+	}
+	for i, c := range r.Changes {
+		out.Changes[i] = ImportChange{SKU: c.SKU, StockBefore: c.StockBefore, StockAfter: c.StockAfter, PriceBefore: c.PriceBefore, PriceAfter: c.PriceAfter}
 	}
 	return out
 }
@@ -411,16 +348,6 @@ func publicImportError(err error) error {
 		return ErrIdempotencyKeyRequired
 	case errors.Is(err, app.ErrIdempotencyConflict):
 		return ErrIdempotencyConflict
-	case errors.Is(err, app.ErrImportCancelled):
-		return ErrImportCancelled
-	case errors.Is(err, app.ErrImportNotFound):
-		return ErrImportNotFound
-	case errors.Is(err, app.ErrTooManyPreviews):
-		return ErrTooManyPreviews
-	case errors.Is(err, app.ErrPreviewExpired):
-		return ErrPreviewExpired
-	case errors.Is(err, app.ErrImportNotCancellable):
-		return ErrImportNotCancellable
 	}
 	return err
 }

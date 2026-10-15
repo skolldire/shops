@@ -33,10 +33,7 @@ type Catalog interface {
 	Delete(ctx context.Context, id string, version int) error
 	Categories(ctx context.Context) ([]string, error)
 	Movements(ctx context.Context, productID string, p catalog.Paging) (catalog.MovementPage, error)
-	PreviewImport(ctx context.Context, r io.Reader, opts catalog.ImportOptions) (string, error)
-	ImportPreview(ctx context.Context, id string) (catalog.ImportPreview, error)
-	ConfirmImport(ctx context.Context, id string, allowDuplicate bool) (catalog.ImportReport, error)
-	CancelImport(ctx context.Context, id string) error
+	Import(ctx context.Context, r io.Reader, opts catalog.ImportOptions) (catalog.ImportReport, error)
 }
 
 type Ordering interface {
@@ -134,9 +131,6 @@ func (ui *UI) Routes() http.Handler {
 		r.Use(httpx.MaxBodyBytes(ui.maxImportBodyBytes))
 		r.Get(adminImports, ui.importForm)
 		r.Post(adminImports, ui.importFile)
-		r.Get(adminImports+"/{id}", ui.importStatus)
-		r.Post(adminImports+"/{id}/confirm", ui.confirmImport)
-		r.Post(adminImports+"/{id}/cancel", ui.cancelImport)
 	})
 	return r
 }

@@ -58,7 +58,7 @@ func (f fixture) count(t *testing.T) int {
 
 func (f fixture) importer(t *testing.T) *csvimport.Importer {
 	t.Helper()
-	log, err := postgres.NewImportLog(f.pool, time.Hour, 20)
+	log, err := postgres.NewImportLog(f.pool)
 	require.NoError(t, err)
 	tx, err := database.NewTxManager(f.pool)
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestUpsert(t *testing.T) {
 		f.reset(t)
 		first, err := f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha", "1.00", 1), item("B-1", "Beta", "2.00", 2)}, "sha")
 		require.NoError(t, err)
-		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeCreated, "B-1": app.OutcomeCreated}, first)
+		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeCreated, "B-1": app.OutcomeCreated}, first.Outcomes)
 		before := f.stored(t, "A-1")
 
 		second, err := f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{
@@ -96,7 +96,7 @@ func TestUpsert(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, map[string]app.UpsertOutcome{
 			"A-1": app.OutcomeUnchanged, "B-1": app.OutcomeUpdated, "C-1": app.OutcomeCreated,
-		}, second)
+		}, second.Outcomes)
 		require.Equal(t, before, f.stored(t, "A-1"), "an unchanged row keeps its version and updated_at")
 		changed := f.stored(t, "B-1")
 		require.Equal(t, 9, changed.Stock, "stock is absolute")
@@ -114,7 +114,7 @@ func TestUpsert(t *testing.T) {
 		again, err := f.repo.Upsert(ctx, domain.ImportReplace, rows, "sha")
 
 		require.NoError(t, err)
-		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeUnchanged, "B-1": app.OutcomeUnchanged}, again)
+		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeUnchanged, "B-1": app.OutcomeUnchanged}, again.Outcomes)
 		require.Equal(t, before, []stored{f.stored(t, "A-1"), f.stored(t, "B-1")})
 	})
 
@@ -127,13 +127,13 @@ func TestUpsert(t *testing.T) {
 		outcomes, err := f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("GONE-1", "Back again", "5.00", 5), item("NEW-1", "New", "1.00", 1)}, "sha")
 
 		require.NoError(t, err)
-		require.Equal(t, map[string]app.UpsertOutcome{"GONE-1": app.OutcomeDeleted, "NEW-1": app.OutcomeCreated}, outcomes)
+		require.Equal(t, map[string]app.UpsertOutcome{"GONE-1": app.OutcomeDeleted, "NEW-1": app.OutcomeCreated}, outcomes.Outcomes)
 		require.Equal(t, before, f.stored(t, "GONE-1"))
 		require.Equal(t, "DELETED", before.Status)
 
 		only, err := f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("GONE-1", "Back again", "5.00", 5)}, "sha")
 		require.NoError(t, err)
-		require.Equal(t, map[string]app.UpsertOutcome{"GONE-1": app.OutcomeDeleted}, only)
+		require.Equal(t, map[string]app.UpsertOutcome{"GONE-1": app.OutcomeDeleted}, only.Outcomes)
 	})
 
 	t.Run("a product deleted while the upsert waits for it is reported as deleted", func(t *testing.T) {
@@ -146,7 +146,7 @@ func TestUpsert(t *testing.T) {
 		require.NoError(t, err)
 
 		type result struct {
-			outcomes map[string]app.UpsertOutcome
+			outcomes app.UpsertResult
 			err      error
 		}
 		done := make(chan result, 1)
@@ -164,7 +164,7 @@ func TestUpsert(t *testing.T) {
 
 		got := <-done
 		require.NoError(t, got.err)
-		require.Equal(t, map[string]app.UpsertOutcome{"RACE-1": app.OutcomeDeleted, "RACE-2": app.OutcomeCreated}, got.outcomes)
+		require.Equal(t, map[string]app.UpsertOutcome{"RACE-1": app.OutcomeDeleted, "RACE-2": app.OutcomeCreated}, got.outcomes.Outcomes)
 		after := f.stored(t, "RACE-1")
 		require.Equal(t, "DELETED", after.Status)
 		require.Equal(t, "Race", after.Name)
@@ -179,12 +179,12 @@ func TestUpsert(t *testing.T) {
 
 		outcomes, err := f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("HELD-1", "Renamed", "9.00", 2), item("NEW-1", "New", "1.00", 1)}, "sha")
 		require.NoError(t, err)
-		require.Equal(t, map[string]app.UpsertOutcome{"HELD-1": app.OutcomeBelowReserved, "NEW-1": app.OutcomeCreated}, outcomes)
+		require.Equal(t, map[string]app.UpsertOutcome{"HELD-1": app.OutcomeBelowReserved, "NEW-1": app.OutcomeCreated}, outcomes.Outcomes)
 		require.Equal(t, before, f.stored(t, "HELD-1"), "neither the stock nor the other attributes change")
 
 		outcomes, err = f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("HELD-1", "Renamed", "9.00", 3)}, "sha")
 		require.NoError(t, err)
-		require.Equal(t, map[string]app.UpsertOutcome{"HELD-1": app.OutcomeUpdated}, outcomes, "the reserved units themselves are enough")
+		require.Equal(t, map[string]app.UpsertOutcome{"HELD-1": app.OutcomeUpdated}, outcomes.Outcomes, "the reserved units themselves are enough")
 		require.Equal(t, 3, f.stored(t, "HELD-1").Stock)
 	})
 
@@ -196,11 +196,13 @@ func TestUpsert(t *testing.T) {
 
 		outcomes, err := f.repo.Upsert(ctx, domain.ImportAdd, []domain.Product{item("A-1", "Alpha v2", "39.99", 3), item("N-1", "New", "1.00", 4)}, "import-1")
 		require.NoError(t, err)
-		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeUpdated, "N-1": app.OutcomeCreated}, outcomes)
+		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeUpdated, "N-1": app.OutcomeCreated}, outcomes.Outcomes)
 		got, err := f.repo.Get(ctx, a.ID)
 		require.NoError(t, err)
 		require.Equal(t, []any{"Alpha v2", "39.99", 8, 2, 2}, []any{got.Name, got.Price.StringFixed(2), got.Stock, got.Reserved, got.Version})
 		require.Equal(t, [][3]any{{0, 2, "reservation:purchase-1"}, {3, 0, "import_add:import-1"}}, f.reservedMovements(t, a.ID))
+		require.Equal(t, map[string]domain.ImportChange{"A-1": {SKU: "A-1", StockBefore: 5, StockAfter: 8, PriceBefore: d("29.99"), PriceAfter: d("39.99")}}, outcomes.Changes,
+			"an existing product reports its stock and price before and after; a new one does not")
 		require.Equal(t, 4, f.stored(t, "N-1").Stock, "a new product starts with the units of the file")
 		f.requireBalanced(t)
 	})
@@ -214,8 +216,10 @@ func TestUpsert(t *testing.T) {
 		same := domain.Product{SKU: "A-1", Name: "Alpha", Description: "about Alpha", Category: "Imports", Price: d("1.00"), Stock: 0, WeightKg: d("1.500")}
 		outcomes, err := f.repo.Upsert(ctx, domain.ImportAdd, []domain.Product{same}, "import-1")
 		require.NoError(t, err)
-		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeUnchanged}, outcomes)
+		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeUnchanged}, outcomes.Outcomes)
 		require.Equal(t, before, f.stored(t, "A-1"))
+		require.Equal(t, map[string]domain.ImportChange{"A-1": {SKU: "A-1", StockBefore: 5, StockAfter: 5, PriceBefore: d("1.00"), PriceAfter: d("1.00")}}, outcomes.Changes,
+			"an unchanged product is reported with the same values before and after")
 	})
 
 	t.Run("add that overflows the stock applies none of the batch", func(t *testing.T) {
@@ -227,24 +231,11 @@ func TestUpsert(t *testing.T) {
 		require.Equal(t, 1, f.stored(t, "A-1").Stock)
 	})
 
-	t.Run("the products of an import are read with their stock, reserved units and status", func(t *testing.T) {
-		f.reset(t)
-		a := f.create(t, "A-1", "Alpha", "Imports", "1.00", 5)
-		gone := f.create(t, "GONE-1", "Gone", "Imports", "1.00", 2)
-		require.NoError(t, f.repo.Delete(ctx, gone.ID, gone.Version))
-		_, err := f.repo.ReserveStock(ctx, []domain.StockRequest{{ProductID: a.ID, Quantity: 2}}, "purchase-1")
-		require.NoError(t, err)
-
-		targets, err := f.repo.ImportTargets(ctx, []string{"A-1", "GONE-1", "NEW-1"})
-		require.NoError(t, err)
-		require.Equal(t, map[string]domain.ImportTarget{"A-1": {Stock: 5, Reserved: 2}, "GONE-1": {Stock: 2, Deleted: true}}, targets)
-	})
-
 	t.Run("an empty batch does nothing", func(t *testing.T) {
 		f.reset(t)
 		outcomes, err := f.repo.Upsert(ctx, domain.ImportReplace, nil, "sha")
 		require.NoError(t, err)
-		require.Empty(t, outcomes)
+		require.Empty(t, outcomes.Outcomes)
 	})
 
 	t.Run("a batch the database rejects applies none of its rows", func(t *testing.T) {

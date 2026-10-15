@@ -11,15 +11,7 @@ type Tx interface {
 }
 
 type ProductUpserter interface {
-	Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (map[string]UpsertOutcome, error)
-}
-
-type ImportTargets interface {
-	ImportTargets(ctx context.Context, skus []string) (map[string]domain.ImportTarget, error)
-}
-
-type RowReader interface {
-	Rows(content []byte) ([]ImportRow, error)
+	Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (UpsertResult, error)
 }
 
 type ImportFailureReporter interface {

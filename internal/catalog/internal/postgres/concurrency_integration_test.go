@@ -86,7 +86,8 @@ func TestImportsAndReservationsSerialize(t *testing.T) {
 	}
 	importStock := func(stock int) func() (map[string]app.UpsertOutcome, error) {
 		return async(func() (map[string]app.UpsertOutcome, error) {
-			return f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha", "1.00", stock)}, "sha")
+			result, err := f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha", "1.00", stock)}, "sha")
+			return result.Outcomes, err
 		})
 	}
 	reserved := func(t *testing.T, a domain.Product, q int) {
@@ -179,8 +180,8 @@ func TestImportsAndReservationsSerialize(t *testing.T) {
 		reserved(t, a, 3)
 		var outcomes map[string]app.UpsertOutcome
 		finish := f.hold(t, func(ctx context.Context) error {
-			var err error
-			outcomes, err = f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha", "1.00", 2)}, "sha")
+			result, err := f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha", "1.00", 2)}, "sha")
+			outcomes = result.Outcomes
 			return err
 		})
 		release := async(func() (struct{}, error) { return struct{}{}, f.repo.ReleaseStock(ctx, req(a, 3), "purchase-0") })

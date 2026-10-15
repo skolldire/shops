@@ -261,9 +261,24 @@ Products can be loaded from a CSV file through the API or from `/admin/imports`:
 
 ```sh
 curl -F file=@testdata/products.csv localhost:8080/api/v1/imports
+curl -F file=@delivery.csv -H "Idempotency-Key: $(uuidgen)" 'localhost:8080/api/v1/imports?mode=add'
 ```
 
-The request is `multipart/form-data` with the file in a field named `file`. The file is read as a stream and is never written to disk. The import is synchronous: the response is the report, and nothing about an import is stored.
+The request is `multipart/form-data` with the file in a field named `file`. The import is applied in that same request and the response is the final report: there is no review or confirmation step (see [D2](#d2-import-modes-applied-in-the-request)). The file is read as a stream and its content is never stored, neither on disk nor in the database. What is stored, in the `imports` table, is the metadata of each import: its id, key, mode, file name, size and hash, status, counters, rejected rows and the before and after values of every existing product.
+
+**Mode.** `?mode=add` adds the units in the file to the physical stock: there are 50 and the file says 10, so 60 remain. `?mode=replace`, the default when `mode` is missing, sets the physical stock to the units in the file: 10 remain. In both modes the price, name, description, category and weight are replaced by the file; the mode only decides what happens to the stock. Another value answers `400 invalid_mode`.
+
+**Idempotency.** `Idempotency-Key` (a UUID) is required with `add` and optional with `replace`:
+
+| Same key, and… | Answer |
+|---|---|
+| Same file and mode, import applied | The original report, without applying anything again |
+| Same file and mode, import interrupted (`APPLYING`) | The whole file is applied again from the upload, under the lock of the import, and it finishes `APPLIED` |
+| Another file or mode | `409 idempotency_conflict` |
+
+Two replicas that receive the same key at the same time apply it once: an `add` waits on the unique index of the key and then reads the stored report; a `replace` takes `pg_advisory_lock` on the import id, and every status change is an `UPDATE … WHERE status = <expected>`. The whole application runs on the one connection that holds that lock.
+
+**Repeated file.** If a file with the same hash was already applied with `add`, a new `add` of it is not applied and answers `409 duplicate_file` with the date of the earlier import, unless the request sends `allow_duplicate=true`. Adding the same delivery twice is almost always a mistake, but sometimes it is a real second delivery. A `replace` with the same file is harmless and needs no confirmation.
 
 ### The file
 
@@ -281,12 +296,16 @@ The request is `multipart/form-data` with the file in a field named `file`. The 
 | Row that breaks the product rules | Rejected with every field error it has |
 | SKU repeated in the file, compared after trimming and upper-casing | Every row of the group is rejected with `code: "duplicate_in_file"`; the message names the other lines |
 | SKU of a deleted product | Rejected with `code: "sku_deleted"`; a deleted SKU is never reused |
-| SKU of an active product | Updated. `stock` replaces the physical units; it is not added to them, and the reserved units stay as they are |
-| SKU of an active product, `stock` below its reserved units | Rejected with `field: "stock"` and `code: "below_reserved"`; nothing of the row is applied |
+| SKU of an active product, `replace` | Updated. `stock` becomes the physical units and the reserved units stay as they are |
+| SKU of an active product, `add` | Updated. `stock` is added to the physical units |
+| SKU of an active product, `replace`, `stock` below its reserved units | Rejected with `field: "stock"` and `code: "below_reserved"`; nothing of the row is applied |
 | New SKU | Created |
 | Active product that is not in the file | Left as it is |
 
-The file is validated completely before anything is written. The valid rows are then applied in batches of 500, each in its own transaction, so a large file is not all-or-nothing: if the request is cancelled halfway, the batches already committed stay applied. A row that is identical to the stored product is left untouched: its `version` and `updated_at` do not change. So importing the same file again reports as `unchanged` the rows that the first import created or updated, as long as nobody changed those products in between; rows that were skipped or rejected are skipped or rejected again.
+The file is validated completely before anything is written. Then:
+
+- **`add` is all or nothing.** One transaction creates the `imports` row, applies every valid row and marks the import `APPLIED`. If anything fails, nothing is left: no product change, no movement and no `imports` row. The cost is that an `add` locks every product of the file until the whole file is applied, so a large `add` makes checkouts of those products wait for it. Retrying an `add` that was half applied would add the units twice, which is why it cannot be applied in parts.
+- **`replace` is applied in batches of 500.** The `imports` row is committed as `APPLYING` in its own transaction before the first batch, each batch commits on its own, and the import becomes `APPLIED` after the last one. A request cancelled halfway leaves the batches already committed and the import `APPLYING`, which marks it as interrupted. Uploading the same file again with the same key applies all of it again and finishes it; this is safe because replacing with the same values changes nothing twice. A row that is identical to the stored product is left untouched: its `version` and `updated_at` do not change. So importing the same file again reports as `unchanged` the rows that the first import created or updated, as long as nobody changed those products in between; rows that were skipped or rejected are skipped or rejected again.
 
 An import overrides whatever is stored: it does not use `If-Match`, and it increases `version` when it changes a product. An administrator who has that product open gets the usual conflict when saving.
 
@@ -296,6 +315,8 @@ An import overrides whatever is stored: it does not use `If-Match`, and it incre
 
 ```json
 {
+  "import_id": "5a0b2c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b",
+  "mode": "replace",
   "file": {"name": "products.csv", "bytes": 8930, "sha256": "6fc46b84badb1ac37b8b19a2d0741aa7728d6c93a9fe949b19f676892dc8fd24"},
   "records": 97,
   "skipped": 2,
@@ -306,9 +327,14 @@ An import overrides whatever is stored: it does not use `If-Match`, and it incre
   "errors": [
     {"line": 2, "sku": "RS-001", "field": "sku", "code": "duplicate_in_file", "message": "also used on line 36"},
     {"line": 4, "sku": "WM-042", "field": "price", "code": "invalid_format", "message": "must be a plain decimal number such as 29.99"}
+  ],
+  "changes": [
+    {"sku": "RS-001", "stock_before": 50, "stock_after": 10, "price_before": "29.99", "price_after": "34.99"}
   ]
 }
 ```
+
+`changes` lists every existing product of the file that was applied, changed or not, with its stock and price before and after, in SKU order. They come from the same statement that applies the row (`RETURNING old.…, new.…` in PostgreSQL 18), so they are what happened, not an estimate. New products are counted in `created` and not listed.
 
 `records` is always `skipped + created + updated + unchanged + rejected`. `errors` is sorted by line and then by field. A row with several invalid fields appears once per field and counts once in `rejected`. `sku` is the normalized value, and it is empty for rows with the wrong number of fields. Messages never include the content of the row. The API returns every error; the admin page shows the first 200 and says how many more there are.
 
@@ -331,12 +357,19 @@ When the whole file is rejected, the answer is `application/problem+json`:
 | Invalid UTF-8 or malformed CSV, with the line in `detail` | 400 | `invalid_csv` |
 | More rows than `import.max_rows` | 400 | `too_many_rows` |
 | File larger than `import.max_bytes` | 413 | `request_too_large` |
+| `mode` other than `add` or `replace` | 400 | `invalid_mode` |
+| `Idempotency-Key` that is not a UUID, or missing with `add` | 400 | `invalid_idempotency_key` |
+| `allow_duplicate` other than `true` or `false` | 400 | `invalid_request` |
+| Same key with another file or mode | 409 | `idempotency_conflict` |
+| `add` of a file already added, without `allow_duplicate=true`; the date is in `detail` | 409 | `duplicate_file` |
+
+None of these creates an `imports` row: a file rejected as a whole has no effects to trace.
 
 ### Demo data
 
 `testdata/products.csv` is the official file of the challenge, unmodified. It was downloaded on October 7, 2026 and its SHA-256 is `6fc46b84badb1ac37b8b19a2d0741aa7728d6c93a9fe949b19f676892dc8fd24`. It has 97 records: 2 empty rows, 82 valid products and 13 rejected rows, among them the repeated SKUs `RS-001` (2 rows) and `BS-021` (3 rows). The acceptance tests import it and check those numbers.
 
-The image ships that file. When `demo.seed` is `true`, the app imports `demo.seed_file` at startup, before it starts serving, and only if the `products` table has no rows at all, deleted ones included. So `make down && make up` gives a populated store, while restarting the app neither imports again nor brings back products that were deleted. The seed goes through the same import as the API, and its summary is logged at `info` level as `demo seed imported`. Rejected rows are not a failure; a seed file that is missing or cannot be read stops the startup.
+The image ships that file. When `demo.seed` is `true`, the app imports `demo.seed_file` at startup, before it starts serving, and only if the `products` table has no rows at all, deleted ones included. So `make down && make up` gives a populated store, while restarting the app neither imports again nor brings back products that were deleted. The seed goes through the same import as the API, in `replace` mode, and its summary is logged at `info` level as `demo seed imported`. Rejected rows are not a failure; a seed file that is missing or cannot be read stops the startup.
 
 ## Inventory audit
 
@@ -359,15 +392,16 @@ Creating a product with a positive stock records one movement with `delta` equal
 |---|---|---|---|---|
 | Create with stock above 0 (API or UI) | `initial_stock` | +n | 0 | none |
 | Edit that changes the stock (API or UI) | `manual_adjustment` | ±n | 0 | none |
-| Import and demo seed, only rows created or updated | `import_replace` | ±n | 0 | SHA-256 of the file |
+| Import in `replace` mode and demo seed, only rows created or updated | `import_replace` | ±n | 0 | import id |
+| Import in `add` mode, only rows created or updated | `import_add` | +n | 0 | import id |
 | Checkout, when the units are reserved | `reservation` | 0 | +q | purchase id |
 | Approved payment | `sale` | −q | −q | purchase id |
 | Declined payment | `reservation_release` | 0 | −q | purchase id |
 | Direct SQL | `unattributed` | any | any | none |
 
-Meaning changes in phase 4: `sale` used to be written when the checkout took the stock; it is now written when the payment is approved, and it lowers the physical stock and the reserved units together. `sale_reversal` is no longer written: a declined payment releases a reservation instead (`reservation_release`) and never touches the physical stock. The reason `import` became `import_replace`, ahead of the `import_add` mode. There are no migrations, so a fresh volume never contains the old reasons.
+Meaning changes in phase 4: `sale` used to be written when the checkout took the stock; it is now written when the payment is approved, and it lowers the physical stock and the reserved units together. `sale_reversal` is no longer written: a declined payment releases a reservation instead (`reservation_release`) and never touches the physical stock. The reason `import` became `import_replace`, and `import_add` is new. The reference of an import movement is now the import id instead of the file hash, so two runs of the same file can be told apart. There are no migrations, so a fresh volume never contains the old reasons.
 
-A product created by CSV gets one `import_replace` movement, not an `initial_stock` plus an `import_replace`. The file hash identifies the content, not one run: two imports of the same file share the reference. `db_user` is the database role of the connection (`shop` for the application), not the demo user. `tx_id` is the PostgreSQL transaction id.
+A product created by CSV gets one import movement, not an `initial_stock` plus an import movement. `db_user` is the database role of the connection (`shop` for the application), not the demo user. `tx_id` is the PostgreSQL transaction id.
 
 **Immutable in the database.** A `BEFORE UPDATE OR DELETE` trigger on `inventory_movements` and a statement-level `BEFORE TRUNCATE` trigger raise an error, so the application cannot change or remove history. The limit: the owner of the table or a superuser can disable triggers, and the application connects as the owner. In production the table would belong to a role other than the application role, with `REVOKE UPDATE, DELETE` (see [Evolution](#evolution)).
 
@@ -441,7 +475,7 @@ Only a definitive decline leads to `FAILED`. A technical error, an unknown outco
 | Reservation | Purchase row → product rows by product id |
 | Finalization, confirmed | Purchase row → product rows by product id → cart rows by product id |
 | Finalization, declined | Purchase row → product rows by product id |
-| Import | Product rows by SKU |
+| Import | Product rows by SKU; an `add` keeps them locked until the whole file is applied |
 | Product edit | One product row |
 
 The confirmed finalization now locks the products too, because the sale lowers their stock. The cart never takes a lock and then one of a purchase or a product, so it forms no cycle with the checkout. This does not remove every deadlock: the import locks by SKU and the checkout by product id, so an import running at the same time as a checkout or a finalization can end in `deadlock_detected`, and PostgreSQL aborts one of them. There are no SQL retries. A reservation that fails with `40P01` or `55P03`, with its rollback confirmed, answers `503 try_again` with `Retry-After: 1`, and the client can retry with the same key. A finalization that fails that way leaves the purchase `PENDING` and answers `202`.
@@ -561,7 +595,7 @@ Decision and assumptions: the RFC proposed taking only purchases pending for mor
 | `/admin/products/{id}/edit` | Edit a product. The form sends the version it showed; if the product changed meanwhile, the page explains it and offers to reload |
 | `/admin/products/{id}/delete` | Server-rendered confirmation before deleting |
 | `/admin/products/{id}/movements` | The stock movements of a product, newest first |
-| `/admin/imports` | Upload a CSV file. The page shows the counters of the import and a table with the rejected rows: line, SKU, field, code and message. A file that is rejected as a whole is explained on the same page |
+| `/admin/imports` | Import a CSV file. Choosing "Add to the current inventory" or "Replace the inventory" is required and nothing is chosen in advance; each option shows an example, and the button names the action ("Import adding" or "Import replacing", switched with CSS `:has()`, without JavaScript). The import is applied when the form is sent, and the page shows the counters, the existing products with their stock and price before and after, and the rejected rows. An `add` of a file already added shows the date of the earlier import and asks to choose the file again and tick "Add again" |
 
 The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it works without internet access. Pages are served with a strict Content-Security-Policy (no inline scripts or styles), htmx is configured so it does not inject inline styles, and there is no custom JavaScript. The header shows the demo user selector and a link to the cart with its number of lines; if the cart cannot be read, the page is rendered without the counter and the failure is logged once. Error pages always use that reduced header.
 
@@ -585,6 +619,27 @@ Each decision states its context, the alternatives that were considered with the
 **Example.** Stock 5, a pending purchase of 1 (stock 5, reserved 1, available 4). An import sets 10 (stock 10, reserved 1). Approved: stock 9, reserved 0. Declined: stock 10, reserved 0. Never 11.
 
 **Revisit when** reservations need to expire on their own (a cart hold with a timeout), or stock is split by warehouse.
+
+### D2. Import modes applied in the request
+
+**Context.** With D1, an import that sets the stock is right after a stock count and wrong for a delivery, which should add to what is there. The CSV format of the challenge cannot change.
+
+**Alternatives.**
+
+| Option | Consequence |
+|---|---|
+| Only a delta (every import adds) | Right for deliveries, but a stock count would need a file of differences that nobody writes by hand |
+| Reject imports while there are reservations | Simple, but the store would have to stop selling to load a file |
+| Leave reserved products out of the file | The products that sell best would never be updated |
+| Two modes, `add` and `replace`, chosen per import | One parameter more, and two rules to explain; each file means what its author meant |
+
+**Decision.** Two modes, a parameter of the import and not a column of the CSV. `replace` is the default in the API so existing clients keep working; the UI requires the choice. `add` adds the units and replaces the other attributes, in one transaction; `replace` sets the units, in batches. Both are applied in the request that sends the file.
+
+A stored preview was also built and discarded: upload, see a server-rendered summary of what would change, then confirm. Confirming from any replica meant keeping the file content in the database between the two requests, and without authentication anybody could fill the database with stored previews; it needed a lifetime, a purge and a limit only to clean up after itself. Applying in the request keeps no content at all, and the report shows afterwards what changed, from the same statement that changed it.
+
+**Example.** There are 50 tents and 1 reserved. A delivery file says 10: with `add` there are 60, with `replace` 10. A count file says 0: `replace` rejects the row with `below_reserved`, because 1 tent is reserved.
+
+**Revisit when** an import needs approval by someone other than the person who sends it, or files become large enough that a mistake is expensive to undo: then a review step is worth its storage, with authentication to protect it.
 
 ### D3. Never less physical stock than reserved
 
@@ -631,6 +686,9 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 - **An import sets the physical stock to the value in the file.** It is absolute, not a delta, so the file must describe the warehouse at the time it is applied: a file written before a sale that was approved later still sets the units it lists. Reservations are kept apart, so an import no longer brings back or loses reserved units, and a row below the reserved units is rejected.
 - **No authentication.** Anyone who can reach port 8080 can create, edit, delete and import products through `/api/v1` and `/admin`, and act as any demo user. Do not expose the published listener to untrusted clients without access control in front of it, such as an authenticating reverse proxy or a private network.
 - **Forms are protected by a same-origin check, not by CSRF tokens.** Behind a reverse proxy that changes the host, the public host would have to be configured.
+- **There is no review before an import is applied.** The report shows afterwards what changed; a wrong file is fixed with another import. An `add` sent by mistake is undone with a `replace` of the right values.
+- **An interrupted `replace` stays `APPLYING` until someone sends the same file again with the same key.** In the UI that means sending the same form again; a new form has a new key, and the interrupted import then remains `APPLYING` as a record. The stock is not wrong for it: the batches applied hold the values of the file.
+- **A large `add` holds the locks of all its products until it finishes**, so checkouts of those products wait for it.
 - **An import and a checkout can deadlock.** They lock products in different orders (SKU and product id). PostgreSQL aborts one of them; a reservation answers `503 try_again`, a finalization leaves the purchase `PENDING`.
 - **Pending purchases wait for the next start.** There is no periodic recovery and the recovery assumes a single instance.
 - **The payment is an in-process fake.** It never times out or fails, so the unknown and unavailable outcomes are exercised only by the tests.

@@ -74,18 +74,18 @@ type flakyStore struct {
 	failSKU string
 }
 
-func (f flakyStore) Upsert(_ context.Context, _ domain.ImportMode, products []domain.Product, _ string) (map[string]app.UpsertOutcome, error) {
+func (f flakyStore) Upsert(_ context.Context, _ domain.ImportMode, products []domain.Product, _ string) (app.UpsertResult, error) {
 	if len(products) > 1 {
-		return nil, errors.New("batch exploded")
+		return app.UpsertResult{}, errors.New("batch exploded")
 	}
 	out := map[string]app.UpsertOutcome{}
 	for _, p := range products {
 		if p.SKU == f.failSKU {
-			return nil, errors.New("row exploded")
+			return app.UpsertResult{}, errors.New("row exploded")
 		}
 		out[p.SKU] = app.OutcomeCreated
 	}
-	return out, nil
+	return app.UpsertResult{Outcomes: out}, nil
 }
 
 func importRow(t *testing.T, line int, sku string) app.ImportRow {

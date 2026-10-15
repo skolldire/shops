@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
@@ -87,6 +88,7 @@ func TestImportReturnsTheReportEvenWithRejectedRows(t *testing.T) {
 			{Line: 12, SKU: "BS-021", Field: "sku", Code: "duplicate_in_file", Message: "also used on lines 57 and 90"},
 			{Line: 15, SKU: "XY-003", Field: "price", Code: "invalid_format", Message: "must be a plain decimal number such as 29.99"},
 		},
+		Changes: []domain.ImportChange{{SKU: "RS-001", StockBefore: 50, StockAfter: 10, PriceBefore: decimal.RequireFromString("29.99"), PriceAfter: decimal.RequireFromString("39.9")}},
 	}}
 	h, _ := newImportServer(t, importer, 1<<20)
 
@@ -95,13 +97,14 @@ func TestImportReturnsTheReportEvenWithRejectedRows(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 	require.JSONEq(t, `{
-		"import_id": "11111111-1111-4111-8111-111111111111", "mode": "replace", "preview_changed": false,
+		"import_id": "11111111-1111-4111-8111-111111111111", "mode": "replace",
 		"file": {"name": "products.csv", "bytes": 10240, "sha256": "6fc46b84"},
 		"records": 97, "skipped": 2, "created": 80, "updated": 1, "unchanged": 1, "rejected": 13,
 		"errors": [
 			{"line": 12, "sku": "BS-021", "field": "sku", "code": "duplicate_in_file", "message": "also used on lines 57 and 90"},
 			{"line": 15, "sku": "XY-003", "field": "price", "code": "invalid_format", "message": "must be a plain decimal number such as 29.99"}
-		]
+		],
+		"changes": [{"sku": "RS-001", "stock_before": 50, "stock_after": 10, "price_before": "29.99", "price_after": "39.90"}]
 	}`, rec.Body.String())
 	require.Equal(t, "products.csv", importer.name)
 	require.Equal(t, "name,sku\n", importer.body)
@@ -133,8 +136,6 @@ func TestImportErrorTable(t *testing.T) {
 		"key conflict":      {fmt.Errorf("add: %w", app.ErrIdempotencyConflict), 409, "idempotency_conflict", "another file or mode"},
 		"repeated file": {&app.DuplicateFileError{Previous: domain.ImportStamp{AppliedAt: time.Date(2026, 10, 14, 9, 30, 0, 0, time.UTC)}},
 			409, "duplicate_file", "already added on 2026-10-14T09:30:00Z. Send allow_duplicate=true"},
-		"cancelled import":   {app.ErrImportCancelled, 409, "import_cancelled", "cancelled"},
-		"expired preview":    {app.ErrPreviewExpired, 410, "preview_expired", "Upload the file again"},
 		"unexpected failure": {errors.New("db exploded: host=10.0.0.5"), 500, "internal_error", "unexpected"},
 	}
 	for name, tt := range tests {

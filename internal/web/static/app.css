@@ -164,6 +164,18 @@ input[type="checkbox"] {
   margin-right: 0.5rem;
 }
 
+.import-form .when-add,
+.import-form .when-replace,
+.import-form:has(#mode-add:checked) .when-none,
+.import-form:has(#mode-replace:checked) .when-none {
+  display: none;
+}
+
+.import-form:has(#mode-add:checked) .when-add,
+.import-form:has(#mode-replace:checked) .when-replace {
+  display: inline;
+}
+
 .field-note {
   margin: 0.25rem 0 0;
   color: var(--muted);

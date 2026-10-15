@@ -35,6 +35,11 @@ const (
 
 type UpsertOutcome string
 
+type UpsertResult struct {
+	Outcomes map[string]UpsertOutcome
+	Changes  map[string]domain.ImportChange
+}
+
 type ImportRow struct {
 	Line      int
 	Empty     bool
@@ -58,17 +63,17 @@ type RowError struct {
 }
 
 type ImportReport struct {
-	ID             string
-	Mode           domain.ImportMode
-	PreviewChanged bool
-	File           ImportFile
-	Records        int
-	Skipped        int
-	Created        int
-	Updated        int
-	Unchanged      int
-	Rejected       int
-	Errors         []RowError
+	ID        string
+	Mode      domain.ImportMode
+	File      ImportFile
+	Records   int
+	Skipped   int
+	Created   int
+	Updated   int
+	Unchanged int
+	Rejected  int
+	Errors    []RowError
+	Changes   []domain.ImportChange
 }
 
 type ImportOptions struct {
@@ -80,7 +85,6 @@ type ImportOptions struct {
 
 type ImportRequest struct {
 	File           ImportFile
-	Content        []byte
 	Rows           []ImportRow
 	Mode           domain.ImportMode
 	Key            string
@@ -132,9 +136,7 @@ func (i *Importer) Import(ctx context.Context, req ImportRequest) (ImportReport,
 
 func (i *Importer) importReplace(ctx context.Context, req ImportRequest) (ImportReport, error) {
 	report, valid := i.prepare(req)
-	rec, created, err := i.log.Create(ctx, ImportRecord{
-		Key: strings.ToLower(req.Key), Mode: req.Mode, Status: domain.ImportApplying, File: req.File, Content: req.Content,
-	})
+	rec, created, err := i.log.Create(ctx, ImportRecord{Key: strings.ToLower(req.Key), Mode: req.Mode, Status: domain.ImportApplying, File: req.File})
 	if err != nil {
 		i.close(ctx, &report)
 		return report, err
@@ -143,39 +145,22 @@ func (i *Importer) importReplace(ctx context.Context, req ImportRequest) (Import
 		if err := sameImport(rec, req); err != nil {
 			return ImportReport{}, err
 		}
-		switch rec.Status {
-		case domain.ImportApplied:
+		if rec.Status == domain.ImportApplied {
 			return rec.Report, nil
-		case domain.ImportCancelled:
-			return ImportReport{}, ErrImportCancelled
-		case domain.ImportPreview:
-			if _, err := i.log.StartApplying(ctx, rec.ID); err != nil {
-				return ImportReport{}, err
-			}
 		}
 	}
-	return i.runReplace(ctx, rec.ID, report, valid)
-}
-
-func (i *Importer) runReplace(ctx context.Context, id string, report ImportReport, valid []importRow) (ImportReport, error) {
-	ctx, unlock, err := i.log.Lock(ctx, id)
+	ctx, unlock, err := i.log.Lock(ctx, rec.ID)
 	if err != nil {
 		return report, err
 	}
 	defer unlock()
-	current, err := i.log.Get(ctx, id)
-	switch {
-	case err != nil:
-		return report, err
-	case current.Status == domain.ImportApplied:
-		return current.Report, nil
-	case current.Status != domain.ImportApplying:
-		return ImportReport{}, fmt.Errorf("%w: it is %s", ErrImportNotApplicable, current.Status)
+	if current, err := i.log.Get(ctx, rec.ID); err != nil || current.Status == domain.ImportApplied {
+		return current.Report, err
 	}
-	report.ID = id
+	report.ID = rec.ID
 	var interrupted error
 	for batch := range slices.Chunk(valid, importBatchSize) {
-		if interrupted = i.apply(ctx, id, batch, &report); interrupted != nil {
+		if interrupted = i.apply(ctx, rec.ID, batch, &report); interrupted != nil {
 			break
 		}
 	}
@@ -183,24 +168,23 @@ func (i *Importer) runReplace(ctx context.Context, id string, report ImportRepor
 	if interrupted != nil {
 		return report, interrupted
 	}
-	finished, err := i.log.Finish(ctx, id, domain.ImportApplying, report)
+	finished, err := i.log.Finish(ctx, rec.ID, domain.ImportApplying, report)
 	if err != nil || finished {
 		return report, err
 	}
-	return i.applied(ctx, id)
+	return i.applied(ctx, rec.ID)
 }
 
-var errFinishLost = errors.New("catalog: another confirmation applied the import first")
+var errFinishLost = errors.New("catalog: another request applied the import first")
 
 func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportReport, error) {
 	prepared, valid := i.prepare(req)
 	var (
-		report  ImportReport
-		replay  bool
-		pending string
+		report ImportReport
+		replay bool
 	)
 	err := i.tx.WithinTx(ctx, func(ctx context.Context) error {
-		rec, created, err := i.log.Create(ctx, ImportRecord{Key: strings.ToLower(req.Key), Mode: req.Mode, Status: domain.ImportPreview, File: req.File})
+		rec, created, err := i.log.Create(ctx, ImportRecord{Key: strings.ToLower(req.Key), Mode: req.Mode, Status: domain.ImportApplying, File: req.File})
 		if err != nil {
 			return err
 		}
@@ -208,30 +192,31 @@ func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportRepo
 			if err := sameImport(rec, req); err != nil {
 				return err
 			}
-			switch rec.Status {
-			case domain.ImportApplied:
-				report, replay = rec.Report, true
-				return nil
-			case domain.ImportCancelled:
-				return ErrImportCancelled
-			case domain.ImportPreview:
-				pending = rec.ID
-				return nil
-			}
+			report, replay = rec.Report, true
+			return nil
 		}
 		if err := i.refuseDuplicate(ctx, rec, req.AllowDuplicate); err != nil {
 			return err
 		}
 		report = prepared
-		return i.applyAdd(ctx, rec.ID, &report, valid)
+		report.ID = rec.ID
+		for batch := range slices.Chunk(valid, importBatchSize) {
+			if err := i.applyAll(ctx, rec.ID, batch, &report); err != nil {
+				return err
+			}
+		}
+		sortErrors(&report)
+		finished, err := i.log.Finish(ctx, rec.ID, domain.ImportApplying, report)
+		if err == nil && !finished {
+			err = errFinishLost
+		}
+		return err
 	})
 	switch {
 	case errors.Is(err, errFinishLost):
 		return i.applied(ctx, report.ID)
 	case err != nil:
 		return ImportReport{}, fmt.Errorf("catalog: add import not applied: %w", err)
-	case pending != "":
-		return i.confirmAdd(ctx, pending, req, false)
 	case !replay:
 		i.record(ctx, report)
 	}
@@ -252,66 +237,13 @@ func (i *Importer) refuseDuplicate(ctx context.Context, rec ImportRecord, allow 
 	return nil
 }
 
-func (i *Importer) confirmAdd(ctx context.Context, id string, req ImportRequest, changed bool) (ImportReport, error) {
-	ctx, unlock, err := i.log.Lock(ctx, id)
-	if err != nil {
-		return ImportReport{}, err
-	}
-	defer unlock()
-	rec, err := i.log.Get(ctx, id)
-	switch {
-	case err != nil:
-		return ImportReport{}, err
-	case rec.Status == domain.ImportApplied:
-		return rec.Report, nil
-	case rec.Status == domain.ImportCancelled:
-		return ImportReport{}, cancelled(rec)
-	}
-	prepared, valid := i.prepare(req)
-	prepared.PreviewChanged = changed
-	report := prepared
-	err = i.tx.WithinTx(ctx, func(ctx context.Context) error {
-		if err := i.refuseDuplicate(ctx, rec, req.AllowDuplicate); err != nil {
-			return err
-		}
-		report = prepared
-		return i.applyAdd(ctx, id, &report, valid)
-	})
-	switch {
-	case errors.Is(err, errFinishLost):
-		return i.applied(ctx, id)
-	case err != nil:
-		return ImportReport{}, fmt.Errorf("catalog: add import not applied: %w", err)
-	}
-	i.record(ctx, report)
-	return report, nil
-}
-
-func (i *Importer) applyAdd(ctx context.Context, id string, report *ImportReport, valid []importRow) error {
-	report.ID = id
-	for batch := range slices.Chunk(valid, importBatchSize) {
-		if err := i.applyAll(ctx, id, batch, report); err != nil {
-			return err
-		}
-	}
-	sortErrors(report)
-	finished, err := i.log.Finish(ctx, id, domain.ImportPreview, *report)
-	if err != nil {
-		return err
-	}
-	if !finished {
-		return errFinishLost
-	}
-	return nil
-}
-
 func (i *Importer) applied(ctx context.Context, id string) (ImportReport, error) {
 	current, err := i.log.Get(ctx, id)
 	if err != nil {
 		return ImportReport{}, err
 	}
 	if current.Status != domain.ImportApplied {
-		return ImportReport{}, fmt.Errorf("%w: it is %s", ErrImportNotApplicable, current.Status)
+		return ImportReport{}, fmt.Errorf("catalog: the import %s is still being applied", id)
 	}
 	return current.Report, nil
 }
@@ -324,25 +256,29 @@ func sameImport(rec ImportRecord, req ImportRequest) error {
 }
 
 func (i *Importer) prepare(req ImportRequest) (ImportReport, []importRow) {
-	report := ImportReport{Mode: req.Mode, File: req.File, Records: len(req.Rows), Errors: []RowError{}}
+	report := ImportReport{Mode: req.Mode, File: req.File, Records: len(req.Rows), Errors: []RowError{}, Changes: []domain.ImportChange{}}
 	valid := i.validate(req.Rows, &report)
 	slices.SortFunc(valid, func(a, b importRow) int { return cmp.Compare(a.sku, b.sku) })
 	return report, valid
 }
 
 func (i *Importer) applyAll(ctx context.Context, id string, batch []importRow, report *ImportReport) error {
-	products := make([]domain.Product, len(batch))
-	for index, row := range batch {
-		products[index] = row.product
-	}
-	outcomes, err := i.store.Upsert(ctx, domain.ImportAdd, products, id)
+	result, err := i.store.Upsert(ctx, domain.ImportAdd, products(batch), id)
 	if err != nil {
 		return err
 	}
 	for _, row := range batch {
-		count(report, row, outcomes[row.sku])
+		count(report, row, result)
 	}
 	return nil
+}
+
+func products(batch []importRow) []domain.Product {
+	out := make([]domain.Product, len(batch))
+	for index, row := range batch {
+		out[index] = row.product
+	}
+	return out
 }
 
 func (i *Importer) close(ctx context.Context, report *ImportReport) {
@@ -417,14 +353,10 @@ func (i *Importer) validate(rows []ImportRow, report *ImportReport) []importRow 
 }
 
 func (i *Importer) apply(ctx context.Context, id string, batch []importRow, report *ImportReport) error {
-	products := make([]domain.Product, len(batch))
-	for index, row := range batch {
-		products[index] = row.product
-	}
-	outcomes, err := i.store.Upsert(ctx, domain.ImportReplace, products, id)
+	result, err := i.store.Upsert(ctx, domain.ImportReplace, products(batch), id)
 	if err == nil {
 		for _, row := range batch {
-			count(report, row, outcomes[row.sku])
+			count(report, row, result)
 		}
 		return nil
 	}
@@ -433,9 +365,9 @@ func (i *Importer) apply(ctx context.Context, id string, batch []importRow, repo
 	}
 	i.failures.BatchRetried(ctx, len(batch), err)
 	for _, row := range batch {
-		outcomes, err := i.store.Upsert(ctx, domain.ImportReplace, []domain.Product{row.product}, id)
+		result, err := i.store.Upsert(ctx, domain.ImportReplace, []domain.Product{row.product}, id)
 		if err == nil {
-			count(report, row, outcomes[row.sku])
+			count(report, row, result)
 			continue
 		}
 		if ctx.Err() != nil {
@@ -450,10 +382,11 @@ func (i *Importer) apply(ctx context.Context, id string, batch []importRow, repo
 	return nil
 }
 
-func count(report *ImportReport, row importRow, outcome UpsertOutcome) {
-	switch outcome {
+func count(report *ImportReport, row importRow, result UpsertResult) {
+	switch result.Outcomes[row.sku] {
 	case OutcomeCreated:
 		report.Created++
+		return
 	case OutcomeUpdated:
 		report.Updated++
 	case OutcomeDeleted:
@@ -462,14 +395,19 @@ func count(report *ImportReport, row importRow, outcome UpsertOutcome) {
 			Line: row.line, SKU: row.sku, Field: "sku", Code: CodeSKUDeleted,
 			Message: "belongs to a deleted product and cannot be reused",
 		})
+		return
 	case OutcomeBelowReserved:
 		report.Rejected++
 		report.Errors = append(report.Errors, RowError{
 			Line: row.line, SKU: row.sku, Field: "stock", Code: CodeBelowReserved,
 			Message: "must be at least the units reserved by pending purchases",
 		})
+		return
 	default:
 		report.Unchanged++
+	}
+	if change, ok := result.Changes[row.sku]; ok {
+		report.Changes = append(report.Changes, change)
 	}
 }
 

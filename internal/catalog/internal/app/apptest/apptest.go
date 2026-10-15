@@ -27,10 +27,6 @@ func NewLog() *Log {
 	return &Log{records: map[string]app.ImportRecord{}}
 }
 
-func (l *Log) CreatePreview(ctx context.Context, rec app.ImportRecord) (app.ImportRecord, bool, error) {
-	return l.Create(ctx, rec)
-}
-
 func (l *Log) Create(_ context.Context, rec app.ImportRecord) (app.ImportRecord, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -42,7 +38,7 @@ func (l *Log) Create(_ context.Context, rec app.ImportRecord) (app.ImportRecord,
 		}
 	}
 	rec.ID = fmt.Sprintf("00000000-0000-4000-8000-%012d", len(l.order)+1)
-	rec.Report = app.ImportReport{ID: rec.ID, Mode: rec.Mode, File: rec.File, Errors: []app.RowError{}}
+	rec.Report = app.ImportReport{ID: rec.ID, Mode: rec.Mode, File: rec.File, Errors: []app.RowError{}, Changes: []domain.ImportChange{}}
 	l.records[rec.ID] = rec
 	l.order = append(l.order, rec.ID)
 	return rec, true, nil
@@ -70,13 +66,9 @@ func (l *Log) LastAppliedAdd(_ context.Context, hash, exceptID string) (domain.I
 	return domain.ImportStamp{}, false, nil
 }
 
-func (l *Log) StartApplying(_ context.Context, id string) (bool, error) {
-	return l.move(id, domain.ImportPreview, func(rec *app.ImportRecord) { rec.Status = domain.ImportApplying })
-}
-
 func (l *Log) Finish(_ context.Context, id string, from domain.ImportStatus, report app.ImportReport) (bool, error) {
 	ok, err := l.move(id, from, func(rec *app.ImportRecord) {
-		rec.Status, rec.Content, rec.Report = domain.ImportApplied, nil, report
+		rec.Status, rec.Report = domain.ImportApplied, report
 	})
 	if ok {
 		l.mu.Lock()
@@ -84,12 +76,6 @@ func (l *Log) Finish(_ context.Context, id string, from domain.ImportStatus, rep
 		l.mu.Unlock()
 	}
 	return ok, err
-}
-
-func (l *Log) Cancel(_ context.Context, id, reason string) (bool, error) {
-	return l.move(id, domain.ImportPreview, func(rec *app.ImportRecord) {
-		rec.Status, rec.CancelReason, rec.Content = domain.ImportCancelled, reason, nil
-	})
 }
 
 func (l *Log) Lock(ctx context.Context, _ string) (context.Context, func(), error) {

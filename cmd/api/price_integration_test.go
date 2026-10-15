@@ -52,6 +52,13 @@ func TestAConfirmedPurchaseKeepsItsPriceAfterTheCatalogChanges(t *testing.T) {
 		requireUnchanged(t, "39.99")
 	})
 
+	t.Run("after an add import", func(t *testing.T) {
+		resp, body := c.uploadImport("add", []byte("name,sku,description,category,price,stock,weight_kg\nKept,KEEP-1,Same product,Tests,44.99,5,1\n"))
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Contains(t, body, "Added to the inventory: 0 created, 1 updated")
+		requireUnchanged(t, "44.99")
+	})
+
 	t.Run("after an edit", func(t *testing.T) {
 		version := c.scalar(`SELECT version FROM products WHERE id = $1::uuid`, id)
 		resp, body := c.do(http.MethodPatch, "/api/v1/products/"+id, `{"price":"49.99"}`, "If-Match", fmt.Sprintf(`"%d"`, version))

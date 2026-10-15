@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
@@ -33,7 +34,7 @@ WHERE products.status = 'ACTIVE'
   AND (products.name, products.description, products.category, products.price, products.stock, products.weight_kg)
       IS DISTINCT FROM
       (EXCLUDED.name, EXCLUDED.description, EXCLUDED.category, EXCLUDED.price, EXCLUDED.stock, EXCLUDED.weight_kg)
-RETURNING sku, (xmax = 0)`
+RETURNING sku, (xmax = 0), COALESCE(old.stock, 0), new.stock, COALESCE(old.price::text, '0'), new.price::text`
 
 const upsertAdd = upsertPrefix + `
     stock = products.stock + EXCLUDED.stock
@@ -42,7 +43,7 @@ WHERE products.status = 'ACTIVE'
        OR (products.name, products.description, products.category, products.price, products.weight_kg)
           IS DISTINCT FROM
           (EXCLUDED.name, EXCLUDED.description, EXCLUDED.category, EXCLUDED.price, EXCLUDED.weight_kg))
-RETURNING sku, (xmax = 0)`
+RETURNING sku, (xmax = 0), COALESCE(old.stock, 0), new.stock, COALESCE(old.price::text, '0'), new.price::text`
 
 const deletedSKUs = `SELECT sku FROM products WHERE sku = ANY($1) AND status = 'DELETED'`
 
@@ -50,17 +51,19 @@ const belowReservedSKUs = `SELECT p.sku FROM products p
 JOIN unnest($1::text[], $2::integer[]) AS input(sku, stock) ON input.sku = p.sku
 WHERE p.status = 'ACTIVE' AND p.reserved > input.stock`
 
-func (r *Repository) Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (map[string]app.UpsertOutcome, error) {
+func (r *Repository) Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (app.UpsertResult, error) {
 	statement, reason := upsertReplace, reasonImportReplace
 	if mode == domain.ImportAdd {
 		statement, reason = upsertAdd, reasonImportAdd
 	}
 	outcomes := make(map[string]app.UpsertOutcome, len(products))
+	changes := make(map[string]domain.ImportChange, len(products))
 	if len(products) == 0 {
-		return outcomes, nil
+		return app.UpsertResult{Outcomes: outcomes, Changes: changes}, nil
 	}
 	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
 		clear(outcomes)
+		clear(changes)
 		q := database.Q(ctx, r.pool)
 		if err := setStockReason(ctx, q, reason, reference); err != nil {
 			return err
@@ -92,14 +95,26 @@ func (r *Repository) Upsert(ctx context.Context, mode domain.ImportMode, product
 			return fmt.Errorf("catalog: upsert products: %w", err)
 		}
 		var (
-			sku      string
-			inserted bool
+			sku                     string
+			inserted                bool
+			change                  domain.ImportChange
+			priceBefore, priceAfter string
 		)
-		_, err = pgx.ForEachRow(rows, []any{&sku, &inserted}, func() error {
-			outcomes[sku] = app.OutcomeUpdated
+		_, err = pgx.ForEachRow(rows, []any{&sku, &inserted, &change.StockBefore, &change.StockAfter, &priceBefore, &priceAfter}, func() error {
 			if inserted {
 				outcomes[sku] = app.OutcomeCreated
+				return nil
 			}
+			outcomes[sku] = app.OutcomeUpdated
+			var err error
+			if change.PriceBefore, err = decimal.NewFromString(priceBefore); err != nil {
+				return err
+			}
+			if change.PriceAfter, err = decimal.NewFromString(priceAfter); err != nil {
+				return err
+			}
+			change.SKU = sku
+			changes[sku] = change
 			return nil
 		})
 		if err != nil {
@@ -119,15 +134,46 @@ func (r *Repository) Upsert(ctx context.Context, mode domain.ImportMode, product
 		if err := markDeleted(ctx, q, untouched, outcomes); err != nil {
 			return err
 		}
-		if mode == domain.ImportAdd {
-			return nil
+		if mode == domain.ImportReplace {
+			if err := markBelowReserved(ctx, q, untouched, stocks, outcomes); err != nil {
+				return err
+			}
 		}
-		return markBelowReserved(ctx, q, untouched, stocks, outcomes)
+		return unchangedValues(ctx, q, untouched, outcomes, changes)
 	})
 	if err != nil {
-		return nil, err
+		return app.UpsertResult{}, err
 	}
-	return outcomes, nil
+	return app.UpsertResult{Outcomes: outcomes, Changes: changes}, nil
+}
+
+func unchangedValues(ctx context.Context, q database.Querier, skus []string, outcomes map[string]app.UpsertOutcome, changes map[string]domain.ImportChange) error {
+	if len(skus) == 0 {
+		return nil
+	}
+	rows, err := q.Query(ctx, `SELECT sku, stock, price::text FROM products WHERE sku = ANY($1)`, skus)
+	if err != nil {
+		return fmt.Errorf("catalog: read unchanged products: %w", err)
+	}
+	var (
+		sku, price string
+		stock      int
+	)
+	_, err = pgx.ForEachRow(rows, []any{&sku, &stock, &price}, func() error {
+		if outcomes[sku] != app.OutcomeUnchanged {
+			return nil
+		}
+		d, err := decimal.NewFromString(price)
+		if err != nil {
+			return err
+		}
+		changes[sku] = domain.ImportChange{SKU: sku, StockBefore: stock, StockAfter: stock, PriceBefore: d, PriceAfter: d}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("catalog: read unchanged products: %w", err)
+	}
+	return nil
 }
 
 func markDeleted(ctx context.Context, q database.Querier, skus []string, outcomes map[string]app.UpsertOutcome) error {
@@ -156,30 +202,6 @@ func markBelowReserved(ctx context.Context, q database.Querier, skus []string, s
 		outcomes[sku] = app.OutcomeBelowReserved
 	}
 	return nil
-}
-
-func (r *Repository) ImportTargets(ctx context.Context, skus []string) (map[string]domain.ImportTarget, error) {
-	out := make(map[string]domain.ImportTarget, len(skus))
-	if len(skus) == 0 {
-		return out, nil
-	}
-	rows, err := database.Q(ctx, r.pool).Query(ctx,
-		`SELECT sku, stock, reserved, status = 'DELETED' FROM products WHERE sku = ANY($1)`, skus)
-	if err != nil {
-		return nil, fmt.Errorf("catalog: read the products of an import: %w", err)
-	}
-	var (
-		sku    string
-		target domain.ImportTarget
-	)
-	_, err = pgx.ForEachRow(rows, []any{&sku, &target.Stock, &target.Reserved, &target.Deleted}, func() error {
-		out[sku] = target
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("catalog: read the products of an import: %w", err)
-	}
-	return out, nil
 }
 
 func (r *Repository) HasProducts(ctx context.Context) (bool, error) {

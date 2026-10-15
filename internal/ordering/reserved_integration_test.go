@@ -67,6 +67,45 @@ func TestAReplaceImportDuringAReservationKeepsTheFileStock(t *testing.T) {
 	}
 }
 
+func TestAnAddImportDuringAReservationAddsToThePhysicalStock(t *testing.T) {
+	for name, tc := range map[string]struct {
+		token          string
+		recovered      ordering.RecoveryReport
+		stock          int
+		sold, released int
+	}{
+		"then approved": {"pm_approved", ordering.RecoveryReport{Confirmed: 1}, 14, 1, 0},
+		"then declined": {"pm_declined", ordering.RecoveryReport{Declined: 1}, 15, 0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := setup(t, newProvider(unknownAfterCharge))
+			ctx := context.Background()
+			a := f.product(t, "A-1", "10.00", 5)
+			require.NoError(t, f.orders.AddToCart(ctx, "alice", a.ID, 1))
+			res, err := f.orders.CheckoutCart(ctx, "alice", key, tc.token)
+			require.NoError(t, err)
+			require.Equal(t, ordering.StatusPending, res.Purchase.Status)
+
+			report, err := f.catalog.Import(ctx, strings.NewReader("name,sku,description,category,price,stock,weight_kg\nProduct A-1,A-1,,Tests,10.00,10,1\n"),
+				catalog.ImportOptions{FileName: "delivery.csv", Mode: catalog.ImportAdd, IdempotencyKey: otherKey})
+			require.NoError(t, err)
+			require.Equal(t, 1, report.Updated)
+			require.Equal(t, []int{15, 1}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)}, "add sums the delivery to the physical units and keeps the reservation")
+
+			f.pay.set(approve)
+			recovered, err := f.orders.RecoverPending(ctx)
+			require.NoError(t, err)
+			require.Equal(t, tc.recovered, recovered)
+			require.Equal(t, []int{tc.stock, 0}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)},
+				"5 units plus a delivery of 10: a sale leaves 14 and a decline 15")
+			require.Equal(t, tc.sold, f.movements(t, "sale"))
+			require.Equal(t, tc.released, f.movements(t, "reservation_release"))
+			require.Equal(t, 1, f.movements(t, "import_add"))
+			f.requireMovementsRebuildTheStock(t)
+		})
+	}
+}
+
 func TestAReservationDoesNotInvalidateAnOpenEdit(t *testing.T) {
 	f := setup(t, newProvider(unknownAfterCharge))
 	ctx := context.Background()
