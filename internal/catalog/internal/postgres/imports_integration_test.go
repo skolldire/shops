@@ -159,9 +159,12 @@ func TestImportLog(t *testing.T) {
 
 	t.Run("a second lock on the same import waits for the first", func(t *testing.T) {
 		reset(t)
-		unlock, err := log.Lock(ctx, importKey)
+		_, unlock, err := log.Lock(ctx, importKey)
 		require.NoError(t, err)
-		second := async(func() (func(), error) { return log.Lock(ctx, importKey) })
+		second := async(func() (func(), error) {
+			_, unlock, err := log.Lock(ctx, importKey)
+			return unlock, err
+		})
 		require.Eventually(t, func() bool {
 			var waiting int
 			err := f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting)

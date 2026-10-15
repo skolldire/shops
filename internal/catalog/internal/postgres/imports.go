@@ -211,16 +211,16 @@ func (l *ImportLog) transition(ctx context.Context, sql string, args ...any) (bo
 	return tag.RowsAffected() == 1, nil
 }
 
-func (l *ImportLog) Lock(ctx context.Context, id string) (func(), error) {
+func (l *ImportLog) Lock(ctx context.Context, id string) (context.Context, func(), error) {
 	conn, err := l.pool.Acquire(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: acquire a connection for the import lock: %w", err)
+		return nil, nil, fmt.Errorf("catalog: acquire a connection for the import lock: %w", err)
 	}
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('catalog.import:' || $1, 0))`, id); err != nil {
 		conn.Release()
-		return nil, fmt.Errorf("catalog: lock the import: %w", err)
+		return nil, nil, fmt.Errorf("catalog: lock the import: %w", err)
 	}
-	return func() {
+	return database.WithConn(ctx, conn), func() {
 		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(hashtextextended('catalog.import:' || $1, 0))`, id)
 		conn.Release()
 	}, nil

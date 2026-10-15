@@ -448,7 +448,7 @@ func TestAnAddImportIsAppliedInOneTransactionAndFinishedThere(t *testing.T) {
 	require.NoError(t, err)
 	body := csvHeader + "A,A-1,,A,5,1,1\nB,B-1,,A,5,2,1\nBad,BAD-1,,A,free,1,1\n"
 
-	report, err := importer.Import(context.Background(), app.ImportRequest{File: productsFile, Rows: rowsOf(body), Mode: domain.ImportAdd})
+	report, err := importer.Import(context.Background(), app.ImportRequest{File: productsFile, Rows: rowsOf(body), Mode: domain.ImportAdd, Key: importKey})
 
 	require.NoError(t, err)
 	require.Equal(t, domain.ImportAdd, report.Mode)
@@ -466,7 +466,7 @@ func TestAFailedAddImportAppliesNothingAndIsNotRetriedRowByRow(t *testing.T) {
 	importer, err := app.NewImporter(store, log, apptest.Tx{}, rec, &fakeFailures{})
 	require.NoError(t, err)
 
-	_, err = importer.Import(context.Background(), app.ImportRequest{File: productsFile, Rows: rowsOf(csvHeader + "A,A-1,,A,5,1,1\nB,B-1,,A,5,1,1\n"), Mode: domain.ImportAdd})
+	_, err = importer.Import(context.Background(), app.ImportRequest{File: productsFile, Rows: rowsOf(csvHeader + "A,A-1,,A,5,1,1\nB,B-1,,A,5,1,1\n"), Mode: domain.ImportAdd, Key: importKey})
 
 	require.ErrorContains(t, err, "add import not applied")
 	require.Len(t, store.batches, 1, "an add import never falls back to row by row")
@@ -494,6 +494,75 @@ func TestAReplaceImportIsAppliedWhileItIsApplyingAndKeepsItWhenInterrupted(t *te
 	require.Equal(t, domain.ImportApplying, stored.Status, "the first batch was applied, so it is not a preview any more")
 	require.Equal(t, []byte("csv"), stored.Content, "the content stays to resume it")
 	require.Empty(t, log.Finished)
+}
+
+const (
+	importKey = "6f1c1d3e-2a4b-4c5d-8e9f-0a1b2c3d4e5f"
+	otherKey  = "7f1c1d3e-2a4b-4c5d-8e9f-0a1b2c3d4e5f"
+)
+
+func keyed(mode domain.ImportMode, key, hash, body string) app.ImportRequest {
+	return app.ImportRequest{File: app.ImportFile{Name: "stock.csv", SHA256: hash}, Content: []byte(body), Rows: rowsOf(body), Mode: mode, Key: key}
+}
+
+func TestAnAddImportNeedsAValidKey(t *testing.T) {
+	importer, _ := newImporter(t, &fakeStore{}, &fakeRecorder{})
+	body := csvHeader + "A,A-1,,A,5,1,1\n"
+	_, err := importer.Import(context.Background(), keyed(domain.ImportAdd, "", "h", body))
+	require.ErrorIs(t, err, app.ErrIdempotencyKeyRequired)
+	_, err = importer.Import(context.Background(), keyed(domain.ImportReplace, "not-a-uuid", "h", body))
+	require.ErrorIs(t, err, app.ErrInvalidIdempotencyKey)
+}
+
+func TestTheSameKeyAndFileReturnTheOriginalReportWithoutApplyingAgain(t *testing.T) {
+	for _, mode := range []domain.ImportMode{domain.ImportAdd, domain.ImportReplace} {
+		t.Run(string(mode), func(t *testing.T) {
+			store := &fakeStore{}
+			importer, _ := newImporter(t, store, &fakeRecorder{})
+			body := csvHeader + "A,A-1,,A,5,1,1\n"
+			first, err := importer.Import(context.Background(), keyed(mode, importKey, "h", body))
+			require.NoError(t, err)
+
+			again, err := importer.Import(context.Background(), keyed(mode, strings.ToUpper(importKey), "h", body))
+			require.NoError(t, err)
+			require.Equal(t, first, again)
+			require.Len(t, store.batches, 1, "the second request applies nothing")
+		})
+	}
+}
+
+func TestTheSameKeyWithAnotherFileOrModeIsAConflict(t *testing.T) {
+	importer, _ := newImporter(t, &fakeStore{}, &fakeRecorder{})
+	body := csvHeader + "A,A-1,,A,5,1,1\n"
+	_, err := importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "h", body))
+	require.NoError(t, err)
+	_, err = importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "other", body))
+	require.ErrorIs(t, err, app.ErrIdempotencyConflict)
+	_, err = importer.Import(context.Background(), keyed(domain.ImportReplace, importKey, "h", body))
+	require.ErrorIs(t, err, app.ErrIdempotencyConflict)
+}
+
+func TestARetriedReplaceResumesAnImportLeftApplying(t *testing.T) {
+	store, log := &fakeStore{}, apptest.NewLog()
+	importer, err := app.NewImporter(store, log, apptest.Tx{}, &fakeRecorder{}, &fakeFailures{})
+	require.NoError(t, err)
+	body := csvHeader + "A,A-1,,A,5,1,1\nB,B-1,,A,5,1,1\n"
+	log.Set(app.ImportRecord{ID: "00000000-0000-4000-8000-000000000099", Key: importKey, Mode: domain.ImportReplace,
+		Status: domain.ImportApplying, File: app.ImportFile{Name: "stock.csv", SHA256: "h"}, Content: []byte(body)})
+
+	report, err := importer.Import(context.Background(), keyed(domain.ImportReplace, otherKey, "h", body))
+	require.NoError(t, err)
+	require.NotEqual(t, "00000000-0000-4000-8000-000000000099", report.ID, "another key is another import")
+
+	report, err = importer.Import(context.Background(), keyed(domain.ImportReplace, importKey, "h", body))
+	require.NoError(t, err)
+	require.Equal(t, "00000000-0000-4000-8000-000000000099", report.ID)
+	require.Equal(t, 2, report.Unchanged, "the whole file is applied again from the start")
+	require.Len(t, store.batches, 2)
+	stored, err := log.Get(context.Background(), report.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.ImportApplied, stored.Status)
+	require.Nil(t, stored.Content)
 }
 
 func TestNewImporterRequiresItsDependencies(t *testing.T) {

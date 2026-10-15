@@ -92,8 +92,8 @@ func (l *Log) Cancel(_ context.Context, id, reason string) (bool, error) {
 	})
 }
 
-func (l *Log) Lock(context.Context, string) (func(), error) {
-	return func() {}, nil
+func (l *Log) Lock(ctx context.Context, _ string) (context.Context, func(), error) {
+	return ctx, func() {}, nil
 }
 
 func (l *Log) Set(rec app.ImportRecord) {

@@ -117,7 +117,12 @@ type importRow struct {
 }
 
 func (i *Importer) Import(ctx context.Context, req ImportRequest) (ImportReport, error) {
-	if req.Mode == domain.ImportAdd {
+	switch {
+	case req.Key != "" && !idPattern.MatchString(req.Key):
+		return ImportReport{}, ErrInvalidIdempotencyKey
+	case req.Mode == domain.ImportAdd && req.Key == "":
+		return ImportReport{}, ErrIdempotencyKeyRequired
+	case req.Mode == domain.ImportAdd:
 		return i.importAdd(ctx, req)
 	}
 	return i.importReplace(ctx, req)
@@ -125,15 +130,50 @@ func (i *Importer) Import(ctx context.Context, req ImportRequest) (ImportReport,
 
 func (i *Importer) importReplace(ctx context.Context, req ImportRequest) (ImportReport, error) {
 	report, valid := i.prepare(req)
-	rec, _, err := i.log.Create(ctx, ImportRecord{Mode: req.Mode, Status: domain.ImportApplying, File: req.File, Content: req.Content})
+	rec, created, err := i.log.Create(ctx, ImportRecord{
+		Key: strings.ToLower(req.Key), Mode: req.Mode, Status: domain.ImportApplying, File: req.File, Content: req.Content,
+	})
 	if err != nil {
 		i.close(ctx, &report)
 		return report, err
 	}
-	report.ID = rec.ID
+	if !created {
+		if err := sameImport(rec, req); err != nil {
+			return ImportReport{}, err
+		}
+		switch rec.Status {
+		case domain.ImportApplied:
+			return rec.Report, nil
+		case domain.ImportCancelled:
+			return ImportReport{}, ErrImportCancelled
+		case domain.ImportPreview:
+			if _, err := i.log.StartApplying(ctx, rec.ID); err != nil {
+				return ImportReport{}, err
+			}
+		}
+	}
+	return i.runReplace(ctx, rec.ID, report, valid)
+}
+
+func (i *Importer) runReplace(ctx context.Context, id string, report ImportReport, valid []importRow) (ImportReport, error) {
+	ctx, unlock, err := i.log.Lock(ctx, id)
+	if err != nil {
+		return report, err
+	}
+	defer unlock()
+	current, err := i.log.Get(ctx, id)
+	switch {
+	case err != nil:
+		return report, err
+	case current.Status == domain.ImportApplied:
+		return current.Report, nil
+	case current.Status != domain.ImportApplying:
+		return ImportReport{}, fmt.Errorf("%w: it is %s", ErrImportNotApplicable, current.Status)
+	}
+	report.ID = id
 	var interrupted error
 	for batch := range slices.Chunk(valid, importBatchSize) {
-		if interrupted = i.apply(ctx, rec.ID, batch, &report); interrupted != nil {
+		if interrupted = i.apply(ctx, id, batch, &report); interrupted != nil {
 			break
 		}
 	}
@@ -141,38 +181,86 @@ func (i *Importer) importReplace(ctx context.Context, req ImportRequest) (Import
 	if interrupted != nil {
 		return report, interrupted
 	}
-	if _, err := i.log.Finish(ctx, rec.ID, domain.ImportApplying, report); err != nil {
+	finished, err := i.log.Finish(ctx, id, domain.ImportApplying, report)
+	if err != nil || finished {
 		return report, err
+	}
+	return i.applied(ctx, id)
+}
+
+var errFinishLost = errors.New("catalog: another confirmation applied the import first")
+
+func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportReport, error) {
+	prepared, valid := i.prepare(req)
+	var (
+		report ImportReport
+		replay bool
+	)
+	err := i.tx.WithinTx(ctx, func(ctx context.Context) error {
+		rec, created, err := i.log.Create(ctx, ImportRecord{Key: strings.ToLower(req.Key), Mode: req.Mode, Status: domain.ImportPreview, File: req.File})
+		if err != nil {
+			return err
+		}
+		if !created {
+			if err := sameImport(rec, req); err != nil {
+				return err
+			}
+			switch rec.Status {
+			case domain.ImportApplied:
+				report, replay = rec.Report, true
+				return nil
+			case domain.ImportCancelled:
+				return ErrImportCancelled
+			}
+		}
+		report = prepared
+		return i.applyAdd(ctx, rec.ID, &report, valid)
+	})
+	switch {
+	case errors.Is(err, errFinishLost):
+		return i.applied(ctx, report.ID)
+	case err != nil:
+		return ImportReport{}, fmt.Errorf("catalog: add import not applied: %w", err)
+	case !replay:
+		i.record(ctx, report)
 	}
 	return report, nil
 }
 
-func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportReport, error) {
-	var report ImportReport
-	err := i.tx.WithinTx(ctx, func(ctx context.Context) error {
-		rec, _, err := i.log.Create(ctx, ImportRecord{Mode: req.Mode, Status: domain.ImportPreview, File: req.File})
-		if err != nil {
+func (i *Importer) applyAdd(ctx context.Context, id string, report *ImportReport, valid []importRow) error {
+	report.ID = id
+	for batch := range slices.Chunk(valid, importBatchSize) {
+		if err := i.applyAll(ctx, id, batch, report); err != nil {
 			return err
 		}
-		var valid []importRow
-		report, valid = i.prepare(req)
-		report.ID = rec.ID
-		for batch := range slices.Chunk(valid, importBatchSize) {
-			if err := i.applyAll(ctx, rec.ID, batch, &report); err != nil {
-				return err
-			}
-		}
-		sortErrors(&report)
-		if ok, err := i.log.Finish(ctx, rec.ID, domain.ImportPreview, report); err != nil || !ok {
-			return cmp.Or(err, errors.New("catalog: the import changed while it was being applied"))
-		}
-		return nil
-	})
-	if err != nil {
-		return ImportReport{}, fmt.Errorf("catalog: add import not applied: %w", err)
 	}
-	i.record(ctx, report)
-	return report, nil
+	sortErrors(report)
+	finished, err := i.log.Finish(ctx, id, domain.ImportPreview, *report)
+	if err != nil {
+		return err
+	}
+	if !finished {
+		return errFinishLost
+	}
+	return nil
+}
+
+func (i *Importer) applied(ctx context.Context, id string) (ImportReport, error) {
+	current, err := i.log.Get(ctx, id)
+	if err != nil {
+		return ImportReport{}, err
+	}
+	if current.Status != domain.ImportApplied {
+		return ImportReport{}, fmt.Errorf("%w: it is %s", ErrImportNotApplicable, current.Status)
+	}
+	return current.Report, nil
+}
+
+func sameImport(rec ImportRecord, req ImportRequest) error {
+	if rec.Mode != req.Mode || rec.File.SHA256 != req.File.SHA256 {
+		return ErrIdempotencyConflict
+	}
+	return nil
 }
 
 func (i *Importer) prepare(req ImportRequest) (ImportReport, []importRow) {

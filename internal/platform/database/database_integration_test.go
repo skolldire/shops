@@ -57,6 +57,21 @@ func TestDatabase(t *testing.T) {
 		require.EqualError(t, database.RequireColumns(canceled, pool, []database.Column{{Table: "products", Name: "stock"}}), "database: check schema: canceled")
 	})
 
+	t.Run("a connection pinned to the context runs every query and transaction", func(t *testing.T) {
+		conn, err := pool.Acquire(ctx)
+		require.NoError(t, err)
+		defer conn.Release()
+		pinned := database.WithConn(ctx, conn)
+		var pid, inTx int
+		require.NoError(t, conn.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid))
+		require.NoError(t, database.Q(pinned, pool).QueryRow(pinned, `SELECT pg_backend_pid()`).Scan(&inTx))
+		require.Equal(t, pid, inTx)
+		require.NoError(t, tm.WithinTx(pinned, func(ctx context.Context) error {
+			return database.Q(ctx, pool).QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&inTx)
+		}))
+		require.Equal(t, pid, inTx, "the transaction begins on the pinned connection")
+	})
+
 	t.Run("wrong password hides connection details", func(t *testing.T) {
 		wrong := cfg
 		wrong.Password = secret.New("wrong-password")

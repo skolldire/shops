@@ -8,8 +8,13 @@ import (
 )
 
 var (
-	ErrImportNotFound  = errors.New("catalog: import not found")
-	ErrTooManyPreviews = errors.New("catalog: too many import previews are waiting for a confirmation")
+	ErrImportNotFound         = errors.New("catalog: import not found")
+	ErrTooManyPreviews        = errors.New("catalog: too many import previews are waiting for a confirmation")
+	ErrInvalidIdempotencyKey  = errors.New("catalog: the idempotency key must be a UUID")
+	ErrIdempotencyKeyRequired = errors.New("catalog: an add import requires an idempotency key")
+	ErrIdempotencyConflict    = errors.New("catalog: the idempotency key was used with another file or mode")
+	ErrImportCancelled        = errors.New("catalog: the import was cancelled")
+	ErrImportNotApplicable    = errors.New("catalog: the import cannot be applied")
 )
 
 type ImportRecord struct {
@@ -34,5 +39,5 @@ type ImportLog interface {
 	StartApplying(ctx context.Context, id string) (bool, error)
 	Finish(ctx context.Context, id string, from domain.ImportStatus, report ImportReport) (bool, error)
 	Cancel(ctx context.Context, id, reason string) (bool, error)
-	Lock(ctx context.Context, id string) (func(), error)
+	Lock(ctx context.Context, id string) (context.Context, func(), error)
 }

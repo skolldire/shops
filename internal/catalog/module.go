@@ -329,6 +329,14 @@ func publicImportError(err error) error {
 		return ErrTooManyRows
 	case errors.As(err, &format):
 		return &InvalidCSVError{Line: format.Line, Reason: format.Reason}
+	case errors.Is(err, app.ErrInvalidIdempotencyKey):
+		return ErrInvalidIdempotencyKey
+	case errors.Is(err, app.ErrIdempotencyKeyRequired):
+		return ErrIdempotencyKeyRequired
+	case errors.Is(err, app.ErrIdempotencyConflict):
+		return ErrIdempotencyConflict
+	case errors.Is(err, app.ErrImportCancelled):
+		return ErrImportCancelled
 	}
 	return err
 }

@@ -18,7 +18,11 @@ var (
 	ErrStockInvariant      = errors.New("catalog: the reservation does not match the stock")
 	ErrBelowReserved       = errors.New("catalog: the stock cannot go below the reserved units")
 
-	ErrInvalidImportMode = errors.New("catalog: the import mode must be add or replace")
+	ErrInvalidImportMode      = errors.New("catalog: the import mode must be add or replace")
+	ErrInvalidIdempotencyKey  = errors.New("catalog: the idempotency key must be a UUID")
+	ErrIdempotencyKeyRequired = errors.New("catalog: an add import requires an idempotency key")
+	ErrIdempotencyConflict    = errors.New("catalog: the idempotency key was used with another file or mode")
+	ErrImportCancelled        = errors.New("catalog: the import was cancelled")
 
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")

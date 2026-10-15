@@ -18,6 +18,17 @@ type Querier interface {
 
 type txKey struct{}
 
+type connKey struct{}
+
+func WithConn(ctx context.Context, conn *pgxpool.Conn) context.Context {
+	return context.WithValue(ctx, connKey{}, conn)
+}
+
+func connFrom(ctx context.Context) (*pgxpool.Conn, bool) {
+	conn, ok := ctx.Value(connKey{}).(*pgxpool.Conn)
+	return conn, ok
+}
+
 type TxManager struct {
 	pool *pgxpool.Pool
 }
@@ -34,7 +45,15 @@ func (m *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) e
 		return fn(ctx)
 	}
 
-	tx, err := m.pool.Begin(ctx)
+	var (
+		tx  pgx.Tx
+		err error
+	)
+	if conn, ok := connFrom(ctx); ok {
+		tx, err = conn.Begin(ctx)
+	} else {
+		tx, err = m.pool.Begin(ctx)
+	}
 	if err != nil {
 		return fmt.Errorf("database: begin: %w", err)
 	}
@@ -68,6 +87,9 @@ func (m *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) e
 func Q(ctx context.Context, pool *pgxpool.Pool) Querier {
 	if tx, ok := txFrom(ctx); ok {
 		return tx
+	}
+	if conn, ok := connFrom(ctx); ok {
+		return conn
 	}
 	return pool
 }
