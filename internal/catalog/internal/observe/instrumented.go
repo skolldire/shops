@@ -50,6 +50,12 @@ func NewInstrumentedImporter(next FileImporter, spans Spans, histograms Histogra
 }
 
 func (i *InstrumentedImporter) Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error) {
+	return i.Run(ctx, func(ctx context.Context) (app.ImportReport, error) {
+		return i.next.Import(ctx, r, opts)
+	})
+}
+
+func (i *InstrumentedImporter) Run(ctx context.Context, apply func(ctx context.Context) (app.ImportReport, error)) (app.ImportReport, error) {
 	start := time.Now()
 	defer func() {
 		i.histograms.Histogram(context.WithoutCancel(ctx), importDuration, time.Since(start).Seconds())
@@ -60,7 +66,7 @@ func (i *InstrumentedImporter) Import(ctx context.Context, r io.Reader, opts app
 		importErr error
 	)
 	_ = i.spans.Span(ctx, importSpan, func(ctx context.Context) error {
-		report, importErr = i.next.Import(ctx, r, opts)
+		report, importErr = apply(ctx)
 		if i.rejected(importErr) {
 			return nil
 		}

@@ -174,7 +174,9 @@ func (m *Module) ImportPreview(ctx context.Context, id string) (ImportPreview, e
 }
 
 func (m *Module) ConfirmImport(ctx context.Context, id string, allowDuplicate bool) (ImportReport, error) {
-	report, err := m.previews.Confirm(ctx, id, allowDuplicate)
+	report, err := m.importer.Run(ctx, func(ctx context.Context) (app.ImportReport, error) {
+		return m.previews.Confirm(ctx, id, allowDuplicate)
+	})
 	if err != nil {
 		return ImportReport{}, publicImportError(err)
 	}
