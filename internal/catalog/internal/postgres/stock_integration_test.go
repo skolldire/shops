@@ -76,9 +76,9 @@ func TestInventoryAudit(t *testing.T) {
 		_, err = f.repo.Update(ctx, a.ID, a.Version+1, domain.Changes{Stock: ip(8)})
 		require.NoError(t, err)
 
-		_, err = f.repo.Upsert(ctx, []domain.Product{item("A-1", "Alpha 2", "10.00", 6), item("N-1", "New", "1.00", 4), item("N-0", "Empty", "1.00", 0)}, "sha-1")
+		_, err = f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha 2", "10.00", 6), item("N-1", "New", "1.00", 4), item("N-0", "Empty", "1.00", 0)}, "sha-1")
 		require.NoError(t, err)
-		_, err = f.repo.Upsert(ctx, []domain.Product{item("A-1", "Alpha 2", "10.00", 6)}, "sha-2")
+		_, err = f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha 2", "10.00", 6)}, "sha-2")
 		require.NoError(t, err)
 
 		require.Equal(t, []movementRow{

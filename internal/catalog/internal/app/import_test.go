@@ -29,7 +29,7 @@ type fakeStore struct {
 	onBatch    func(applied int)
 }
 
-func (f *fakeStore) Upsert(ctx context.Context, products []domain.Product, reference string) (map[string]app.UpsertOutcome, error) {
+func (f *fakeStore) Upsert(ctx context.Context, _ domain.ImportMode, products []domain.Product, reference string) (map[string]app.UpsertOutcome, error) {
 	f.references = append(f.references, reference)
 	skus := make([]string, len(products))
 	for i, p := range products {

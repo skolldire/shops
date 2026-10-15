@@ -86,7 +86,7 @@ func TestImportsAndReservationsSerialize(t *testing.T) {
 	}
 	importStock := func(stock int) func() (map[string]app.UpsertOutcome, error) {
 		return async(func() (map[string]app.UpsertOutcome, error) {
-			return f.repo.Upsert(ctx, []domain.Product{item("A-1", "Alpha", "1.00", stock)}, "sha")
+			return f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha", "1.00", stock)}, "sha")
 		})
 	}
 	reserved := func(t *testing.T, a domain.Product, q int) {
@@ -160,7 +160,7 @@ func TestImportsAndReservationsSerialize(t *testing.T) {
 		f.reset(t)
 		a := f.create(t, "A-1", "Alpha", "Imports", "1.00", 5)
 		finish := f.hold(t, func(ctx context.Context) error {
-			_, err := f.repo.Upsert(ctx, []domain.Product{item("A-1", "Alpha", "1.00", 1)}, "sha")
+			_, err := f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha", "1.00", 1)}, "sha")
 			return err
 		})
 		reservation := async(func() ([]domain.StockLine, error) { return f.repo.ReserveStock(ctx, req(a, 2), "purchase-1") })
@@ -180,7 +180,7 @@ func TestImportsAndReservationsSerialize(t *testing.T) {
 		var outcomes map[string]app.UpsertOutcome
 		finish := f.hold(t, func(ctx context.Context) error {
 			var err error
-			outcomes, err = f.repo.Upsert(ctx, []domain.Product{item("A-1", "Alpha", "1.00", 2)}, "sha")
+			outcomes, err = f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha", "1.00", 2)}, "sha")
 			return err
 		})
 		release := async(func() (struct{}, error) { return struct{}{}, f.repo.ReleaseStock(ctx, req(a, 3), "purchase-0") })
@@ -198,7 +198,7 @@ func TestImportsAndReservationsSerialize(t *testing.T) {
 		a := f.create(t, "A-1", "Alpha", "Imports", "1.00", 5)
 		reserved(t, a, 3)
 		finish := f.hold(t, func(ctx context.Context) error {
-			_, err := f.repo.Upsert(ctx, []domain.Product{item("A-1", "Alpha", "1.00", 10)}, "sha")
+			_, err := f.repo.Upsert(ctx, domain.ImportReplace, []domain.Product{item("A-1", "Alpha", "1.00", 10)}, "sha")
 			return err
 		})
 		sale := async(func() (struct{}, error) { return struct{}{}, f.repo.CommitStock(ctx, req(a, 3), "purchase-0") })

@@ -11,7 +11,7 @@ import (
 	"github.com/skolldire/shops/internal/platform/database"
 )
 
-const upsertProducts = `
+const upsertPrefix = `
 INSERT INTO products (sku, name, description, category, price, stock, weight_kg)
 SELECT sku, name, description, category, price::numeric, stock, weight_kg::numeric
 FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::integer[], $7::text[])
@@ -22,15 +22,26 @@ ON CONFLICT (sku) DO UPDATE SET
     description = EXCLUDED.description,
     category = EXCLUDED.category,
     price = EXCLUDED.price,
-    stock = EXCLUDED.stock,
     weight_kg = EXCLUDED.weight_kg,
     version = products.version + 1,
-    updated_at = now()
+    updated_at = now(),`
+
+const upsertReplace = upsertPrefix + `
+    stock = EXCLUDED.stock
 WHERE products.status = 'ACTIVE'
   AND EXCLUDED.stock >= products.reserved
   AND (products.name, products.description, products.category, products.price, products.stock, products.weight_kg)
       IS DISTINCT FROM
       (EXCLUDED.name, EXCLUDED.description, EXCLUDED.category, EXCLUDED.price, EXCLUDED.stock, EXCLUDED.weight_kg)
+RETURNING sku, (xmax = 0)`
+
+const upsertAdd = upsertPrefix + `
+    stock = products.stock + EXCLUDED.stock
+WHERE products.status = 'ACTIVE'
+  AND (EXCLUDED.stock <> 0
+       OR (products.name, products.description, products.category, products.price, products.weight_kg)
+          IS DISTINCT FROM
+          (EXCLUDED.name, EXCLUDED.description, EXCLUDED.category, EXCLUDED.price, EXCLUDED.weight_kg))
 RETURNING sku, (xmax = 0)`
 
 const deletedSKUs = `SELECT sku FROM products WHERE sku = ANY($1) AND status = 'DELETED'`
@@ -39,7 +50,11 @@ const belowReservedSKUs = `SELECT p.sku FROM products p
 JOIN unnest($1::text[], $2::integer[]) AS input(sku, stock) ON input.sku = p.sku
 WHERE p.status = 'ACTIVE' AND p.reserved > input.stock`
 
-func (r *Repository) Upsert(ctx context.Context, products []domain.Product, reference string) (map[string]app.UpsertOutcome, error) {
+func (r *Repository) Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (map[string]app.UpsertOutcome, error) {
+	statement, reason := upsertReplace, reasonImportReplace
+	if mode == domain.ImportAdd {
+		statement, reason = upsertAdd, reasonImportAdd
+	}
 	outcomes := make(map[string]app.UpsertOutcome, len(products))
 	if len(products) == 0 {
 		return outcomes, nil
@@ -47,7 +62,7 @@ func (r *Repository) Upsert(ctx context.Context, products []domain.Product, refe
 	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
 		clear(outcomes)
 		q := database.Q(ctx, r.pool)
-		if err := setStockReason(ctx, q, reasonImportReplace, reference); err != nil {
+		if err := setStockReason(ctx, q, reason, reference); err != nil {
 			return err
 		}
 
@@ -71,7 +86,7 @@ func (r *Repository) Upsert(ctx context.Context, products []domain.Product, refe
 			return nil
 		}
 
-		rows, err := q.Query(ctx, upsertProducts,
+		rows, err := q.Query(ctx, statement,
 			in.skus, in.names, in.descriptions, in.categories, in.prices, in.stocks, in.weights)
 		if err != nil {
 			return fmt.Errorf("catalog: upsert products: %w", err)
@@ -103,6 +118,9 @@ func (r *Repository) Upsert(ctx context.Context, products []domain.Product, refe
 		}
 		if err := markDeleted(ctx, q, untouched, outcomes); err != nil {
 			return err
+		}
+		if mode == domain.ImportAdd {
+			return nil
 		}
 		return markBelowReserved(ctx, q, untouched, stocks, outcomes)
 	})

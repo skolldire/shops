@@ -11,6 +11,7 @@ const (
 	reasonInitialStock       = "initial_stock"
 	reasonManualAdjustment   = "manual_adjustment"
 	reasonImportReplace      = "import_replace"
+	reasonImportAdd          = "import_add"
 	reasonSale               = "sale"
 	reasonReservation        = "reservation"
 	reasonReservationRelease = "reservation_release"

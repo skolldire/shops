@@ -7,7 +7,7 @@ import (
 )
 
 type ProductUpserter interface {
-	Upsert(ctx context.Context, products []domain.Product, reference string) (map[string]UpsertOutcome, error)
+	Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (map[string]UpsertOutcome, error)
 }
 
 type ImportFailureReporter interface {
