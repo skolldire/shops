@@ -191,6 +191,7 @@ func TestEditProduct(t *testing.T) {
 	require.Contains(t, body, `value="RS-001" maxlength="64" readonly`)
 	require.Contains(t, body, `value="29.90"`)
 	require.Contains(t, body, `value="0.850"`)
+	require.Contains(t, body, "2 reserved by pending purchases; the stock cannot go below it.")
 
 	values := validForm()
 	values.Set("version", "2")
@@ -239,6 +240,25 @@ func TestEditProductVersionConflict(t *testing.T) {
 	require.Contains(t, body, "changed by someone else")
 	require.Contains(t, body, `href="/admin/products/`+productID+`/edit">Reload the latest version</a>`)
 	require.Contains(t, body, `value="Running Shoes"`)
+}
+
+func TestEditProductBelowReserved(t *testing.T) {
+	cat := withProducts(shoes())
+	cat.writeErr = &catalog.BelowReservedError{Reserved: 4, Message: "must be at least 4, the units reserved by pending purchases"}
+	h, _ := newTestUI(t, cat)
+	values := validForm()
+	values.Set("version", "2")
+	values.Set("stock", "3")
+
+	rec := post(h, "/admin/products/"+productID, values)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	requireSafeHTML(t, rec)
+	body := rec.Body.String()
+	require.Contains(t, fieldBlock(body, "stock"), "must be at least 4, the units reserved by pending purchases")
+	require.Contains(t, body, "4 reserved by pending purchases")
+	require.Contains(t, body, `value="3"`, "the submitted values are kept")
+	require.NotContains(t, body, "changed by someone else")
 }
 
 func TestEditUnknownProductIsNotFound(t *testing.T) {

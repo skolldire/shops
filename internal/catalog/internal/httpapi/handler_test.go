@@ -154,6 +154,18 @@ func TestCreateDecimalsNeverPassThroughFloat(t *testing.T) {
 	require.Equal(t, "123456.789", svc.created.WeightKg.String())
 }
 
+func TestUpdateBelowReservedNamesTheStockField(t *testing.T) {
+	h, _ := newServer(t, &fakeService{err: &app.BelowReservedError{Reserved: 3}})
+
+	rec := do(h, http.MethodPatch, "/api/v1/products/"+id, `{"stock":1}`, "If-Match", `"3"`)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	p := decodeProblem(t, rec)
+	require.Equal(t, "below_reserved", p.Code)
+	require.Equal(t, map[string]string{"stock": "below_reserved"}, fieldCodes(p))
+	require.Contains(t, rec.Body.String(), "must be at least 3, the units reserved by pending purchases")
+}
+
 func TestGetReturnsETag(t *testing.T) {
 	h, _ := newServer(t, &fakeService{})
 
@@ -256,6 +268,7 @@ func TestErrorTable(t *testing.T) {
 		"not found":               {app.ErrNotFound, http.MethodGet, "/api/v1/products/" + id, "", nil, 404, "not_found"},
 		"sku taken":               {app.ErrSKUTaken, http.MethodPost, "/api/v1/products", validBody, nil, 409, "sku_taken"},
 		"version conflict patch":  {app.ErrVersionConflict, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, []string{"If-Match", `"1"`}, 412, "version_conflict"},
+		"below reserved patch":    {&app.BelowReservedError{Reserved: 3}, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, []string{"If-Match", `"3"`}, 409, "below_reserved"},
 		"version conflict delete": {app.ErrVersionConflict, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", `"1"`}, 412, "version_conflict"},
 		"patch without if-match":  {nil, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, nil, 428, "precondition_required"},
 		"delete without if-match": {nil, http.MethodDelete, "/api/v1/products/" + id, "", nil, 428, "precondition_required"},

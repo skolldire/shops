@@ -99,8 +99,10 @@ func (r *Repository) Update(ctx context.Context, id string, version int, c domai
 	if c.Price != nil {
 		add("price", "::numeric", c.Price.String())
 	}
+	where := ""
 	if c.Stock != nil {
 		add("stock", "", *c.Stock)
+		where = " AND $" + strconv.Itoa(len(args)) + " >= reserved"
 	}
 	if c.WeightKg != nil {
 		add("weight_kg", "::numeric", c.WeightKg.String())
@@ -114,12 +116,12 @@ func (r *Repository) Update(ctx context.Context, id string, version int, c domai
 		}
 		row := q.QueryRow(ctx,
 			`UPDATE products SET `+strings.Join(set, ", ")+`
-			 WHERE id = $1::uuid AND version = $2 AND status = 'ACTIVE'
+			 WHERE id = $1::uuid AND version = $2 AND status = 'ACTIVE'`+where+`
 			 RETURNING `+columns, args...)
 		var err error
 		updated, err = scanProduct(row)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return r.missOrConflict(ctx, id)
+			return r.whyNotUpdated(ctx, id, version, c.Stock != nil)
 		}
 		if err != nil {
 			return fmt.Errorf("catalog: update product: %w", err)
@@ -158,6 +160,21 @@ func (r *Repository) Categories(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("catalog: list categories: %w", err)
 	}
 	return categories, nil
+}
+
+func (r *Repository) whyNotUpdated(ctx context.Context, id string, version int, stockChanged bool) error {
+	var current, reserved int
+	err := database.Q(ctx, r.pool).QueryRow(ctx,
+		`SELECT version, reserved FROM products WHERE id = $1::uuid AND status = 'ACTIVE'`, id).Scan(&current, &reserved)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return app.ErrNotFound
+	case err != nil:
+		return fmt.Errorf("catalog: check product: %w", err)
+	case current != version, !stockChanged:
+		return app.ErrVersionConflict
+	}
+	return &app.BelowReservedError{Reserved: reserved}
 }
 
 func (r *Repository) missOrConflict(ctx context.Context, id string) error {

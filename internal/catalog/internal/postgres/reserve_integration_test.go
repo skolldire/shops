@@ -161,6 +161,33 @@ func TestReservations(t *testing.T) {
 		require.Equal(t, 1, total)
 	})
 
+	t.Run("an edit cannot leave the stock below the reserved units", func(t *testing.T) {
+		f.reset(t)
+		a := f.create(t, "A-1", "Alpha", "Sports", "1.00", 5)
+		_, err := f.repo.ReserveStock(ctx, req(a, 3), "purchase-1")
+		require.NoError(t, err)
+		movements := len(f.reservedMovements(t, a.ID))
+
+		_, err = f.repo.Update(ctx, a.ID, a.Version, domain.Changes{Name: sp("Alpha 2"), Price: dp("9.99"), Stock: ip(2)})
+		var below *app.BelowReservedError
+		require.ErrorAs(t, err, &below)
+		require.Equal(t, 3, below.Reserved)
+		got, err := f.repo.Get(ctx, a.ID)
+		require.NoError(t, err)
+		require.Equal(t, "Alpha", got.Name, "no partial change")
+		require.Equal(t, "1.00", got.Price.StringFixed(2))
+		require.Equal(t, stockState{5, 3, 1}, f.state(t, a.ID))
+		require.Len(t, f.reservedMovements(t, a.ID), movements)
+
+		_, err = f.repo.Update(ctx, a.ID, a.Version+1, domain.Changes{Stock: ip(1)})
+		require.ErrorIs(t, err, app.ErrVersionConflict, "a stale version is a conflict before anything else")
+
+		updated, err := f.repo.Update(ctx, a.ID, a.Version, domain.Changes{Stock: ip(3)})
+		require.NoError(t, err)
+		require.Equal(t, []int{3, 3, 0, 2}, []int{updated.Stock, updated.Reserved, updated.Available(), updated.Version})
+		f.requireBalanced(t)
+	})
+
 	t.Run("the operations run in the caller's transaction", func(t *testing.T) {
 		f.reset(t)
 		a := f.create(t, "A-1", "Alpha", "Sports", "1.00", 5)

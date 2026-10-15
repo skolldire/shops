@@ -16,6 +16,7 @@ var (
 	ErrProductUnavailable  = errors.New("catalog: product unavailable")
 	ErrInvalidStockRequest = errors.New("catalog: invalid stock request")
 	ErrStockInvariant      = errors.New("catalog: the reservation does not match the stock")
+	ErrBelowReserved       = errors.New("catalog: the stock cannot go below the reserved units")
 
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")
@@ -43,6 +44,19 @@ type InsufficientStockError struct {
 
 func (e *InsufficientStockError) Error() string {
 	return fmt.Sprintf("catalog: insufficient stock for product %s: %d available", e.ProductID, e.Available)
+}
+
+type BelowReservedError struct {
+	Reserved int
+	Message  string
+}
+
+func (e *BelowReservedError) Error() string {
+	return fmt.Sprintf("catalog: the stock cannot go below the %d reserved units", e.Reserved)
+}
+
+func (e *BelowReservedError) Is(target error) bool {
+	return target == ErrBelowReserved
 }
 
 type ProductUnavailableError struct {

@@ -12,7 +12,26 @@ var (
 	ErrProductUnavailable  = errors.New("catalog: product unavailable")
 	ErrInvalidStockRequest = errors.New("catalog: invalid stock request")
 	ErrStockInvariant      = errors.New("catalog: the reservation does not match the stock")
+	ErrBelowReserved       = errors.New("catalog: the stock cannot go below the reserved units")
 )
+
+const CodeBelowReserved = "below_reserved"
+
+type BelowReservedError struct {
+	Reserved int
+}
+
+func (e *BelowReservedError) Error() string {
+	return fmt.Sprintf("catalog: the stock cannot go below the %d reserved units", e.Reserved)
+}
+
+func (e *BelowReservedError) Is(target error) bool {
+	return target == ErrBelowReserved
+}
+
+func (e *BelowReservedError) Message() string {
+	return fmt.Sprintf("must be at least %d, the units reserved by pending purchases", e.Reserved)
+}
 
 type InsufficientStockError struct {
 	ProductID string

@@ -40,6 +40,7 @@
 <div class="field{{if .Data.Errors.stock}} invalid{{end}}">
 <label for="stock">Stock</label>
 <input id="stock" name="stock" value="{{.Data.Values.Stock}}" inputmode="numeric" required>
+{{if .Data.Reserved}}<p class="field-note">{{.Data.Reserved}} reserved by pending purchases; the stock cannot go below it.</p>{{end}}
 {{with .Data.Errors.stock}}<p class="field-error">{{.}}</p>{{end}}
 </div>
 <div class="field{{if .Data.Errors.weight_kg}} invalid{{end}}">

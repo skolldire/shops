@@ -324,6 +324,7 @@ func publicError(err error) error {
 		short       *app.InsufficientStockError
 		unavailable *app.ProductUnavailableError
 		invariant   *app.StockInvariantError
+		below       *app.BelowReservedError
 	)
 	switch {
 	case errors.As(err, &short):
@@ -332,6 +333,8 @@ func publicError(err error) error {
 		return &ProductUnavailableError{ProductID: unavailable.ProductID}
 	case errors.Is(err, app.ErrInvalidStockRequest):
 		return ErrInvalidStockRequest
+	case errors.As(err, &below):
+		return &BelowReservedError{Reserved: below.Reserved, Message: below.Message()}
 	case errors.As(err, &invariant):
 		return fmt.Errorf("%w: product %s has fewer than %d reserved units to settle", ErrStockInvariant, invariant.ProductID, invariant.Quantity)
 	case errors.Is(err, app.ErrNotFound):

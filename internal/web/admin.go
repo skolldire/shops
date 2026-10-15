@@ -29,6 +29,7 @@ type productForm struct {
 	Values   formValues
 	Errors   map[string]string
 	Conflict bool
+	Reserved int
 }
 
 type deletePage struct {
@@ -83,7 +84,9 @@ func (ui *UI) editProduct(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ui.page(w, r, http.StatusOK, "admin_form", editProductForm(p.ID, p.Version, valuesOf(p), nil, false))
+	form := editProductForm(p.ID, p.Version, valuesOf(p), nil, false)
+	form.Reserved = p.Reserved
+	ui.page(w, r, http.StatusOK, "admin_form", form)
 }
 
 func (ui *UI) updateProduct(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +115,12 @@ func (ui *UI) updateProduct(w http.ResponseWriter, r *http.Request) {
 		ui.page(w, r, http.StatusUnprocessableEntity, "admin_form", editProductForm(id, version, values, fieldErrs, false))
 		return
 	}
+	var below *catalog.BelowReservedError
 	switch {
+	case errors.As(err, &below):
+		form := editProductForm(id, version, values, map[string]string{"stock": below.Message}, false)
+		form.Reserved = below.Reserved
+		ui.page(w, r, http.StatusConflict, "admin_form", form)
 	case errors.Is(err, catalog.ErrVersionConflict):
 		ui.page(w, r, http.StatusPreconditionFailed, "admin_form", editProductForm(id, version, values, nil, true))
 	case errors.Is(err, catalog.ErrNotFound):
