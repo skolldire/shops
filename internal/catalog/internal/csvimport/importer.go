@@ -46,23 +46,31 @@ func NewImporter(rows RowImporter, limits Limits) (*Importer, error) {
 }
 
 func (i *Importer) Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error) {
+	req, err := i.Request(r, opts)
+	if err != nil {
+		return app.ImportReport{}, err
+	}
+	return i.rows.Import(ctx, req)
+}
+
+func (i *Importer) Request(r io.Reader, opts app.ImportOptions) (app.ImportRequest, error) {
 	metered := &meteredReader{r: r, hash: sha256.New(), max: i.limits.MaxBytes}
 	content, err := io.ReadAll(metered)
 	if err != nil {
-		return app.ImportReport{}, readError(err)
+		return app.ImportRequest{}, readError(err)
 	}
 	rows, err := i.Rows(content)
 	if err != nil {
-		return app.ImportReport{}, err
+		return app.ImportRequest{}, err
 	}
 	file := app.ImportFile{
 		Name:   cleanFileName(opts.FileName),
 		Bytes:  metered.n,
 		SHA256: hex.EncodeToString(metered.hash.Sum(nil)),
 	}
-	return i.rows.Import(ctx, app.ImportRequest{
+	return app.ImportRequest{
 		File: file, Content: content, Rows: rows, Mode: opts.Mode, Key: opts.Key, AllowDuplicate: opts.AllowDuplicate,
-	})
+	}, nil
 }
 
 func (i *Importer) Rows(content []byte) ([]app.ImportRow, error) {

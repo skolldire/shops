@@ -24,6 +24,8 @@ var (
 	ErrIdempotencyConflict    = errors.New("catalog: the idempotency key was used with another file or mode")
 	ErrImportCancelled        = errors.New("catalog: the import was cancelled")
 	ErrDuplicateFile          = errors.New("catalog: the same file was already added")
+	ErrImportNotFound         = errors.New("catalog: import not found")
+	ErrTooManyPreviews        = errors.New("catalog: too many import previews are waiting for a confirmation")
 
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")
@@ -136,6 +138,36 @@ type ImportOptions struct {
 	Mode           ImportMode
 	IdempotencyKey string
 	AllowDuplicate bool
+}
+
+type ImportStatus string
+
+const (
+	ImportPreviewing ImportStatus = "PREVIEW"
+	ImportApplying   ImportStatus = "APPLYING"
+	ImportApplied    ImportStatus = "APPLIED"
+	ImportCancelled  ImportStatus = "CANCELLED"
+)
+
+type PreviewRow struct {
+	SKU         string
+	StockBefore int
+	StockAfter  int
+	Reserved    int
+}
+
+type ImportPreview struct {
+	ID           string
+	Status       ImportStatus
+	CancelReason string
+	Mode         ImportMode
+	File         ImportFile
+	CreatedAt    time.Time
+	New          int
+	Existing     int
+	Report       ImportReport
+	Rows         []PreviewRow
+	DuplicateOf  *time.Time
 }
 
 type DuplicateFileError struct {

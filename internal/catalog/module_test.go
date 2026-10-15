@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -149,6 +150,16 @@ func (m *memoryRepo) Upsert(ctx context.Context, _ domain.ImportMode, products [
 		out[p.SKU] = app.OutcomeCreated
 		p.ID, p.Version = p.SKU, 1
 		m.products[p.ID] = p
+	}
+	return out, nil
+}
+
+func (m *memoryRepo) ImportTargets(_ context.Context, skus []string) (map[string]domain.ImportTarget, error) {
+	out := map[string]domain.ImportTarget{}
+	for _, p := range m.products {
+		if slices.Contains(skus, p.SKU) {
+			out[p.SKU] = domain.ImportTarget{Stock: p.Stock, Reserved: p.Reserved}
+		}
 	}
 	return out, nil
 }

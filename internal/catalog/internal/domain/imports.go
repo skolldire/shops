@@ -49,3 +49,9 @@ type PreviewLine struct {
 	After    int
 	Reserved int
 }
+
+type ImportTarget struct {
+	Stock    int
+	Reserved int
+	Deleted  bool
+}

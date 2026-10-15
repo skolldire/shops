@@ -227,6 +227,19 @@ func TestUpsert(t *testing.T) {
 		require.Equal(t, 1, f.stored(t, "A-1").Stock)
 	})
 
+	t.Run("the products of an import are read with their stock, reserved units and status", func(t *testing.T) {
+		f.reset(t)
+		a := f.create(t, "A-1", "Alpha", "Imports", "1.00", 5)
+		gone := f.create(t, "GONE-1", "Gone", "Imports", "1.00", 2)
+		require.NoError(t, f.repo.Delete(ctx, gone.ID, gone.Version))
+		_, err := f.repo.ReserveStock(ctx, []domain.StockRequest{{ProductID: a.ID, Quantity: 2}}, "purchase-1")
+		require.NoError(t, err)
+
+		targets, err := f.repo.ImportTargets(ctx, []string{"A-1", "GONE-1", "NEW-1"})
+		require.NoError(t, err)
+		require.Equal(t, map[string]domain.ImportTarget{"A-1": {Stock: 5, Reserved: 2}, "GONE-1": {Stock: 2, Deleted: true}}, targets)
+	})
+
 	t.Run("an empty batch does nothing", func(t *testing.T) {
 		f.reset(t)
 		outcomes, err := f.repo.Upsert(ctx, domain.ImportReplace, nil, "sha")

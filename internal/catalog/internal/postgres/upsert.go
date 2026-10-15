@@ -158,6 +158,30 @@ func markBelowReserved(ctx context.Context, q database.Querier, skus []string, s
 	return nil
 }
 
+func (r *Repository) ImportTargets(ctx context.Context, skus []string) (map[string]domain.ImportTarget, error) {
+	out := make(map[string]domain.ImportTarget, len(skus))
+	if len(skus) == 0 {
+		return out, nil
+	}
+	rows, err := database.Q(ctx, r.pool).Query(ctx,
+		`SELECT sku, stock, reserved, status = 'DELETED' FROM products WHERE sku = ANY($1)`, skus)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read the products of an import: %w", err)
+	}
+	var (
+		sku    string
+		target domain.ImportTarget
+	)
+	_, err = pgx.ForEachRow(rows, []any{&sku, &target.Stock, &target.Reserved, &target.Deleted}, func() error {
+		out[sku] = target
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read the products of an import: %w", err)
+	}
+	return out, nil
+}
+
 func (r *Repository) HasProducts(ctx context.Context) (bool, error) {
 	var exists bool
 	if err := database.Q(ctx, r.pool).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM products)`).Scan(&exists); err != nil {
