@@ -431,3 +431,35 @@ func TestPurchasesArePagedNewestFirstAndScopedToTheUser(t *testing.T) {
 	_, err = f.orders.Purchase(ctx, "bob", ids[0])
 	require.ErrorIs(t, err, ordering.ErrPurchaseNotFound)
 }
+
+func TestAC07UnknownOutcomeIsRecoveredWithoutASecondCharge(t *testing.T) {
+	f := setup(t, newProvider(unknownAfterCharge))
+	ctx := context.Background()
+	a := f.product(t, "A-1", "10.00", 5)
+	require.NoError(t, f.orders.AddToCart(ctx, "alice", a.ID, 2))
+	res, err := f.orders.CheckoutCart(ctx, "alice", key, "pm_approved")
+	require.NoError(t, err)
+	require.Equal(t, ordering.StatusPending, res.Purchase.Status)
+	require.Equal(t, 3, f.stock(t, a.ID), "the stock stays taken while the outcome is unknown")
+	require.Equal(t, 1, f.pay.effective())
+	charged := f.pay.charges[res.Purchase.ID]
+
+	f.pay.set(approve)
+	report, err := f.orders.RecoverPending(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ordering.RecoveryReport{Confirmed: 1}, report)
+	require.Equal(t, 1, f.pay.effective(), "no second charge")
+	require.Equal(t, 2, f.pay.received)
+	require.Equal(t, charged, f.pay.charges[res.Purchase.ID], "same reference, token, amount and currency")
+	p, err := f.orders.Purchase(ctx, "alice", res.Purchase.ID)
+	require.NoError(t, err)
+	require.Equal(t, ordering.StatusConfirmed, p.Status)
+	require.Equal(t, 3, f.stock(t, a.ID))
+	require.Empty(t, f.cartQuantities(t, "alice"))
+
+	report, err = f.orders.RecoverPending(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ordering.RecoveryReport{}, report, "running it again changes nothing")
+	require.Equal(t, 2, f.pay.received)
+	require.Equal(t, 1, f.movements(t, "sale"))
+}

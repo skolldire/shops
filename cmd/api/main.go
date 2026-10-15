@@ -116,6 +116,9 @@ func start(ctx context.Context, cfg AppConfig, log logger.Service, lc *lifecycle
 			return err
 		}
 	}
+	if err := recoverPurchases(ctx, log, a.ordering); err != nil {
+		return err
+	}
 
 	apiServer := &http.Server{
 		Addr:              cfg.HTTP.Addr,
