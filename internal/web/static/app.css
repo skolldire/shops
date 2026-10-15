@@ -151,6 +151,19 @@ input[type="checkbox"] {
   font-size: 0.9rem;
 }
 
+.choices {
+  border: 0;
+  padding: 0;
+}
+
+.choice {
+  margin-bottom: 0.75rem;
+}
+
+.choice input {
+  margin-right: 0.5rem;
+}
+
 .field-note {
   margin: 0.25rem 0 0;
   color: var(--muted);

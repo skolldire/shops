@@ -30,11 +30,14 @@ type fakeCatalog struct {
 	created    catalog.CreateInput
 	updated    catalog.UpdateInput
 	deleted    int
-	report     catalog.ImportReport
+	preview    catalog.ImportPreview
 	importErr  error
+	confirmErr error
 	imports    int
-	importName string
+	importOpts catalog.ImportOptions
 	importBody string
+	confirmed  []bool
+	cancelled  int
 	movements  []catalog.Movement
 	paging     catalog.Paging
 }
@@ -51,16 +54,41 @@ func (f *fakeCatalog) Movements(_ context.Context, _ string, p catalog.Paging) (
 	return catalog.MovementPage{Items: f.movements, Page: p.Page, PageSize: p.PageSize, Total: total}, f.err
 }
 
-func (f *fakeCatalog) Import(_ context.Context, r io.Reader, opts catalog.ImportOptions) (catalog.ImportReport, error) {
+func (f *fakeCatalog) PreviewImport(_ context.Context, r io.Reader, opts catalog.ImportOptions) (string, error) {
 	f.imports++
-	f.importName = opts.FileName
+	f.importOpts = opts
 	body, err := io.ReadAll(r)
 	f.importBody = string(body)
 	if err != nil {
-		return catalog.ImportReport{}, fmt.Errorf("catalog: read import file: %w", err)
+		return "", fmt.Errorf("catalog: read import file: %w", err)
 	}
-	return f.report, f.importErr
+	return importID, f.importErr
 }
+
+func (f *fakeCatalog) ImportPreview(_ context.Context, id string) (catalog.ImportPreview, error) {
+	if id != importID {
+		return catalog.ImportPreview{}, catalog.ErrImportNotFound
+	}
+	return f.preview, nil
+}
+
+func (f *fakeCatalog) ConfirmImport(_ context.Context, id string, allowDuplicate bool) (catalog.ImportReport, error) {
+	if id != importID {
+		return catalog.ImportReport{}, catalog.ErrImportNotFound
+	}
+	f.confirmed = append(f.confirmed, allowDuplicate)
+	return f.preview.Report, f.confirmErr
+}
+
+func (f *fakeCatalog) CancelImport(_ context.Context, id string) error {
+	if id != importID {
+		return catalog.ErrImportNotFound
+	}
+	f.cancelled++
+	return f.confirmErr
+}
+
+const importID = "5a0b2c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
 
 const testMaxImportBodyBytes = 8192
 

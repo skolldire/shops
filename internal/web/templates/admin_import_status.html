@@ -1,0 +1,87 @@
+{{define "title"}}Admin · Import {{.Data.Import.File.Name}}{{end}}
+{{define "content"}}
+<p><a href="/admin/imports">← Import another file</a></p>
+{{$i := .Data.Import}}
+<h1>Import of {{$i.File.Name}}</h1>
+<p class="results-summary">{{if eq $i.Mode "add"}}Add to the current inventory{{else}}Replace the inventory{{end}} · {{$i.File.Bytes}} bytes · SHA-256 {{$i.File.SHA256}}</p>
+{{with .Data.Problem}}<p class="notice error" role="alert">{{.}}</p>{{end}}
+{{if eq $i.Status "PREVIEW"}}
+<section id="import-preview">
+<h2>Check the changes before applying them</h2>
+<p class="notice" role="status">{{$i.New}} new products, {{$i.Existing}} existing products and {{$i.Report.Rejected}} rejected rows, out of {{$i.Report.Records}} records.</p>
+{{with $i.DuplicateOf}}<p class="notice warning" role="alert">This same file was already added to the inventory on {{.UTC.Format "2006-01-02 15:04"}} UTC. Adding it again adds its units again.</p>{{end}}
+{{if .Data.Rows}}
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>SKU</th><th class="numeric">Stock now</th><th class="numeric">Stock after</th><th class="numeric">Reserved</th></tr>
+</thead>
+<tbody>
+{{range .Data.Rows}}
+<tr><td>{{.SKU}}</td><td class="numeric">{{.StockBefore}}</td><td class="numeric">{{.StockAfter}}</td><td class="numeric">{{.Reserved}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{if .Data.MoreRow}}<p class="results-summary">Showing the first {{len .Data.Rows}} existing products. {{.Data.MoreRow}} more are not shown.</p>{{end}}
+{{end}}
+<div class="form-card">
+<form action="/admin/imports/{{$i.ID}}/confirm" method="post">
+{{if $i.DuplicateOf}}
+<div class="field choice">
+<input id="allow_duplicate" name="allow_duplicate" type="checkbox" value="true" required>
+<label for="allow_duplicate">I want to add this file again</label>
+</div>
+{{end}}
+<div class="actions">
+<button type="submit">Confirm</button>
+</div>
+</form>
+<form action="/admin/imports/{{$i.ID}}/cancel" method="post" class="actions">
+<button class="secondary" type="submit">Cancel</button>
+</form>
+</div>
+</section>
+{{else if eq $i.Status "APPLYING"}}
+<p class="notice warning" role="alert">This import stopped while it was being applied. Part of the file may already be in the inventory. Applying it again is safe and finishes it.</p>
+<form action="/admin/imports/{{$i.ID}}/confirm" method="post" class="actions">
+<button type="submit">Apply it again</button>
+</form>
+{{else if eq $i.Status "CANCELLED"}}
+<p class="notice" role="status">{{if eq $i.CancelReason "expired"}}This preview expired before it was confirmed. Upload the file again to import it.{{else}}This import was cancelled. Nothing was changed.{{end}}</p>
+{{else}}
+<section id="import-report">
+<h2>Result</h2>
+{{if $i.Report.PreviewChanged}}<p class="notice warning" role="status">The stock changed between the preview and the confirmation. The result below is what was applied.</p>{{end}}
+<p class="notice" role="status">{{$i.Report.Created}} created, {{$i.Report.Updated}} updated, {{$i.Report.Unchanged}} unchanged, {{$i.Report.Rejected}} rejected and {{$i.Report.Skipped}} empty rows skipped, out of {{$i.Report.Records}} records.</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th class="numeric">Records</th><th class="numeric">Created</th><th class="numeric">Updated</th><th class="numeric">Unchanged</th><th class="numeric">Rejected</th><th class="numeric">Skipped</th></tr>
+</thead>
+<tbody>
+<tr><td class="numeric">{{$i.Report.Records}}</td><td class="numeric">{{$i.Report.Created}}</td><td class="numeric">{{$i.Report.Updated}}</td><td class="numeric">{{$i.Report.Unchanged}}</td><td class="numeric">{{$i.Report.Rejected}}</td><td class="numeric">{{$i.Report.Skipped}}</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+{{end}}
+{{if and .Data.Errors (ne $i.Status "CANCELLED")}}
+<section id="import-errors">
+<h2>Rejected rows</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th class="numeric">Line</th><th>SKU</th><th>Field</th><th>Code</th><th>Message</th></tr>
+</thead>
+<tbody>
+{{range .Data.Errors}}
+<tr><td class="numeric">{{.Line}}</td><td>{{.SKU}}</td><td>{{.Field}}</td><td>{{.Code}}</td><td>{{.Message}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{if .Data.More}}<p class="results-summary">Showing the first {{len .Data.Errors}} errors. {{.Data.More}} more are not shown; the API returns all of them.</p>{{end}}
+</section>
+{{end}}
+{{end}}

@@ -34,6 +34,9 @@ linters:
       - path: "internal/web/demouser\\.go"
         linters: [gosec]
         text: "(G124|G710)"
+      - path: "internal/web/imports\\.go"
+        linters: [gosec]
+        text: "G710"
 
 formatters:
   enable:
