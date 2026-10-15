@@ -1,15 +1,26 @@
-{{define "title"}}{{.Name}}{{end}}
+{{define "title"}}{{.Data.Product.Name}}{{end}}
 {{define "content"}}
 <p><a href="/">← Back to the store</a></p>
 <article class="product-detail">
-<h1>{{.Name}}</h1>
-<p class="price">${{money .Price}}</p>
-{{if .Description}}<p>{{.Description}}</p>{{end}}
+<h1>{{.Data.Product.Name}}</h1>
+<p class="price">${{money .Data.Product.Price}}</p>
+{{if .Data.Product.Description}}<p>{{.Data.Product.Description}}</p>{{end}}
 <dl>
-<dt>SKU</dt><dd>{{.SKU}}</dd>
-<dt>Category</dt><dd>{{.Category}}</dd>
-<dt>Availability</dt><dd>{{if gt .Stock 0}}{{.Stock}} in stock{{else}}<span class="stock out">Out of stock</span>{{end}}</dd>
-<dt>Weight</dt><dd>{{weight .WeightKg}} kg</dd>
+<dt>SKU</dt><dd>{{.Data.Product.SKU}}</dd>
+<dt>Category</dt><dd>{{.Data.Product.Category}}</dd>
+<dt>Availability</dt><dd>{{if gt .Data.Product.Stock 0}}{{.Data.Product.Stock}} in stock{{else}}<span class="stock out">Out of stock</span>{{end}}</dd>
+<dt>Weight</dt><dd>{{weight .Data.Product.WeightKg}} kg</dd>
 </dl>
+{{with .Data.Error}}<p class="notice error" role="alert">{{.}}</p>{{end}}
+{{if gt .Data.Product.Stock 0}}
+<form class="add-to-cart" action="/cart/items" method="post">
+<input type="hidden" name="product_id" value="{{.Data.Product.ID}}">
+<div class="field">
+<label for="quantity">Quantity</label>
+<input id="quantity" name="quantity" type="number" min="1" max="99" value="1" inputmode="numeric" required>
+</div>
+<button type="submit">Add to cart</button>
+</form>
+{{end}}
 </article>
 {{end}}

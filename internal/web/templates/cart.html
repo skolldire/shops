@@ -1,0 +1,54 @@
+{{define "title"}}Cart{{end}}
+{{define "content"}}
+<div class="page-header">
+<h1>Your cart</h1>
+</div>
+{{with .Data.Notice}}<p class="notice{{if $.Data.Alert}} warning{{end}}" role="status">{{.}}</p>{{end}}
+{{if .Data.Cart.Lines}}
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>Product</th><th class="numeric">Price</th><th class="numeric">Quantity</th><th>Notes</th><th>Actions</th></tr>
+</thead>
+<tbody>
+{{range .Data.Cart.Lines}}
+<tr>
+<td>{{if .Unavailable}}Unavailable product{{else}}<a href="/products/{{.ProductID}}">{{.Name}}</a>{{end}}</td>
+<td class="numeric">${{money .UnitPriceSeen}}</td>
+<td class="numeric">
+<form class="inline" action="/cart/items/{{.ProductID}}/quantity" method="post">
+<label class="visually-hidden" for="qty-{{.ProductID}}">Quantity</label>
+<input id="qty-{{.ProductID}}" name="quantity" type="number" min="1" max="99" value="{{.Quantity}}" inputmode="numeric">
+<button type="submit" class="secondary">Update</button>
+</form>
+</td>
+<td>
+{{if .Unavailable}}<p class="field-error">This product is no longer available.</p>{{end}}
+{{if .LowStock}}<p class="field-error">Only {{.Available}} in stock.</p>{{end}}
+{{if .PriceChanged}}
+<p class="field-error">The price changed to ${{money .CurrentPrice}}.</p>
+<form class="inline" action="/cart/items/{{.ProductID}}/accept-price" method="post">
+<button type="submit">Use current price</button>
+</form>
+{{end}}
+</td>
+<td>
+<form class="inline" action="/cart/items/{{.ProductID}}/remove" method="post">
+<button type="submit" class="danger">Remove</button>
+</form>
+</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+<p class="total">Estimated total: <strong>${{money .Data.Cart.EstimatedTotal}}</strong></p>
+{{if .Data.Cart.HasWarnings}}
+<p class="notice warning">Resolve the notes above before paying.</p>
+{{else}}
+<p><a class="button" href="/checkout">Go to checkout</a></p>
+{{end}}
+{{else}}
+<p class="results-summary">Your cart is empty. <a href="/">Browse the store</a>.</p>
+{{end}}
+{{end}}

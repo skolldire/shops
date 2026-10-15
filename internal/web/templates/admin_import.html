@@ -2,7 +2,7 @@
 {{define "content"}}
 <p><a href="/admin/products">← Back to products</a></p>
 <h1>Import products from CSV</h1>
-{{with .Problem}}<p class="notice error" role="alert">{{.}}</p>{{end}}
+{{with .Data.Problem}}<p class="notice error" role="alert">{{.}}</p>{{end}}
 <form class="form-card" action="/admin/imports" method="post" enctype="multipart/form-data">
 <div class="field">
 <label for="file">CSV file</label>
@@ -13,7 +13,7 @@
 <button type="submit">Import</button>
 </div>
 </form>
-{{with .Report}}
+{{with .Data.Report}}
 <section id="import-report">
 <h2>Result for {{.File.Name}}</h2>
 <p class="notice" role="status">{{.Created}} created, {{.Updated}} updated, {{.Unchanged}} unchanged, {{.Rejected}} rejected and {{.Skipped}} empty rows skipped, out of {{.Records}} records.</p>
@@ -30,7 +30,7 @@
 <p class="results-summary">{{.File.Bytes}} bytes · SHA-256 {{.File.SHA256}}</p>
 </section>
 {{end}}
-{{if .Errors}}
+{{if .Data.Errors}}
 <section id="import-errors">
 <h2>Rejected rows</h2>
 <div class="table-wrap">
@@ -39,13 +39,13 @@
 <tr><th class="numeric">Line</th><th>SKU</th><th>Field</th><th>Code</th><th>Message</th></tr>
 </thead>
 <tbody>
-{{range .Errors}}
+{{range .Data.Errors}}
 <tr><td class="numeric">{{.Line}}</td><td>{{.SKU}}</td><td>{{.Field}}</td><td>{{.Code}}</td><td>{{.Message}}</td></tr>
 {{end}}
 </tbody>
 </table>
 </div>
-{{if .More}}<p class="results-summary">Showing the first {{len .Errors}} errors. {{.More}} more are not shown; the API returns all of them.</p>{{end}}
+{{if .Data.More}}<p class="results-summary">Showing the first {{len .Data.Errors}} errors. {{.Data.More}} more are not shown; the API returns all of them.</p>{{end}}
 </section>
 {{end}}
 {{end}}

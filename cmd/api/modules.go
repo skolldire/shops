@@ -57,7 +57,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 		return nil, err
 	}
 	importBodyBytes := cfg.Import.MaxBytes + multipartOverheadBytes
-	ui, err := web.New(web.Deps{Catalog: products, Log: log, MaxImportBodyBytes: importBodyBytes})
+	ui, err := web.New(web.Deps{Catalog: products, Ordering: orders, Users: cfg.Demo.Users, Log: log, MaxImportBodyBytes: importBodyBytes})
 	if err != nil {
 		return nil, err
 	}

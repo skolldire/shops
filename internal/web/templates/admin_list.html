@@ -7,21 +7,21 @@
 <a class="button" href="/admin/products/new">New product</a>
 </div>
 </div>
-{{with .Notice}}<p class="notice" role="status">{{.}}</p>{{end}}
+{{with .Data.Notice}}<p class="notice" role="status">{{.}}</p>{{end}}
 <form class="filters" action="/admin/products" method="get" role="search"
       hx-get="/admin/products" hx-target="#results" hx-push-url="true"
       hx-trigger="submit, input changed delay:300ms from:#q">
 <div class="field">
 <label for="q">Search</label>
-<input id="q" name="q" type="search" value="{{.Filters.Q}}" maxlength="100" placeholder="Name, SKU or description">
-<p id="error-q" class="field-error">{{.Errors.q}}</p>
+<input id="q" name="q" type="search" value="{{.Data.Filters.Q}}" maxlength="100" placeholder="Name, SKU or description">
+<p id="error-q" class="field-error">{{.Data.Errors.q}}</p>
 </div>
 <div class="field">
 <button type="submit">Search</button>
 </div>
 </form>
 <div id="results" class="results-area">
-{{template "results" .}}
+{{template "results" .Data}}
 </div>
 {{end}}
 {{define "results"}}

@@ -70,6 +70,7 @@ func (c client) upload(path, name string, content []byte) (*http.Response, strin
 	req, err := http.NewRequestWithContext(c.t.Context(), http.MethodPost, c.base+path, &body)
 	require.NoError(c.t, err)
 	req.Header.Set("Content-Type", form.FormDataContentType())
+	req.Header.Set("Origin", c.base)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(c.t, err)
 	defer resp.Body.Close()

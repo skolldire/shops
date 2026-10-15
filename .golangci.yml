@@ -31,6 +31,9 @@ linters:
       - path: "cmd/api/healthcheck\\.go"
         linters: [gosec]
         text: "G704"
+      - path: "internal/web/demouser\\.go"
+        linters: [gosec]
+        text: "(G124|G710)"
 
 formatters:
   enable:

@@ -27,6 +27,7 @@ func uploadCSV(t *testing.T, h http.Handler, field, name, content string) *httpt
 	require.NoError(t, form.Close())
 	req := httptest.NewRequest(http.MethodPost, adminImports, &body)
 	req.Header.Set("Content-Type", form.FormDataContentType())
+	req.Header.Set("Origin", testOrigin)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -154,6 +155,7 @@ func TestImportWithoutAFileAsksForOne(t *testing.T) {
 		h, _ := newTestUI(t, cat)
 		req := httptest.NewRequest(http.MethodPost, adminImports, strings.NewReader(body))
 		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Origin", testOrigin)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		require.Zero(t, cat.imports)
@@ -194,7 +196,7 @@ func TestImportHasItsOwnBodyLimit(t *testing.T) {
 func TestImportAcceptsUploadsLargerThanOtherForms(t *testing.T) {
 	cat := &fakeCatalog{report: catalog.ImportReport{Records: 1, Created: 1}}
 	log, _ := newTestLogger(t)
-	ui, err := New(Deps{Catalog: cat, Log: log, MaxImportBodyBytes: 4 << 20})
+	ui, err := New(Deps{Catalog: cat, Ordering: &fakeOrdering{}, Users: testUsers, Log: log, MaxImportBodyBytes: 4 << 20})
 	require.NoError(t, err)
 
 	rec := uploadCSV(t, ui.Routes(), "file", "products.csv", strings.Repeat("x", 2*maxFormBytes))

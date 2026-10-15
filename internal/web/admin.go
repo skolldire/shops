@@ -173,7 +173,7 @@ func (ui *UI) badForm(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.As(err, &tooLarge) {
 		status, message = http.StatusRequestEntityTooLarge, "The form is too large."
 	}
-	ui.page(w, r, status, "error", errorPage{Title: "Invalid form", Status: status, Message: message})
+	ui.errorPage(w, r, status, errorPage{Title: "Invalid form", Status: status, Message: message})
 }
 
 func newProductForm(values formValues, errs map[string]string) productForm {

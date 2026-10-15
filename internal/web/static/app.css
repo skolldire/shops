@@ -308,6 +308,70 @@ th.numeric {
   opacity: 0.6;
 }
 
+.user-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.user-switch select,
+.user-switch button {
+  padding: 0.3rem 0.6rem;
+}
+
+form.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+form.inline input[type="number"] {
+  width: 4.5rem;
+}
+
+.add-to-cart {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.add-to-cart input[type="number"] {
+  width: 5rem;
+}
+
+.total {
+  font-size: 1.1rem;
+  text-align: right;
+}
+
+.status {
+  font-weight: 600;
+}
+
+.status-CONFIRMED {
+  color: var(--ok-text);
+}
+
+.status-FAILED {
+  color: var(--danger);
+}
+
+.status-PENDING {
+  color: var(--muted);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 @media (max-width: 600px) {
   .site-header {
     padding: 0.75rem 1rem;

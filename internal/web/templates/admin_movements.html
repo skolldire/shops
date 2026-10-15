@@ -1,21 +1,21 @@
-{{define "title"}}Movements · {{.Product.Name}}{{end}}
+{{define "title"}}Movements · {{.Data.Product.Name}}{{end}}
 {{define "content"}}
 <p><a href="/admin/products">← Back to products</a></p>
 <div class="page-header">
-<h1>Stock movements of {{.Product.Name}}</h1>
+<h1>Stock movements of {{.Data.Product.Name}}</h1>
 </div>
-<p class="results-summary">SKU {{.Product.SKU}} · current stock {{.Product.Stock}}</p>
-{{if .Invalid}}
+<p class="results-summary">SKU {{.Data.Product.SKU}} · current stock {{.Data.Product.Stock}}</p>
+{{if .Data.Invalid}}
 <p class="notice error">The page parameters are not valid.</p>
-{{else if .Page.Items}}
-<p class="results-summary">{{.Page.Total}} movements, newest first</p>
+{{else if .Data.Page.Items}}
+<p class="results-summary">{{.Data.Page.Total}} movements, newest first</p>
 <div class="table-wrap">
 <table>
 <thead>
 <tr><th>When</th><th class="numeric">Change</th><th class="numeric">Stock after</th><th>Reason</th><th class="optional">Reference</th><th class="optional">Database role</th></tr>
 </thead>
 <tbody>
-{{range .Page.Items}}
+{{range .Data.Page.Items}}
 <tr>
 <td>{{.CreatedAt.UTC.Format "2006-01-02 15:04:05"}} UTC</td>
 <td class="numeric">{{if gt .Delta 0}}+{{end}}{{.Delta}}</td>
@@ -28,11 +28,11 @@
 </tbody>
 </table>
 </div>
-{{if or .PrevURL .NextURL}}
+{{if or .Data.PrevURL .Data.NextURL}}
 <nav class="pagination" aria-label="Pagination">
-{{if .PrevURL}}<a class="button secondary" href="{{.PrevURL}}">Previous</a>{{end}}
-<span>Page {{.Page.Page}}</span>
-{{if .NextURL}}<a class="button secondary" href="{{.NextURL}}">Next</a>{{end}}
+{{if .Data.PrevURL}}<a class="button secondary" href="{{.Data.PrevURL}}">Previous</a>{{end}}
+<span>Page {{.Data.Page.Page}}</span>
+{{if .Data.NextURL}}<a class="button secondary" href="{{.Data.NextURL}}">Next</a>{{end}}
 </nav>
 {{end}}
 {{else}}
