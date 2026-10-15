@@ -44,6 +44,19 @@ func TestDatabase(t *testing.T) {
 		require.Equal(t, 4, n)
 	})
 
+	t.Run("the schema check accepts present columns and rejects missing ones without naming them", func(t *testing.T) {
+		require.NoError(t, database.RequireColumns(ctx, pool, []database.Column{{Table: "products", Name: "reserved"}, {Table: "purchases", Name: "total"}}))
+		require.NoError(t, database.RequireColumns(ctx, pool, nil))
+		for _, missing := range []database.Column{{Table: "products", Name: "secret_column"}, {Table: "secret_table", Name: "id"}} {
+			err := database.RequireColumns(ctx, pool, []database.Column{{Table: "products", Name: "stock"}, missing})
+			require.ErrorIs(t, err, database.ErrSchemaOutdated)
+			require.NotContains(t, err.Error(), "secret")
+		}
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		require.EqualError(t, database.RequireColumns(canceled, pool, []database.Column{{Table: "products", Name: "stock"}}), "database: check schema: canceled")
+	})
+
 	t.Run("wrong password hides connection details", func(t *testing.T) {
 		wrong := cfg
 		wrong.Password = secret.New("wrong-password")

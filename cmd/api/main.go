@@ -106,6 +106,9 @@ func start(ctx context.Context, cfg AppConfig, log logger.Service, lc *lifecycle
 		return err
 	}
 	log.Info(ctx, "database connected", nil)
+	if err := database.RequireColumns(ctx, pool, requiredColumns); err != nil {
+		return err
+	}
 
 	a, err := buildApp(cfg, log, pool, tel)
 	if err != nil {
