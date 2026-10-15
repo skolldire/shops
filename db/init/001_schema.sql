@@ -161,4 +161,34 @@ CREATE TABLE cart_items (
     PRIMARY KEY (user_id, product_id)
 );
 
+CREATE TABLE imports (
+    id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    idempotency_key uuid        NULL,
+    mode            text        NOT NULL CHECK (mode IN ('add', 'replace')),
+    status          text        NOT NULL CHECK (status IN ('PREVIEW', 'APPLYING', 'APPLIED', 'CANCELLED')),
+    cancel_reason   text        NULL CHECK (cancel_reason IN ('user', 'expired')),
+    file_name       text        NOT NULL,
+    file_bytes      bigint      NOT NULL CHECK (file_bytes >= 0),
+    file_hash       text        NOT NULL,
+    content         bytea       NULL,
+    preview         jsonb       NULL,
+    records         integer     NOT NULL DEFAULT 0,
+    skipped         integer     NOT NULL DEFAULT 0,
+    created         integer     NOT NULL DEFAULT 0,
+    updated         integer     NOT NULL DEFAULT 0,
+    unchanged       integer     NOT NULL DEFAULT 0,
+    rejected        integer     NOT NULL DEFAULT 0,
+    errors          jsonb       NOT NULL DEFAULT '[]',
+    preview_changed boolean     NOT NULL DEFAULT false,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    applied_at      timestamptz NULL,
+    CONSTRAINT imports_idempotency_key_key UNIQUE (idempotency_key),
+    CONSTRAINT imports_cancelled_check CHECK ((status = 'CANCELLED') = (cancel_reason IS NOT NULL)),
+    CONSTRAINT imports_applied_check CHECK ((status = 'APPLIED') = (applied_at IS NOT NULL)),
+    CONSTRAINT imports_content_check CHECK (status IN ('PREVIEW', 'APPLYING') OR content IS NULL)
+);
+
+CREATE INDEX imports_applied_add_hash_idx ON imports (file_hash) WHERE mode = 'add' AND status = 'APPLIED';
+CREATE INDEX imports_preview_created_at_idx ON imports (created_at) WHERE status = 'PREVIEW';
+
 COMMIT;
