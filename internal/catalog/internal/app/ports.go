@@ -6,6 +6,10 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 )
 
+type Tx interface {
+	WithinTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 type ProductUpserter interface {
 	Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (map[string]UpsertOutcome, error)
 }

@@ -15,6 +15,8 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
+	"github.com/skolldire/shops/internal/catalog/internal/postgres"
+	"github.com/skolldire/shops/internal/platform/database"
 )
 
 type noRecorder struct{}
@@ -56,7 +58,11 @@ func (f fixture) count(t *testing.T) int {
 
 func (f fixture) importer(t *testing.T) *csvimport.Importer {
 	t.Helper()
-	rows, err := app.NewImporter(f.repo, noRecorder{}, noFailures{})
+	log, err := postgres.NewImportLog(f.pool, time.Hour, 20)
+	require.NoError(t, err)
+	tx, err := database.NewTxManager(f.pool)
+	require.NoError(t, err)
+	rows, err := app.NewImporter(f.repo, log, tx, noRecorder{}, noFailures{})
 	require.NoError(t, err)
 	importer, err := csvimport.NewImporter(rows, csvimport.Limits{MaxBytes: 10 << 20, MaxRows: 10000})
 	require.NoError(t, err)
@@ -259,14 +265,14 @@ func TestImportIntoPostgres(t *testing.T) {
 		f.reset(t)
 		body := generated(1201)
 
-		report, err := f.importer(t).Import(ctx, strings.NewReader(body), "generated.csv")
+		report, err := f.importer(t).Import(ctx, strings.NewReader(body), app.ImportOptions{FileName: "generated.csv", Mode: domain.ImportReplace})
 
 		require.NoError(t, err)
 		require.Equal(t, 1201, report.Created)
 		require.Empty(t, report.Errors)
 		require.Equal(t, 1201, f.count(t))
 
-		again, err := f.importer(t).Import(ctx, strings.NewReader(body), "generated.csv")
+		again, err := f.importer(t).Import(ctx, strings.NewReader(body), app.ImportOptions{FileName: "generated.csv", Mode: domain.ImportReplace})
 		require.NoError(t, err)
 		require.Equal(t, 1201, again.Unchanged)
 		require.Zero(t, again.Created+again.Updated+again.Rejected)
@@ -282,7 +288,7 @@ func TestImportIntoPostgres(t *testing.T) {
 		})
 		body := "name,sku,description,category,price,stock,weight_kg\nFine,OK-1,,A,1,1,1\nCursed,BAD-1,,A,1,1,1\nAlso fine,OK-2,,A,1,1,1\n"
 
-		report, err := f.importer(t).Import(ctx, strings.NewReader(body), "products.csv")
+		report, err := f.importer(t).Import(ctx, strings.NewReader(body), app.ImportOptions{FileName: "products.csv", Mode: domain.ImportReplace})
 
 		require.NoError(t, err)
 		require.Equal(t, 2, report.Created)
@@ -300,7 +306,7 @@ func TestImportIntoPostgres(t *testing.T) {
 		var wg sync.WaitGroup
 		for i := range reports {
 			wg.Go(func() {
-				reports[i], errs[i] = importer.Import(ctx, strings.NewReader(body), "generated.csv")
+				reports[i], errs[i] = importer.Import(ctx, strings.NewReader(body), app.ImportOptions{FileName: "generated.csv", Mode: domain.ImportReplace})
 			})
 		}
 		wg.Wait()
@@ -322,7 +328,7 @@ func TestImportIntoPostgres(t *testing.T) {
 		body := generated(10000)
 		start := time.Now()
 
-		report, err := f.importer(t).Import(ctx, strings.NewReader(body), "generated.csv")
+		report, err := f.importer(t).Import(ctx, strings.NewReader(body), app.ImportOptions{FileName: "generated.csv", Mode: domain.ImportReplace})
 
 		require.NoError(t, err)
 		require.Equal(t, 10000, report.Created)

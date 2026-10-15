@@ -108,11 +108,12 @@ func TestNewInventoryRequiresAStore(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestImportPassesTheFileHashAsTheStockReference(t *testing.T) {
+func TestImportPassesTheImportIDAsTheStockReference(t *testing.T) {
 	store := &fakeStore{}
-	run(t, store, csvHeader+"Alpha,A-1,,Sports,1.00,1,0.100\n")
+	report, _ := run(t, store, csvHeader+"Alpha,A-1,,Sports,1.00,1,0.100\n")
+	require.NotEmpty(t, report.ID)
 	require.NotEmpty(t, store.references)
 	for _, ref := range store.references {
-		require.Equal(t, productsFile.SHA256, ref)
+		require.Equal(t, report.ID, ref)
 	}
 }

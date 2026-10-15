@@ -27,12 +27,13 @@ type fakeImporter struct {
 	err    error
 	calls  int
 	name   string
+	opts   app.ImportOptions
 	body   string
 }
 
-func (f *fakeImporter) Import(_ context.Context, r io.Reader, fileName string) (app.ImportReport, error) {
+func (f *fakeImporter) Import(_ context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error) {
 	f.calls++
-	f.name = fileName
+	f.name, f.opts = opts.FileName, opts
 	body, err := io.ReadAll(r)
 	f.body = string(body)
 	if err != nil {

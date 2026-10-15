@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/app/apptest"
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
@@ -161,7 +162,7 @@ func newTestModule(t *testing.T) (*Module, *memoryRepo) {
 	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
 	require.NoError(t, err)
 	repo := &memoryRepo{products: map[string]domain.Product{}}
-	m, err := newModule(repo, testDeps(log))
+	m, err := newModule(repo, apptest.NewLog(), apptest.Tx{}, testDeps(log))
 	require.NoError(t, err)
 	return m, repo
 }
@@ -284,7 +285,7 @@ func TestNewModuleRequiresDependencies(t *testing.T) {
 	} {
 		deps := testDeps(log)
 		mutate(&deps)
-		_, err = newModule(&memoryRepo{}, deps)
+		_, err = newModule(&memoryRepo{}, apptest.NewLog(), apptest.Tx{}, deps)
 		require.Error(t, err, name)
 	}
 }

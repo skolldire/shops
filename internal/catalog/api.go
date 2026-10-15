@@ -18,6 +18,8 @@ var (
 	ErrStockInvariant      = errors.New("catalog: the reservation does not match the stock")
 	ErrBelowReserved       = errors.New("catalog: the stock cannot go below the reserved units")
 
+	ErrInvalidImportMode = errors.New("catalog: the import mode must be add or replace")
+
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")
 	ErrTooManyRows   = errors.New("catalog: the csv has too many rows")
@@ -111,12 +113,23 @@ type MovementPage struct {
 }
 
 type ImportLimits struct {
-	MaxBytes int64
-	MaxRows  int
+	MaxBytes          int64
+	MaxRows           int
+	PreviewTTL        time.Duration
+	MaxActivePreviews int
 }
 
+type ImportMode string
+
+const (
+	ImportAdd     ImportMode = "add"
+	ImportReplace ImportMode = "replace"
+)
+
 type ImportOptions struct {
-	FileName string
+	FileName       string
+	Mode           ImportMode
+	IdempotencyKey string
 }
 
 type ImportFile struct {
@@ -134,14 +147,17 @@ type RowError struct {
 }
 
 type ImportReport struct {
-	File      ImportFile
-	Records   int
-	Skipped   int
-	Created   int
-	Updated   int
-	Unchanged int
-	Rejected  int
-	Errors    []RowError
+	ID             string
+	Mode           ImportMode
+	PreviewChanged bool
+	File           ImportFile
+	Records        int
+	Skipped        int
+	Created        int
+	Updated        int
+	Unchanged      int
+	Rejected       int
+	Errors         []RowError
 }
 
 type Product struct {

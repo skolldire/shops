@@ -1,6 +1,7 @@
 package csvimport
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -21,7 +22,7 @@ import (
 const maxFileNameLength = 255
 
 type RowImporter interface {
-	Import(ctx context.Context, file app.ImportFile, rows []app.ImportRow) (app.ImportReport, error)
+	Import(ctx context.Context, req app.ImportRequest) (app.ImportReport, error)
 }
 
 type Limits struct {
@@ -44,22 +45,34 @@ func NewImporter(rows RowImporter, limits Limits) (*Importer, error) {
 	return &Importer{rows: rows, limits: limits}, nil
 }
 
-func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error) {
+func (i *Importer) Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error) {
 	metered := &meteredReader{r: r, hash: sha256.New(), max: i.limits.MaxBytes}
-	read, err := Read(metered, i.limits.MaxRows)
+	content, err := io.ReadAll(metered)
 	if err != nil {
 		return app.ImportReport{}, readError(err)
+	}
+	rows, err := i.Rows(content)
+	if err != nil {
+		return app.ImportReport{}, err
+	}
+	file := app.ImportFile{
+		Name:   cleanFileName(opts.FileName),
+		Bytes:  metered.n,
+		SHA256: hex.EncodeToString(metered.hash.Sum(nil)),
+	}
+	return i.rows.Import(ctx, app.ImportRequest{File: file, Content: content, Rows: rows, Mode: opts.Mode, Key: opts.Key})
+}
+
+func (i *Importer) Rows(content []byte) ([]app.ImportRow, error) {
+	read, err := Read(bytes.NewReader(content), i.limits.MaxRows)
+	if err != nil {
+		return nil, readError(err)
 	}
 	rows := make([]app.ImportRow, len(read))
 	for index, row := range read {
 		rows[index] = importRow(row)
 	}
-	file := app.ImportFile{
-		Name:   cleanFileName(fileName),
-		Bytes:  metered.n,
-		SHA256: hex.EncodeToString(metered.hash.Sum(nil)),
-	}
-	return i.rows.Import(ctx, file, rows)
+	return rows, nil
 }
 
 func importRow(row Row) app.ImportRow {

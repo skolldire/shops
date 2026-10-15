@@ -102,7 +102,7 @@ func setup(t *testing.T, pay *provider) fixture {
 	pool, _ := dbtest.Start(t)
 	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
 	require.NoError(t, err)
-	cat, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: log, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(), Import: catalog.ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}})
+	cat, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: log, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(), Import: catalog.ImportLimits{MaxBytes: 1 << 20, MaxRows: 100, PreviewTTL: time.Hour, MaxActivePreviews: 20}})
 	require.NoError(t, err)
 	orders, err := ordering.NewModule(ordering.Deps{
 		Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: telemetry.Noop(), Users: []string{"alice", "bob"},

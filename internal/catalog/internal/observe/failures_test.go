@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/app/apptest"
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/observe"
 	"github.com/skolldire/shops/internal/platform/logger"
@@ -104,12 +105,12 @@ func TestABatchRecoveryIsLoggedOnceAndEachRejectedRowOnce(t *testing.T) {
 	counters := &fakeCounters{}
 	recorder, err := observe.NewImportRecorder(counters)
 	require.NoError(t, err)
-	importer, err := app.NewImporter(flakyStore{failSKU: "B-1"}, recorder, reporter)
+	importer, err := app.NewImporter(flakyStore{failSKU: "B-1"}, apptest.NewLog(), apptest.Tx{}, recorder, reporter)
 	require.NoError(t, err)
 
-	report, err := importer.Import(t.Context(), app.ImportFile{Name: "products.csv"}, []app.ImportRow{
+	report, err := importer.Import(t.Context(), app.ImportRequest{File: app.ImportFile{Name: "products.csv"}, Mode: domain.ImportReplace, Rows: []app.ImportRow{
 		importRow(t, 2, "A-1"), importRow(t, 3, "B-1"), importRow(t, 4, "C-1"),
-	})
+	}})
 
 	require.NoError(t, err)
 	require.Equal(t, []int{2, 1}, []int{report.Created, report.Rejected})

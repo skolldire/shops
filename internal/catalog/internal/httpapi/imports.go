@@ -11,6 +11,7 @@ import (
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/csvimport"
+	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
@@ -18,7 +19,7 @@ import (
 const importField = "file"
 
 type Importer interface {
-	Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error)
+	Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error)
 }
 
 type ImportHandler struct {
@@ -80,7 +81,7 @@ func (h *ImportHandler) create(w http.ResponseWriter, r *http.Request) {
 		if part.FormName() != importField {
 			continue
 		}
-		report, err := h.importer.Import(r.Context(), part, part.FileName())
+		report, err := h.importer.Import(r.Context(), part, app.ImportOptions{FileName: part.FileName(), Mode: domain.ImportReplace})
 		if err != nil {
 			h.writeError(w, r, err)
 			return

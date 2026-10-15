@@ -17,6 +17,7 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/httpquery"
 	"github.com/skolldire/shops/internal/catalog/internal/observe"
 	"github.com/skolldire/shops/internal/catalog/internal/postgres"
+	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
 )
@@ -57,10 +58,18 @@ func NewModule(d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newModule(repo, d)
+	log, err := postgres.NewImportLog(d.Pool, d.Import.PreviewTTL, d.Import.MaxActivePreviews)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := database.NewTxManager(d.Pool)
+	if err != nil {
+		return nil, err
+	}
+	return newModule(repo, log, tx, d)
 }
 
-func newModule(s store, d Deps) (*Module, error) {
+func newModule(s store, log app.ImportLog, tx app.Tx, d Deps) (*Module, error) {
 	svc, err := app.NewService(s)
 	if err != nil {
 		return nil, err
@@ -85,7 +94,7 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := app.NewImporter(s, recorder, failures)
+	rows, err := app.NewImporter(s, log, tx, recorder, failures)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +123,11 @@ func (m *Module) RegisterImportRoutes(r chi.Router) {
 }
 
 func (m *Module) Import(ctx context.Context, r io.Reader, opts ImportOptions) (ImportReport, error) {
-	report, err := m.importer.Import(ctx, r, opts.FileName)
+	mode, err := domain.ParseImportMode(string(opts.Mode))
+	if err != nil {
+		return ImportReport{}, ErrInvalidImportMode
+	}
+	report, err := m.importer.Import(ctx, r, app.ImportOptions{FileName: opts.FileName, Mode: mode, Key: opts.IdempotencyKey})
 	switch {
 	case err == nil:
 		return fromReport(report), nil
@@ -132,7 +145,7 @@ func (m *Module) Seed(ctx context.Context, file io.Reader) (ImportReport, bool, 
 	if has {
 		return ImportReport{}, false, nil
 	}
-	report, err := m.Import(ctx, file, ImportOptions{FileName: seedFileName})
+	report, err := m.Import(ctx, file, ImportOptions{FileName: seedFileName, Mode: ImportReplace})
 	if err != nil {
 		return report, false, fmt.Errorf("catalog: import seed file: %w", err)
 	}
@@ -293,6 +306,7 @@ func fromSearch(s domain.Search) SearchQuery {
 
 func fromReport(r app.ImportReport) ImportReport {
 	out := ImportReport{
+		ID: r.ID, Mode: ImportMode(r.Mode), PreviewChanged: r.PreviewChanged,
 		File:    ImportFile{Name: r.File.Name, Bytes: r.File.Bytes, SHA256: r.File.SHA256},
 		Records: r.Records, Skipped: r.Skipped, Created: r.Created, Updated: r.Updated,
 		Unchanged: r.Unchanged, Rejected: r.Rejected,

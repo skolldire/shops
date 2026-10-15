@@ -74,9 +74,9 @@ type fakeFileImporter struct {
 	events    *[]string
 }
 
-func (f *fakeFileImporter) Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error) {
+func (f *fakeFileImporter) Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error) {
 	body, _ := io.ReadAll(r)
-	f.name, f.body = fileName, string(body)
+	f.name, f.body = opts.FileName, string(body)
 	f.inSpan, _ = ctx.Value(spanKey{}).(string)
 	f.cancelled = ctx.Err() != nil
 	if f.events != nil {
@@ -116,7 +116,7 @@ func TestInstrumentedImporterObservesEveryOutcomeWithoutChangingIt(t *testing.T)
 				cancel()
 			}
 
-			report, err := instrumented.Import(ctx, strings.NewReader("name,sku\n"), "products.csv")
+			report, err := instrumented.Import(ctx, strings.NewReader("name,sku\n"), app.ImportOptions{FileName: "products.csv"})
 
 			require.Equal(t, tt.report, report, "the report is passed through untouched")
 			require.Equal(t, tt.err, err, "the caller gets the error also when the span is not marked as failed")
@@ -145,7 +145,7 @@ func TestInstrumentedImporterRecordsTheDurationAfterTheSpanCloses(t *testing.T) 
 	instrumented, err := observe.NewInstrumentedImporter(next, &fakeSpans{events: &events}, &fakeHistograms{events: &events}, rejected)
 	require.NoError(t, err)
 
-	_, err = instrumented.Import(context.Background(), strings.NewReader("name\n"), "products.csv")
+	_, err = instrumented.Import(context.Background(), strings.NewReader("name\n"), app.ImportOptions{FileName: "products.csv"})
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"span opened", "import ran", "span closed", "duration recorded"}, events)

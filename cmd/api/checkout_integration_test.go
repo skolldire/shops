@@ -342,7 +342,8 @@ func TestAuditInvariantAfterImportAndPurchases(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	c.requireAuditInvariant()
-	require.Zero(t, c.scalar(`SELECT count(*) FROM inventory_movements WHERE reason = 'import_replace' AND reference IS DISTINCT FROM $1`, officialSHA256))
+	require.Zero(t, c.scalar(`SELECT count(*) FROM inventory_movements m WHERE reason = 'import_replace'
+		AND NOT EXISTS (SELECT 1 FROM imports i WHERE i.id::text = m.reference AND i.file_hash = $1 AND i.status = 'APPLIED')`, officialSHA256))
 	imported := c.scalar(`SELECT count(*) FROM products WHERE category <> 'Tests'`)
 	zeroStock := c.scalar(`SELECT count(*) FROM products WHERE category <> 'Tests' AND stock = 0`)
 	require.Equal(t, 82, imported)
@@ -364,7 +365,7 @@ func (c client) requireAuditInvariant() {
 		SELECT count(*) FROM inventory_movements m
 		WHERE NOT (
 			(m.reason IN ('initial_stock', 'manual_adjustment') AND m.reference IS NULL)
-			OR (m.reason = 'import_replace' AND m.reference ~ '^[0-9a-f]{64}$')
+			OR (m.reason IN ('import_replace', 'import_add') AND EXISTS (SELECT 1 FROM imports i WHERE i.id::text = m.reference AND i.mode = substr(m.reason, 8)))
 			OR (m.reason IN ('reservation', 'sale', 'reservation_release') AND EXISTS (SELECT 1 FROM purchases p WHERE p.id::text = m.reference))
 		)`), "every movement carries the reason and reference of its writer")
 	require.Zero(c.t, c.scalar(`
