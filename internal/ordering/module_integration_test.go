@@ -103,7 +103,7 @@ func setup(t *testing.T, pay *provider) fixture {
 	cat, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: log, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(), Import: catalog.ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}})
 	require.NoError(t, err)
 	orders, err := ordering.NewModule(ordering.Deps{
-		Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: telemetry.Noop(),
+		Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: telemetry.Noop(), Users: []string{"alice", "bob"},
 		Budgets: ordering.Budgets{Reserve: 3 * time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second, Recovery: 30 * time.Second},
 	})
 	require.NoError(t, err)

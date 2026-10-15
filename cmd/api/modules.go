@@ -47,7 +47,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 		return nil, err
 	}
 	orders, err := ordering.NewModule(ordering.Deps{
-		Pool: pool, Catalog: products, Payments: payment.NewModule(), Log: log, Metrics: tel,
+		Pool: pool, Catalog: products, Payments: payment.NewModule(), Log: log, Metrics: tel, Users: cfg.Demo.Users,
 		Budgets: ordering.Budgets{
 			Reserve: cfg.Checkout.ReserveTimeout, Charge: cfg.Checkout.ChargeTimeout,
 			Finalize: cfg.Checkout.FinalizeTimeout, Recovery: cfg.Checkout.RecoveryTimeout,
@@ -71,6 +71,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 		api.Group(func(r chi.Router) {
 			r.Use(httpx.MaxBodyBytes(maxRequestBytes))
 			products.RegisterRoutes(r)
+			orders.RegisterRoutes(r)
 		})
 		api.Group(func(r chi.Router) {
 			r.Use(httpx.MaxBodyBytes(importBodyBytes))

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skolldire/shops/internal/ordering/internal/app"
 	"github.com/skolldire/shops/internal/ordering/internal/catalogstock"
 	"github.com/skolldire/shops/internal/ordering/internal/domain"
+	"github.com/skolldire/shops/internal/ordering/internal/httpapi"
 	"github.com/skolldire/shops/internal/ordering/internal/observe"
 	"github.com/skolldire/shops/internal/ordering/internal/paymentgw"
 	"github.com/skolldire/shops/internal/ordering/internal/postgres"
@@ -23,6 +25,7 @@ type Deps struct {
 	Payments paymentgw.Provider
 	Log      logger.Service
 	Metrics  telemetry.Metrics
+	Users    []string
 	Budgets  Budgets
 }
 
@@ -31,6 +34,7 @@ type Module struct {
 	recovery *app.Recovery
 	queries  *app.Queries
 	cart     *app.Cart
+	http     *httpapi.Handler
 }
 
 type ports struct {
@@ -95,7 +99,15 @@ func newModule(p ports, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Module{checkout: checkout, recovery: recovery, queries: queries, cart: cart}, nil
+	h, err := httpapi.New(checkout, queries, d.Users, d.Log)
+	if err != nil {
+		return nil, err
+	}
+	return &Module{checkout: checkout, recovery: recovery, queries: queries, cart: cart, http: h}, nil
+}
+
+func (m *Module) RegisterRoutes(r chi.Router) {
+	m.http.Routes(r)
 }
 
 func (m *Module) CheckoutCart(ctx context.Context, userID, idempotencyKey, paymentToken string) (CheckoutResult, error) {
