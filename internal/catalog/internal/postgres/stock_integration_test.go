@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 
@@ -55,8 +56,9 @@ func (f fixture) requireBalanced(t *testing.T) {
 	var unbalanced int
 	require.NoError(t, f.pool.QueryRow(context.Background(), `
 		SELECT count(*) FROM products p
-		WHERE p.stock <> (SELECT COALESCE(sum(m.delta), 0) FROM inventory_movements m WHERE m.product_id = p.id)`).Scan(&unbalanced))
-	require.Zero(t, unbalanced, "every product must satisfy stock = sum(delta)")
+		WHERE p.stock <> (SELECT COALESCE(sum(m.delta), 0) FROM inventory_movements m WHERE m.product_id = p.id)
+		   OR p.reserved <> (SELECT COALESCE(sum(m.reserved_delta), 0) FROM inventory_movements m WHERE m.product_id = p.id)`).Scan(&unbalanced))
+	require.Zero(t, unbalanced, "every product must satisfy stock = sum(delta) and reserved = sum(reserved_delta)")
 }
 
 func sqlState(err error) string {
@@ -230,6 +232,45 @@ func TestInventoryAudit(t *testing.T) {
 		require.Equal(t, "unattributed", reason)
 		require.Nil(t, reference)
 		require.Equal(t, "shop", user)
+		f.requireBalanced(t)
+	})
+
+	t.Run("reserved units are recorded apart from the physical stock", func(t *testing.T) {
+		f.reset(t)
+		a := f.create(t, "A-1", "Alpha", "Sports", "10.00", 5)
+		change := func(reason, set string) error {
+			tx, err := f.pool.Begin(ctx)
+			require.NoError(t, err)
+			defer func() { _ = tx.Rollback(ctx) }()
+			_, err = tx.Exec(ctx, `SELECT set_config('shop.stock_reason', $1, true), set_config('shop.stock_reference', 'ref', true)`, reason)
+			require.NoError(t, err)
+			if _, err := tx.Exec(ctx, `UPDATE products SET `+set+` WHERE id = $1::uuid`, a.ID); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
+		}
+		require.NoError(t, change("reservation", "reserved = reserved + 3"))
+		require.NoError(t, change("sale", "stock = stock - 2, reserved = reserved - 2"))
+		require.NoError(t, change("reservation_release", "reserved = reserved - 1"))
+		require.NoError(t, change("manual_adjustment", "reserved = reserved, name = 'Alpha 2'"))
+		require.Equal(t, "23514", sqlState(change("reservation", "reserved = stock + 1")), "reserved never exceeds the stock")
+		require.Equal(t, "23514", sqlState(change("reservation_release", "reserved = -1")))
+
+		type row struct {
+			Delta, StockAfter, ReservedDelta, ReservedAfter int
+			Reason                                          string
+		}
+		rows, err := f.pool.Query(ctx,
+			`SELECT delta, stock_after, reserved_delta, reserved_after, reason FROM inventory_movements WHERE product_id = $1::uuid ORDER BY id`, a.ID)
+		require.NoError(t, err)
+		got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[row])
+		require.NoError(t, err)
+		require.Equal(t, []row{
+			{5, 5, 0, 0, "initial_stock"},
+			{0, 5, 3, 3, "reservation"},
+			{-2, 3, -2, 1, "sale"},
+			{0, 3, -1, 0, "reservation_release"},
+		}, got, "an update that changes neither the stock nor the reserved units records nothing")
 		f.requireBalanced(t)
 	})
 
