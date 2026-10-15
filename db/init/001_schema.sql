@@ -86,6 +86,7 @@ CREATE TABLE purchases (
     status          text          NOT NULL CHECK (status IN ('PENDING', 'CONFIRMED', 'FAILED')),
     currency        char(3)       NOT NULL DEFAULT 'USD',
     total           numeric(12,2) NOT NULL CHECK (total >= 0),
+    payment_token   text          NOT NULL,
     payment_ref     text          NULL,
     failure_reason  text          NULL,
     created_at      timestamptz   NOT NULL DEFAULT now(),

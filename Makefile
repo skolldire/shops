@@ -53,7 +53,7 @@ lint-arch:
 	! printf '%s\n' "$$deps" | grep -E '^github.com/skolldire/shops/internal/(catalog|web|ordering|payment)' || { echo "platform must not depend on business modules"; exit 1; }
 
 lint-decimals:
-	@! grep -rln --include='*.go' 'decimal.NewFromString' internal | grep -vE '^internal/catalog/internal/(domain/decimal\.go|postgres/)' || { echo "parse decimals with catalog.ParseDecimal or domain.ParseDecimal, not decimal.NewFromString"; exit 1; }
+	@! grep -rln --include='*.go' 'decimal.NewFromString' internal | grep -vE '^internal/(catalog/internal/(domain/decimal\.go|postgres/)|ordering/internal/postgres/)' || { echo "parse decimals with catalog.ParseDecimal or domain.ParseDecimal, not decimal.NewFromString"; exit 1; }
 
 tidy-check:
 	$(GO) mod tidy -diff

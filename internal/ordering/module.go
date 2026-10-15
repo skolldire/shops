@@ -1,0 +1,230 @@
+package ordering
+
+import (
+	"context"
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/skolldire/shops/internal/ordering/internal/app"
+	"github.com/skolldire/shops/internal/ordering/internal/catalogstock"
+	"github.com/skolldire/shops/internal/ordering/internal/domain"
+	"github.com/skolldire/shops/internal/ordering/internal/observe"
+	"github.com/skolldire/shops/internal/ordering/internal/paymentgw"
+	"github.com/skolldire/shops/internal/ordering/internal/postgres"
+	"github.com/skolldire/shops/internal/platform/database"
+	"github.com/skolldire/shops/internal/platform/logger"
+	"github.com/skolldire/shops/internal/platform/telemetry"
+)
+
+type Deps struct {
+	Pool     *pgxpool.Pool
+	Catalog  catalogstock.Catalog
+	Payments paymentgw.Provider
+	Log      logger.Service
+	Metrics  telemetry.Metrics
+	Budgets  Budgets
+}
+
+type Module struct {
+	checkout *app.Checkout
+	recovery *app.Recovery
+	queries  *app.Queries
+	cart     *app.Cart
+}
+
+type ports struct {
+	tx        app.Tx
+	purchases app.Purchases
+	carts     app.Carts
+}
+
+func NewModule(d Deps) (*Module, error) {
+	if d.Pool == nil {
+		return nil, errors.New("ordering: a pool is required")
+	}
+	manager, err := database.NewTxManager(d.Pool)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := postgres.NewTx(manager)
+	if err != nil {
+		return nil, err
+	}
+	purchases, err := postgres.NewPurchases(d.Pool)
+	if err != nil {
+		return nil, err
+	}
+	carts, err := postgres.NewCarts(d.Pool, manager)
+	if err != nil {
+		return nil, err
+	}
+	return newModule(ports{tx: tx, purchases: purchases, carts: carts}, d)
+}
+
+func newModule(p ports, d Deps) (*Module, error) {
+	if d.Log == nil || d.Metrics == nil {
+		return nil, errors.New("ordering: a logger and metrics are required")
+	}
+	stock, err := catalogstock.New(d.Catalog)
+	if err != nil {
+		return nil, err
+	}
+	payments, err := paymentgw.New(d.Payments)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := observe.NewCheckoutRecorder(d.Metrics, d.Log)
+	if err != nil {
+		return nil, err
+	}
+	budgets := app.Budgets{Reserve: d.Budgets.Reserve, Charge: d.Budgets.Charge, Finalize: d.Budgets.Finalize}
+	checkout, err := app.NewCheckout(p.tx, stock, payments, p.purchases, p.carts, rec, budgets)
+	if err != nil {
+		return nil, err
+	}
+	recovery, err := app.NewRecovery(p.tx, stock, payments, p.purchases, p.carts, rec, budgets, d.Budgets.Recovery)
+	if err != nil {
+		return nil, err
+	}
+	queries, err := app.NewQueries(p.purchases)
+	if err != nil {
+		return nil, err
+	}
+	cart, err := app.NewCart(p.carts, stock)
+	if err != nil {
+		return nil, err
+	}
+	return &Module{checkout: checkout, recovery: recovery, queries: queries, cart: cart}, nil
+}
+
+func (m *Module) CheckoutCart(ctx context.Context, userID, idempotencyKey, paymentToken string) (CheckoutResult, error) {
+	in, err := m.cart.CheckoutInput(ctx, userID, idempotencyKey, paymentToken)
+	if err != nil {
+		return CheckoutResult{}, publicError(err)
+	}
+	res, err := m.checkout.Checkout(ctx, userID, in)
+	if err != nil {
+		return CheckoutResult{}, publicError(err)
+	}
+	return CheckoutResult{Purchase: fromPurchase(res.Purchase), Kind: ResultKind(res.Kind)}, nil
+}
+
+func (m *Module) Purchase(ctx context.Context, userID, id string) (Purchase, error) {
+	p, err := m.queries.Purchase(ctx, userID, id)
+	if err != nil {
+		return Purchase{}, publicError(err)
+	}
+	return fromPurchase(p), nil
+}
+
+func (m *Module) Purchases(ctx context.Context, userID string, page, pageSize int) (PurchasePage, error) {
+	res, err := m.queries.Purchases(ctx, userID, page, pageSize)
+	if err != nil {
+		return PurchasePage{}, publicError(err)
+	}
+	out := PurchasePage{Items: make([]Purchase, len(res.Items)), Page: res.Page, PageSize: res.PageSize, Total: res.Total}
+	for i, p := range res.Items {
+		out.Items[i] = fromPurchase(p)
+	}
+	return out, nil
+}
+
+func (m *Module) Cart(ctx context.Context, userID string) (Cart, error) {
+	view, err := m.cart.View(ctx, userID)
+	if err != nil {
+		return Cart{}, publicError(err)
+	}
+	out := Cart{Lines: make([]CartLine, len(view.Lines)), EstimatedTotal: view.EstimatedTotal, HasWarnings: view.HasWarnings()}
+	for i, l := range view.Lines {
+		out.Lines[i] = CartLine{
+			ProductID: string(l.Item.ProductID), SKU: l.Product.SKU, Name: l.Product.Name, Quantity: l.Item.Quantity,
+			UnitPriceSeen: l.Item.UnitPriceSeen, CurrentPrice: l.Product.Price, Available: l.Product.Stock,
+			Unavailable: l.Unavailable, LowStock: l.LowStock, PriceChanged: l.PriceChanged,
+		}
+	}
+	return out, nil
+}
+
+func (m *Module) CartCount(ctx context.Context, userID string) (int, error) {
+	n, err := m.cart.Count(ctx, userID)
+	return n, publicError(err)
+}
+
+func (m *Module) AddToCart(ctx context.Context, userID, productID string, quantity int) error {
+	return publicError(m.cart.Add(ctx, userID, productID, quantity))
+}
+
+func (m *Module) SetQuantity(ctx context.Context, userID, productID string, quantity int) error {
+	return publicError(m.cart.SetQuantity(ctx, userID, productID, quantity))
+}
+
+func (m *Module) RemoveFromCart(ctx context.Context, userID, productID string) error {
+	return publicError(m.cart.Remove(ctx, userID, productID))
+}
+
+func (m *Module) AcceptCurrentPrice(ctx context.Context, userID, productID string) error {
+	return publicError(m.cart.AcceptCurrentPrice(ctx, userID, productID))
+}
+
+func (m *Module) RecoverPending(ctx context.Context) (RecoveryReport, error) {
+	report, err := m.recovery.RecoverPending(ctx)
+	if err != nil {
+		return RecoveryReport{}, err
+	}
+	out := RecoveryReport{Confirmed: report.Confirmed, Declined: report.Declined}
+	for _, p := range report.StillPending {
+		out.StillPending = append(out.StillPending, PendingPurchase{ID: string(p.PurchaseID), Cause: p.Cause})
+	}
+	return out, nil
+}
+
+func fromPurchase(p domain.Purchase) Purchase {
+	out := Purchase{
+		ID: string(p.ID), Status: Status(p.Status), Currency: p.Currency, Total: p.Total,
+		PaymentRef: p.PaymentRef, FailureReason: p.FailureReason, CreatedAt: p.CreatedAt,
+		Items: make([]PurchaseItem, len(p.Items)),
+	}
+	for i, it := range p.Items {
+		out.Items[i] = PurchaseItem{
+			ProductID: string(it.ProductID), SKU: it.SKU, Name: it.Name, UnitPrice: it.UnitPrice,
+			Quantity: it.Quantity, LineTotal: it.LineTotal,
+		}
+	}
+	return out
+}
+
+func publicError(err error) error {
+	var rejected *app.RejectedError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &rejected):
+		return &RejectedError{Reason: publicReason(rejected.Reason), Errors: rejected.Errors}
+	case errors.Is(err, domain.ErrInvalidIdempotencyKey):
+		return ErrInvalidIdempotencyKey
+	case errors.Is(err, domain.ErrInvalidID):
+		return ErrInvalidID
+	case errors.Is(err, app.ErrIdempotencyConflict):
+		return ErrIdempotencyConflict
+	case errors.Is(err, app.ErrPurchaseNotFound):
+		return ErrPurchaseNotFound
+	case errors.Is(err, app.ErrProductUnavailable):
+		return ErrProductUnavailable
+	case errors.Is(err, app.ErrCartFull):
+		return ErrCartFull
+	case errors.Is(err, app.ErrBusy):
+		return ErrTryAgain
+	}
+	return err
+}
+
+func publicReason(reason error) error {
+	switch {
+	case errors.Is(reason, app.ErrInsufficientStock):
+		return ErrInsufficientStock
+	case errors.Is(reason, app.ErrPriceChanged):
+		return ErrPriceChanged
+	}
+	return ErrProductUnavailable
+}
