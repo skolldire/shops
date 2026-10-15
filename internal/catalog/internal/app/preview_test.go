@@ -131,3 +131,102 @@ func TestAnExpiredPreviewIsCancelledWhenItIsRead(t *testing.T) {
 	_, err = previews.Get(context.Background(), "not-an-id")
 	require.ErrorIs(t, err, app.ErrImportNotFound)
 }
+
+func TestConfirmingAPreviewAppliesItOnceInItsMode(t *testing.T) {
+	for _, mode := range []domain.ImportMode{domain.ImportReplace, domain.ImportAdd} {
+		t.Run(string(mode), func(t *testing.T) {
+			previews, log, store := newPreviews(t, previewTargets)
+			id, err := previews.Create(context.Background(), keyed(mode, importKey, "h", previewBody))
+			require.NoError(t, err)
+
+			report, err := previews.Confirm(context.Background(), id, false)
+			require.NoError(t, err)
+			require.Equal(t, id, report.ID)
+			require.Equal(t, mode, report.Mode)
+			require.False(t, report.PreviewChanged)
+			require.Equal(t, []domain.ImportMode{mode}, store.modes)
+			require.Equal(t, []string{id}, store.references)
+			stored, err := log.Get(context.Background(), id)
+			require.NoError(t, err)
+			require.Equal(t, domain.ImportApplied, stored.Status)
+
+			again, err := previews.Confirm(context.Background(), id, false)
+			require.NoError(t, err)
+			require.Equal(t, report, again)
+			require.Len(t, store.batches, 1, "a second confirmation applies nothing")
+		})
+	}
+}
+
+func TestAConfirmationRecalculatesAndSaysWhenThePreviewChanged(t *testing.T) {
+	targets := fakeTargets{"OLD-1": {Stock: 10, Reserved: 1}}
+	previews, _, _ := newPreviews(t, targets)
+	id, err := previews.Create(context.Background(), keyed(domain.ImportAdd, importKey, "h", csvHeader+"Old,OLD-1,,A,5,3,1\n"))
+	require.NoError(t, err)
+	targets["OLD-1"] = domain.ImportTarget{Stock: 8, Reserved: 1}
+
+	report, err := previews.Confirm(context.Background(), id, false)
+	require.NoError(t, err)
+	require.True(t, report.PreviewChanged)
+}
+
+func TestConfirmingARepeatedAddNeedsTheExplicitConfirmation(t *testing.T) {
+	previews, log, store := newPreviews(t, previewTargets)
+	log.Set(app.ImportRecord{ID: "00000000-0000-4000-8000-000000000050", Mode: domain.ImportAdd, Status: domain.ImportApplied, File: app.ImportFile{SHA256: "h"}})
+	id, err := previews.Create(context.Background(), keyed(domain.ImportAdd, importKey, "h", previewBody))
+	require.NoError(t, err)
+
+	_, err = previews.Confirm(context.Background(), id, false)
+	require.ErrorIs(t, err, app.ErrDuplicateFile)
+	require.Empty(t, store.batches)
+	_, err = previews.Confirm(context.Background(), id, true)
+	require.NoError(t, err)
+}
+
+func TestAnImportLeftApplyingIsResumedByConfirmingItAgain(t *testing.T) {
+	previews, log, store := newPreviews(t, previewTargets)
+	id, err := previews.Create(context.Background(), keyed(domain.ImportReplace, importKey, "h", previewBody))
+	require.NoError(t, err)
+	_, err = log.StartApplying(context.Background(), id)
+	require.NoError(t, err)
+
+	report, err := previews.Confirm(context.Background(), id, false)
+	require.NoError(t, err)
+	require.Equal(t, id, report.ID)
+	require.Len(t, store.batches, 1)
+}
+
+func TestOnlyAPreviewCanBeCancelledAndACancelledOneCannotBeConfirmed(t *testing.T) {
+	previews, log, _ := newPreviews(t, previewTargets)
+	id, err := previews.Create(context.Background(), keyed(domain.ImportReplace, importKey, "h", previewBody))
+	require.NoError(t, err)
+	require.NoError(t, previews.Cancel(context.Background(), id))
+	require.NoError(t, previews.Cancel(context.Background(), id), "cancelling twice is harmless")
+	stored, err := log.Get(context.Background(), id)
+	require.NoError(t, err)
+	require.Equal(t, []any{domain.ImportCancelled, domain.CancelledByUser}, []any{stored.Status, stored.CancelReason})
+	_, err = previews.Confirm(context.Background(), id, false)
+	require.ErrorIs(t, err, app.ErrImportCancelled)
+
+	applied, err := previews.Create(context.Background(), keyed(domain.ImportReplace, otherKey, "h", previewBody))
+	require.NoError(t, err)
+	_, err = previews.Confirm(context.Background(), applied, false)
+	require.NoError(t, err)
+	require.ErrorIs(t, previews.Cancel(context.Background(), applied), app.ErrImportNotCancellable)
+}
+
+func TestConfirmingAnExpiredPreviewAsksForTheFileAgain(t *testing.T) {
+	previews, log, store := newPreviews(t, previewTargets)
+	id, err := previews.Create(context.Background(), keyed(domain.ImportReplace, importKey, "h", previewBody))
+	require.NoError(t, err)
+	stale, err := log.Get(context.Background(), id)
+	require.NoError(t, err)
+	stale.Expired = true
+	log.Set(stale)
+
+	_, err = previews.Confirm(context.Background(), id, false)
+	require.ErrorIs(t, err, app.ErrPreviewExpired)
+	_, err = previews.Confirm(context.Background(), id, false)
+	require.ErrorIs(t, err, app.ErrPreviewExpired, "it stays expired")
+	require.Empty(t, store.batches)
+}

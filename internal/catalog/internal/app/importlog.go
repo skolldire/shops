@@ -16,6 +16,8 @@ var (
 	ErrImportCancelled        = errors.New("catalog: the import was cancelled")
 	ErrImportNotApplicable    = errors.New("catalog: the import cannot be applied")
 	ErrDuplicateFile          = errors.New("catalog: the same file was already added")
+	ErrPreviewExpired         = errors.New("catalog: the import preview expired, upload the file again")
+	ErrImportNotCancellable   = errors.New("catalog: only an import preview can be cancelled")
 )
 
 type DuplicateFileError struct {

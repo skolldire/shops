@@ -173,6 +173,18 @@ func (m *Module) ImportPreview(ctx context.Context, id string) (ImportPreview, e
 	return fromPreview(view), nil
 }
 
+func (m *Module) ConfirmImport(ctx context.Context, id string, allowDuplicate bool) (ImportReport, error) {
+	report, err := m.previews.Confirm(ctx, id, allowDuplicate)
+	if err != nil {
+		return ImportReport{}, publicImportError(err)
+	}
+	return fromReport(report), nil
+}
+
+func (m *Module) CancelImport(ctx context.Context, id string) error {
+	return publicImportError(m.previews.Cancel(ctx, id))
+}
+
 func fromPreview(v app.PreviewView) ImportPreview {
 	rec := v.Record
 	out := ImportPreview{
@@ -403,6 +415,10 @@ func publicImportError(err error) error {
 		return ErrImportNotFound
 	case errors.Is(err, app.ErrTooManyPreviews):
 		return ErrTooManyPreviews
+	case errors.Is(err, app.ErrPreviewExpired):
+		return ErrPreviewExpired
+	case errors.Is(err, app.ErrImportNotCancellable):
+		return ErrImportNotCancellable
 	}
 	return err
 }

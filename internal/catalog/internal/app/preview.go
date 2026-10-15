@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
@@ -92,6 +93,69 @@ func (p *Previews) Get(ctx context.Context, id string) (PreviewView, error) {
 		}
 	}
 	return view, nil
+}
+
+func (p *Previews) Confirm(ctx context.Context, id string, allowDuplicate bool) (ImportReport, error) {
+	rec, err := p.record(ctx, id)
+	if err != nil {
+		return ImportReport{}, err
+	}
+	switch rec.Status {
+	case domain.ImportApplied:
+		return rec.Report, nil
+	case domain.ImportCancelled:
+		return ImportReport{}, cancelled(rec)
+	}
+	rows, err := p.reader.Rows(rec.Content)
+	if err != nil {
+		return ImportReport{}, err
+	}
+	req := ImportRequest{File: rec.File, Content: rec.Content, Rows: rows, Mode: rec.Mode, Key: rec.Key, AllowDuplicate: allowDuplicate}
+	current, err := p.compute(ctx, req)
+	if err != nil {
+		return ImportReport{}, err
+	}
+	changed := !slices.Equal(current.Lines, rec.Preview)
+	if rec.Mode == domain.ImportAdd {
+		return p.importer.confirmAdd(ctx, rec.ID, req, changed)
+	}
+	if rec.Status == domain.ImportPreview {
+		started, err := p.log.StartApplying(ctx, rec.ID)
+		if err != nil {
+			return ImportReport{}, err
+		}
+		if !started {
+			return p.Confirm(ctx, rec.ID, allowDuplicate)
+		}
+	}
+	report, valid := p.importer.prepare(req)
+	report.PreviewChanged = changed
+	return p.importer.runReplace(ctx, rec.ID, report, valid)
+}
+
+func (p *Previews) Cancel(ctx context.Context, id string) error {
+	rec, err := p.record(ctx, id)
+	if err != nil {
+		return err
+	}
+	switch rec.Status {
+	case domain.ImportCancelled:
+		return nil
+	case domain.ImportPreview:
+		done, err := p.log.Cancel(ctx, rec.ID, domain.CancelledByUser)
+		if err != nil || done {
+			return err
+		}
+		return p.Cancel(ctx, rec.ID)
+	}
+	return ErrImportNotCancellable
+}
+
+func cancelled(rec ImportRecord) error {
+	if rec.CancelReason == domain.CancelledExpired {
+		return ErrPreviewExpired
+	}
+	return ErrImportCancelled
 }
 
 func (p *Previews) record(ctx context.Context, id string) (ImportRecord, error) {

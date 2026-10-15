@@ -246,6 +246,41 @@ func (i *Importer) refuseDuplicate(ctx context.Context, rec ImportRecord, allow 
 	return nil
 }
 
+func (i *Importer) confirmAdd(ctx context.Context, id string, req ImportRequest, changed bool) (ImportReport, error) {
+	ctx, unlock, err := i.log.Lock(ctx, id)
+	if err != nil {
+		return ImportReport{}, err
+	}
+	defer unlock()
+	rec, err := i.log.Get(ctx, id)
+	switch {
+	case err != nil:
+		return ImportReport{}, err
+	case rec.Status == domain.ImportApplied:
+		return rec.Report, nil
+	case rec.Status == domain.ImportCancelled:
+		return ImportReport{}, cancelled(rec)
+	}
+	prepared, valid := i.prepare(req)
+	prepared.PreviewChanged = changed
+	report := prepared
+	err = i.tx.WithinTx(ctx, func(ctx context.Context) error {
+		if err := i.refuseDuplicate(ctx, rec, req.AllowDuplicate); err != nil {
+			return err
+		}
+		report = prepared
+		return i.applyAdd(ctx, id, &report, valid)
+	})
+	switch {
+	case errors.Is(err, errFinishLost):
+		return i.applied(ctx, id)
+	case err != nil:
+		return ImportReport{}, fmt.Errorf("catalog: add import not applied: %w", err)
+	}
+	i.record(ctx, report)
+	return report, nil
+}
+
 func (i *Importer) applyAdd(ctx context.Context, id string, report *ImportReport, valid []importRow) error {
 	report.ID = id
 	for batch := range slices.Chunk(valid, importBatchSize) {

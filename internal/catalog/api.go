@@ -26,6 +26,8 @@ var (
 	ErrDuplicateFile          = errors.New("catalog: the same file was already added")
 	ErrImportNotFound         = errors.New("catalog: import not found")
 	ErrTooManyPreviews        = errors.New("catalog: too many import previews are waiting for a confirmation")
+	ErrPreviewExpired         = errors.New("catalog: the import preview expired, upload the file again")
+	ErrImportNotCancellable   = errors.New("catalog: only an import preview can be cancelled")
 
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")
