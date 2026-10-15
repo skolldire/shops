@@ -20,10 +20,11 @@ type fakeCatalog struct {
 	err       error
 	requests  []catalog.StockRequest
 	reference string
+	settled   string
 	product   catalog.Product
 }
 
-func (f *fakeCatalog) TakeStock(_ context.Context, items []catalog.StockRequest, reference string) ([]catalog.StockLine, error) {
+func (f *fakeCatalog) ReserveStock(_ context.Context, items []catalog.StockRequest, reference string) ([]catalog.StockLine, error) {
 	f.requests, f.reference = items, reference
 	if f.err != nil {
 		return nil, f.err
@@ -31,8 +32,13 @@ func (f *fakeCatalog) TakeStock(_ context.Context, items []catalog.StockRequest,
 	return []catalog.StockLine{{ProductID: id, SKU: "A-1", Name: "Alpha", Price: decimal.RequireFromString("2.50"), Quantity: 2}}, nil
 }
 
-func (f *fakeCatalog) ReturnStock(_ context.Context, items []catalog.StockRequest, reference string) error {
-	f.requests, f.reference = items, reference
+func (f *fakeCatalog) ReleaseStock(_ context.Context, items []catalog.StockRequest, reference string) error {
+	f.requests, f.reference, f.settled = items, reference, "released"
+	return f.err
+}
+
+func (f *fakeCatalog) CommitStock(_ context.Context, items []catalog.StockRequest, reference string) error {
+	f.requests, f.reference, f.settled = items, reference, "committed"
 	return f.err
 }
 
@@ -46,31 +52,37 @@ func TestStockTranslatesTheCatalog(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	lines, err := s.Take(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "purchase-1")
+	lines, err := s.Reserve(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "purchase-1")
 	require.NoError(t, err)
 	require.Equal(t, []domain.ReservedLine{{ProductID: id, SKU: "A-1", Name: "Alpha", Price: decimal.RequireFromString("2.50"), Quantity: 2}}, lines)
 	require.Equal(t, []catalog.StockRequest{{ProductID: id, Quantity: 2}}, c.requests)
 	require.Equal(t, "purchase-1", c.reference)
 
-	require.NoError(t, s.Return(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "purchase-1"))
+	require.NoError(t, s.Release(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "purchase-1"))
+	require.Equal(t, "released", c.settled)
+	require.NoError(t, s.Commit(ctx, []domain.Quantity{{ProductID: id, Quantity: 1}}, "purchase-2"))
+	require.Equal(t, "committed", c.settled)
+	require.Equal(t, []catalog.StockRequest{{ProductID: id, Quantity: 1}}, c.requests)
+	require.Equal(t, "purchase-2", c.reference)
 
 	c.err = &catalog.ProductUnavailableError{ProductID: id}
-	_, err = s.Take(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "p")
+	_, err = s.Reserve(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "p")
 	var unavailable *app.UnavailableProductError
 	require.ErrorAs(t, err, &unavailable)
 	require.Equal(t, domain.ID(id), unavailable.ProductID)
 
 	c.err = &catalog.InsufficientStockError{ProductID: id, Available: 1}
-	_, err = s.Take(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "p")
+	_, err = s.Reserve(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "p")
 	var short *app.InsufficientStockError
 	require.ErrorAs(t, err, &short)
 	require.Equal(t, 1, short.Available)
 
 	boom := errors.New("deadlock")
 	c.err = boom
-	_, err = s.Take(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "p")
+	_, err = s.Reserve(ctx, []domain.Quantity{{ProductID: id, Quantity: 2}}, "p")
 	require.ErrorIs(t, err, boom)
-	require.ErrorIs(t, s.Return(ctx, nil, "p"), boom)
+	require.ErrorIs(t, s.Release(ctx, nil, "p"), boom)
+	require.ErrorIs(t, s.Commit(ctx, nil, "p"), boom)
 
 	c.err = catalog.ErrNotFound
 	_, err = s.Product(ctx, id)

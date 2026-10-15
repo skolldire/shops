@@ -29,8 +29,6 @@ type Repository interface {
 }
 
 type StockStore interface {
-	TakeStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error)
-	ReturnStock(ctx context.Context, items []domain.StockRequest, reference string) error
 	ReserveStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error)
 	ReleaseStock(ctx context.Context, items []domain.StockRequest, reference string) error
 	CommitStock(ctx context.Context, items []domain.StockRequest, reference string) error

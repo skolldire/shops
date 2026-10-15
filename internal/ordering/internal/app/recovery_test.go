@@ -60,7 +60,7 @@ func TestRecoveryKeepsPendingWhileTheProviderIsUnavailable(t *testing.T) {
 	require.Len(t, report.StillPending, 1)
 	require.Equal(t, first.Purchase.ID, report.StillPending[0].PurchaseID)
 	require.ErrorIs(t, report.StillPending[0].Cause, app.ErrPaymentUnavailable)
-	require.Zero(t, f.w.state.returns, "an unavailable provider does not prove the earlier attempt did not charge")
+	require.Zero(t, f.w.state.releases, "an unavailable provider does not prove the earlier attempt did not charge")
 	require.Equal(t, 3, f.w.stockOf(f.a))
 
 	f.pay.set(approve)
@@ -80,7 +80,7 @@ func TestRecoveryDeclinesAndReturnsStockOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, app.RecoveryReport{Declined: 1}, report)
 	require.Equal(t, 5, f.w.stockOf(f.a))
-	require.Equal(t, 1, f.w.state.returns)
+	require.Equal(t, 1, f.w.state.releases)
 }
 
 func TestRecoveryRespectsItsTotalBudgetDuringACharge(t *testing.T) {

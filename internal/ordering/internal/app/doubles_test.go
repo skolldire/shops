@@ -21,14 +21,17 @@ type state struct {
 	stock     map[domain.ID]app.Product
 	deleted   map[domain.ID]bool
 	carts     map[string][]domain.CartItem
-	returns   int
-	takes     int
+	reserved  map[domain.ID]int
+	releases  int
+	reserves  int
+	commits   int
 }
 
 func (s state) clone() state {
 	c := state{
 		purchases: maps.Clone(s.purchases), stock: maps.Clone(s.stock), deleted: maps.Clone(s.deleted),
-		carts: map[string][]domain.CartItem{}, returns: s.returns, takes: s.takes,
+		carts: map[string][]domain.CartItem{}, reserved: maps.Clone(s.reserved),
+		releases: s.releases, reserves: s.reserves, commits: s.commits,
 	}
 	for k, v := range s.purchases {
 		v.Items = slices.Clone(v.Items)
@@ -41,15 +44,15 @@ func (s state) clone() state {
 }
 
 type world struct {
-	mu      sync.Mutex
-	state   state
-	nextID  int
-	clock   time.Time
-	inTx    bool
-	txErr   error
-	takeErr error
-	finErr  error
-	listErr error
+	mu         sync.Mutex
+	state      state
+	nextID     int
+	clock      time.Time
+	inTx       bool
+	txErr      error
+	reserveErr error
+	finErr     error
+	listErr    error
 }
 
 type txKey struct{}
@@ -58,7 +61,7 @@ func newWorld() *world {
 	return &world{
 		state: state{
 			purchases: map[domain.ID]domain.Purchase{}, stock: map[domain.ID]app.Product{},
-			deleted: map[domain.ID]bool{}, carts: map[string][]domain.CartItem{},
+			deleted: map[domain.ID]bool{}, carts: map[string][]domain.CartItem{}, reserved: map[domain.ID]int{},
 		},
 		clock: time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC),
 	}
@@ -228,9 +231,9 @@ func (w *world) Finish(ctx context.Context, id domain.ID, o domain.Outcome) (boo
 	return won, nil
 }
 
-func (w *world) Take(ctx context.Context, items []domain.Quantity, _ string) ([]domain.ReservedLine, error) {
-	if w.takeErr != nil {
-		return nil, w.takeErr
+func (w *world) Reserve(ctx context.Context, items []domain.Quantity, _ string) ([]domain.ReservedLine, error) {
+	if w.reserveErr != nil {
+		return nil, w.reserveErr
 	}
 	var (
 		lines []domain.ReservedLine
@@ -249,23 +252,42 @@ func (w *world) Take(ctx context.Context, items []domain.Quantity, _ string) ([]
 			}
 			p.Stock -= it.Quantity
 			w.state.stock[it.ProductID] = p
+			w.state.reserved[it.ProductID] += it.Quantity
 			lines = append(lines, domain.ReservedLine{ProductID: p.ID, SKU: p.SKU, Name: p.Name, Price: p.Price, Quantity: it.Quantity})
 		}
-		w.state.takes++
+		w.state.reserves++
 	})
 	return lines, err
 }
 
-func (w *world) Return(ctx context.Context, items []domain.Quantity, _ string) error {
+func (w *world) Release(ctx context.Context, items []domain.Quantity, _ string) error {
+	return w.settle(ctx, items, func(id domain.ID, q int) {
+		p := w.state.stock[id]
+		p.Stock += q
+		w.state.stock[id] = p
+	}, &w.state.releases)
+}
+
+func (w *world) Commit(ctx context.Context, items []domain.Quantity, _ string) error {
+	return w.settle(ctx, items, func(domain.ID, int) {}, &w.state.commits)
+}
+
+func (w *world) settle(ctx context.Context, items []domain.Quantity, apply func(domain.ID, int), counter *int) error {
+	var err error
 	w.locked(ctx, func() {
 		for _, it := range items {
-			p := w.state.stock[it.ProductID]
-			p.Stock += it.Quantity
-			w.state.stock[it.ProductID] = p
+			if w.state.reserved[it.ProductID] < it.Quantity {
+				err = fmt.Errorf("product %s has fewer than %d reserved units", it.ProductID, it.Quantity)
+				return
+			}
 		}
-		w.state.returns++
+		for _, it := range items {
+			w.state.reserved[it.ProductID] -= it.Quantity
+			apply(it.ProductID, it.Quantity)
+		}
+		*counter++
 	})
-	return nil
+	return err
 }
 
 func (w *world) Product(ctx context.Context, id domain.ID) (app.Product, error) {

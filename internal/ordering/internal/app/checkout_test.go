@@ -82,6 +82,9 @@ func TestNewKeyApprovedConfirmsOnceAndCleansTheCart(t *testing.T) {
 	require.Equal(t, "59.98", p.Items[0].LineTotal.StringFixed(2))
 	require.Equal(t, 3, f.w.stockOf(f.a))
 	require.Equal(t, 9, f.w.stockOf(f.b))
+	require.Equal(t, 1, f.w.state.commits)
+	require.Zero(t, f.w.state.releases)
+	require.Zero(t, f.w.state.reserved[f.a], "the reservation becomes a sale")
 	require.Equal(t, 1, f.pay.effective())
 	require.Equal(t, []domain.CartItem{{ProductID: f.b, Quantity: 3, UnitPriceSeen: *price("5.00")}}, f.w.state.carts["alice"],
 		"only the line bought as it was is removed")
@@ -101,7 +104,9 @@ func TestNewKeyDeclinedReturnsStockOnceAndKeepsTheCart(t *testing.T) {
 	require.Equal(t, "card_declined", res.Purchase.FailureReason)
 	require.Equal(t, 5, f.w.stockOf(f.a))
 	require.Equal(t, 10, f.w.stockOf(f.b))
-	require.Equal(t, 1, f.w.state.returns)
+	require.Equal(t, 1, f.w.state.releases)
+	require.Zero(t, f.w.state.commits)
+	require.Zero(t, f.w.state.reserved[f.a])
 	require.Equal(t, cart, f.w.state.carts["alice"])
 	require.Equal(t, []string{app.OutcomeDeclined}, f.rec.outcomes())
 }
@@ -115,7 +120,7 @@ func TestUnknownOutcomeKeepsThePurchasePendingWithTheStockTaken(t *testing.T) {
 			require.Equal(t, app.Created, res.Kind)
 			require.Equal(t, domain.StatusPending, res.Purchase.Status)
 			require.Equal(t, 3, f.w.stockOf(f.a))
-			require.Zero(t, f.w.state.returns)
+			require.Zero(t, f.w.state.releases)
 			require.Equal(t, []string{app.OutcomePending}, f.rec.outcomes())
 			require.Error(t, f.rec.events[0].cause)
 		})
@@ -130,9 +135,27 @@ func TestFinalizationFailureAfterAnApprovedChargeKeepsThePurchasePending(t *test
 	require.Equal(t, domain.StatusPending, res.Purchase.Status)
 	require.Equal(t, 1, f.pay.effective())
 	require.Equal(t, 3, f.w.stockOf(f.a))
-	require.Zero(t, f.w.state.returns)
+	require.Zero(t, f.w.state.releases)
 	require.Equal(t, []string{app.OutcomePending}, f.rec.outcomes())
 	require.ErrorContains(t, f.rec.events[0].cause, "connection reset")
+}
+
+func TestAReservationThatDoesNotMatchTheStockKeepsThePurchasePending(t *testing.T) {
+	f := setup(t, approve)
+	f.w.state.carts["alice"] = []domain.CartItem{{ProductID: f.a, Quantity: 2, UnitPriceSeen: *price("29.99")}}
+	f.pay.onCharge = func() {
+		f.w.mu.Lock()
+		defer f.w.mu.Unlock()
+		f.w.state.reserved[f.a] = 1
+	}
+	res, err := f.run(t, f.standard())
+	require.NoError(t, err)
+	require.Equal(t, domain.StatusPending, res.Purchase.Status)
+	require.Zero(t, f.w.state.commits)
+	require.Equal(t, 1, f.w.state.reserved[f.a], "nothing is corrected silently")
+	require.Len(t, f.w.state.carts["alice"], 1, "the cart is not touched when the commit fails")
+	require.Equal(t, []string{app.OutcomePending}, f.rec.outcomes())
+	require.ErrorContains(t, f.rec.events[0].cause, "fewer than 2 reserved units")
 }
 
 func TestSameKeySameHashFinishedReplaysWithoutEffects(t *testing.T) {
@@ -141,7 +164,7 @@ func TestSameKeySameHashFinishedReplaysWithoutEffects(t *testing.T) {
 			f := setup(t, m)
 			first, err := f.run(t, f.standard())
 			require.NoError(t, err)
-			stock, returns := f.w.stockOf(f.a), f.w.state.returns
+			stock, returns := f.w.stockOf(f.a), f.w.state.releases
 
 			again, err := f.run(t, order(key, "pm_approved", line(f.b, 1, "5"), line(f.a, 2, "29.990")))
 			require.NoError(t, err)
@@ -149,7 +172,7 @@ func TestSameKeySameHashFinishedReplaysWithoutEffects(t *testing.T) {
 			require.Equal(t, first.Purchase, again.Purchase)
 			require.Equal(t, 1, f.pay.received())
 			require.Equal(t, stock, f.w.stockOf(f.a))
-			require.Equal(t, returns, f.w.state.returns)
+			require.Equal(t, returns, f.w.state.releases)
 			require.Equal(t, 1, f.w.count())
 			require.Equal(t, app.OutcomeReplayed, f.rec.outcomes()[1])
 		})
@@ -200,7 +223,7 @@ func TestTheKeyIsScopedByUser(t *testing.T) {
 
 func TestRecoverableLockErrorRollsBackAndCountsOnlyTryAgain(t *testing.T) {
 	f := setup(t, approve)
-	f.w.takeErr = errors.New("deadlock detected")
+	f.w.reserveErr = errors.New("deadlock detected")
 	f.w.txErr = app.ErrBusy
 	_, err := f.run(t, f.standard())
 	require.ErrorIs(t, err, app.ErrBusy)
@@ -209,7 +232,7 @@ func TestRecoverableLockErrorRollsBackAndCountsOnlyTryAgain(t *testing.T) {
 	require.Zero(t, f.pay.received())
 	require.Equal(t, []string{app.OutcomeTryAgain}, f.rec.outcomes())
 
-	f.w.takeErr, f.w.txErr = nil, nil
+	f.w.reserveErr, f.w.txErr = nil, nil
 	res, err := f.run(t, f.standard())
 	require.NoError(t, err)
 	require.Equal(t, app.Created, res.Kind, "the client can retry with the same key")
@@ -217,7 +240,7 @@ func TestRecoverableLockErrorRollsBackAndCountsOnlyTryAgain(t *testing.T) {
 
 func TestUnexpectedFailureCountsOnlyError(t *testing.T) {
 	f := setup(t, approve)
-	f.w.takeErr = errors.New("connection refused")
+	f.w.reserveErr = errors.New("connection refused")
 	_, err := f.run(t, f.standard())
 	require.ErrorContains(t, err, "connection refused")
 	require.NotErrorIs(t, err, app.ErrBusy)

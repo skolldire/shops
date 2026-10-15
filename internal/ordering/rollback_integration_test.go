@@ -64,9 +64,9 @@ func TestAFailedReservationLeavesNoPurchaseStockChangeOrMovement(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			products := c.prepare(t)
-			before := map[string]int{}
+			before := map[string][2]int{}
 			for _, p := range products {
-				before[p.ID] = f.stock(t, p.ID)
+				before[p.ID] = [2]int{f.stock(t, p.ID), f.reserved(t, p.ID)}
 			}
 			movements := f.count(t, `SELECT count(*) FROM inventory_movements`)
 
@@ -78,7 +78,7 @@ func TestAFailedReservationLeavesNoPurchaseStockChangeOrMovement(t *testing.T) {
 			require.ErrorContains(t, err, c.cause)
 
 			for _, p := range products {
-				require.Equal(t, before[p.ID], f.stock(t, p.ID), p.SKU)
+				require.Equal(t, before[p.ID], [2]int{f.stock(t, p.ID), f.reserved(t, p.ID)}, p.SKU)
 				require.NoError(t, f.orders.RemoveFromCart(ctx, "alice", p.ID))
 			}
 			require.Equal(t, movements, f.count(t, `SELECT count(*) FROM inventory_movements`))

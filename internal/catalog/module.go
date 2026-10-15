@@ -216,22 +216,6 @@ func (m *Module) Categories(ctx context.Context) ([]string, error) {
 	return categories, nil
 }
 
-func (m *Module) TakeStock(ctx context.Context, items []StockRequest, reference string) ([]StockLine, error) {
-	lines, err := m.inventory.TakeStock(ctx, toStockRequests(items), reference)
-	if err != nil {
-		return nil, publicError(err)
-	}
-	out := make([]StockLine, len(lines))
-	for i, l := range lines {
-		out[i] = StockLine{ProductID: l.ProductID, SKU: l.SKU, Name: l.Name, Price: l.Price, Quantity: l.Quantity}
-	}
-	return out, nil
-}
-
-func (m *Module) ReturnStock(ctx context.Context, items []StockRequest, reference string) error {
-	return publicError(m.inventory.ReturnStock(ctx, toStockRequests(items), reference))
-}
-
 func (m *Module) ReserveStock(ctx context.Context, items []StockRequest, reference string) ([]StockLine, error) {
 	lines, err := m.inventory.ReserveStock(ctx, toStockRequests(items), reference)
 	if err != nil {

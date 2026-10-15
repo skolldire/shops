@@ -16,21 +16,10 @@ const (
 )
 
 type fakeStock struct {
-	taken, returned               []domain.StockRequest
 	reserved, released, committed []domain.StockRequest
 	reference                     string
 	paging                        domain.Paging
 	productID                     string
-}
-
-func (f *fakeStock) TakeStock(_ context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
-	f.taken, f.reference = items, reference
-	return []domain.StockLine{}, nil
-}
-
-func (f *fakeStock) ReturnStock(_ context.Context, items []domain.StockRequest, reference string) error {
-	f.returned, f.reference = items, reference
-	return nil
 }
 
 func (f *fakeStock) ReserveStock(_ context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
@@ -61,25 +50,6 @@ func newInventory(t *testing.T) (*app.Inventory, *fakeStock) {
 	return inv, store
 }
 
-func TestInventorySortsAndNormalizesStockRequests(t *testing.T) {
-	inv, store := newInventory(t)
-	upper := "22222222-2222-4222-8222-22222222222A"
-	_, err := inv.TakeStock(context.Background(), []domain.StockRequest{
-		{ProductID: upper, Quantity: 2}, {ProductID: firstID, Quantity: 1},
-	}, "ref-1")
-	require.NoError(t, err)
-	require.Equal(t, []domain.StockRequest{
-		{ProductID: firstID, Quantity: 1}, {ProductID: "22222222-2222-4222-8222-22222222222a", Quantity: 2},
-	}, store.taken)
-	require.Equal(t, "ref-1", store.reference)
-
-	require.NoError(t, inv.ReturnStock(context.Background(), []domain.StockRequest{
-		{ProductID: secondID, Quantity: 3}, {ProductID: firstID, Quantity: 4},
-	}, "ref-2"))
-	require.Equal(t, []domain.StockRequest{{ProductID: firstID, Quantity: 4}, {ProductID: secondID, Quantity: 3}}, store.returned)
-	require.Equal(t, "ref-2", store.reference)
-}
-
 func TestInventorySortsReservationsReleasesAndCommits(t *testing.T) {
 	inv, store := newInventory(t)
 	ctx := context.Background()
@@ -108,15 +78,10 @@ func TestInventoryRejectsInvalidStockRequests(t *testing.T) {
 	for name, items := range tests {
 		t.Run(name, func(t *testing.T) {
 			inv, store := newInventory(t)
-			_, err := inv.TakeStock(context.Background(), items, "ref")
-			require.ErrorIs(t, err, app.ErrInvalidStockRequest)
-			require.ErrorIs(t, inv.ReturnStock(context.Background(), items, "ref"), app.ErrInvalidStockRequest)
-			_, err = inv.ReserveStock(context.Background(), items, "ref")
+			_, err := inv.ReserveStock(context.Background(), items, "ref")
 			require.ErrorIs(t, err, app.ErrInvalidStockRequest)
 			require.ErrorIs(t, inv.ReleaseStock(context.Background(), items, "ref"), app.ErrInvalidStockRequest)
 			require.ErrorIs(t, inv.CommitStock(context.Background(), items, "ref"), app.ErrInvalidStockRequest)
-			require.Nil(t, store.taken)
-			require.Nil(t, store.returned)
 			require.Nil(t, store.reserved)
 			require.Nil(t, store.released)
 			require.Nil(t, store.committed)

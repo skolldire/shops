@@ -21,8 +21,9 @@ type Product struct {
 }
 
 type Stock interface {
-	Take(ctx context.Context, items []domain.Quantity, reference string) ([]domain.ReservedLine, error)
-	Return(ctx context.Context, items []domain.Quantity, reference string) error
+	Reserve(ctx context.Context, items []domain.Quantity, reference string) ([]domain.ReservedLine, error)
+	Release(ctx context.Context, items []domain.Quantity, reference string) error
+	Commit(ctx context.Context, items []domain.Quantity, reference string) error
 	Product(ctx context.Context, id domain.ID) (Product, error)
 }
 

@@ -25,7 +25,7 @@ func TestARecoveredPurchaseChargesTheStoredAmountAfterAPriceChange(t *testing.T)
 	require.Equal(t, "64.98", res.Purchase.Total.StringFixed(2))
 
 	report, err := f.catalog.Import(ctx, strings.NewReader(
-		"name,sku,description,category,price,stock,weight_kg\nProduct A-1,A-1,,Tests,39.99,3,1\n"), catalog.ImportOptions{FileName: "prices.csv"})
+		"name,sku,description,category,price,stock,weight_kg\nProduct A-1,A-1,,Tests,39.99,5,1\n"), catalog.ImportOptions{FileName: "prices.csv"})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Updated)
 	current, err := f.catalog.Get(ctx, b.ID)

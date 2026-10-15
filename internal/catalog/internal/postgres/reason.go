@@ -14,7 +14,6 @@ const (
 	reasonSale               = "sale"
 	reasonReservation        = "reservation"
 	reasonReservationRelease = "reservation_release"
-	reasonSaleReversal       = "sale_reversal"
 )
 
 func setStockReason(ctx context.Context, q database.Querier, reason, reference string) error {

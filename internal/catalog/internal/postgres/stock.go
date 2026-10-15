@@ -13,15 +13,6 @@ import (
 	"github.com/skolldire/shops/internal/platform/database"
 )
 
-const takeStock = `UPDATE products
-SET stock = stock - $2, version = version + 1, updated_at = now()
-WHERE id = $1::uuid AND status = 'ACTIVE' AND stock >= $2
-RETURNING sku, name, price::text`
-
-const returnStock = `UPDATE products
-SET stock = stock + $2, version = version + 1, updated_at = now()
-WHERE id = $1::uuid`
-
 const reserveStock = `UPDATE products
 SET reserved = reserved + $2
 WHERE id = $1::uuid AND status = 'ACTIVE' AND stock - reserved >= $2
@@ -93,37 +84,6 @@ func (r *Repository) settle(ctx context.Context, items []domain.StockRequest, re
 	})
 }
 
-func (r *Repository) TakeStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
-	lines := make([]domain.StockLine, 0, len(items))
-	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
-		lines = lines[:0]
-		q := database.Q(ctx, r.pool)
-		if err := setStockReason(ctx, q, reasonSale, reference); err != nil {
-			return err
-		}
-		for _, it := range items {
-			line := domain.StockLine{ProductID: it.ProductID, Quantity: it.Quantity}
-			var price string
-			err := q.QueryRow(ctx, takeStock, it.ProductID, it.Quantity).Scan(&line.SKU, &line.Name, &price)
-			if errors.Is(err, pgx.ErrNoRows) {
-				return r.stockShortage(ctx, q, it.ProductID)
-			}
-			if err != nil {
-				return fmt.Errorf("catalog: take stock: %w", err)
-			}
-			if line.Price, err = decimal.NewFromString(price); err != nil {
-				return fmt.Errorf("catalog: parse price: %w", err)
-			}
-			lines = append(lines, line)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return lines, nil
-}
-
 func (r *Repository) stockShortage(ctx context.Context, q database.Querier, id string) error {
 	var (
 		status    string
@@ -139,25 +99,6 @@ func (r *Repository) stockShortage(ctx context.Context, q database.Querier, id s
 		return &app.ProductUnavailableError{ProductID: id}
 	}
 	return &app.InsufficientStockError{ProductID: id, Available: available}
-}
-
-func (r *Repository) ReturnStock(ctx context.Context, items []domain.StockRequest, reference string) error {
-	return r.tx.WithinTx(ctx, func(ctx context.Context) error {
-		q := database.Q(ctx, r.pool)
-		if err := setStockReason(ctx, q, reasonSaleReversal, reference); err != nil {
-			return err
-		}
-		for _, it := range items {
-			tag, err := q.Exec(ctx, returnStock, it.ProductID, it.Quantity)
-			if err != nil {
-				return fmt.Errorf("catalog: return stock: %w", err)
-			}
-			if tag.RowsAffected() == 0 {
-				return fmt.Errorf("catalog: return stock: product %s does not exist", it.ProductID)
-			}
-		}
-		return nil
-	})
 }
 
 func (r *Repository) Movements(ctx context.Context, productID string, p domain.Paging) ([]domain.Movement, int, error) {

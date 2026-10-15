@@ -89,7 +89,7 @@ func (c *Checkout) reserve(ctx context.Context, req domain.CheckoutRequest) (dom
 		if !ok {
 			return errKeyExists
 		}
-		lines, err := c.stock.Take(ctx, req.Quantities(), string(p.ID))
+		lines, err := c.stock.Reserve(ctx, req.Quantities(), string(p.ID))
 		if err != nil {
 			return rejection(req, err)
 		}

@@ -115,6 +115,39 @@ func TestReservations(t *testing.T) {
 		f.requireBalanced(t)
 	})
 
+	t.Run("a short item rolls back the reservations before it", func(t *testing.T) {
+		f.reset(t)
+		a, b := f.create(t, "A-1", "Alpha", "Sports", "1.00", 5), f.create(t, "B-1", "Beta", "Sports", "1.00", 1)
+		_, err := f.repo.ReserveStock(ctx, []domain.StockRequest{{ProductID: a.ID, Quantity: 2}, {ProductID: b.ID, Quantity: 2}}, "purchase-1")
+		var short *app.InsufficientStockError
+		require.ErrorAs(t, err, &short)
+		require.Equal(t, b.ID, short.ProductID)
+		require.Equal(t, 1, short.Available)
+		require.Equal(t, stockState{5, 0, 1}, f.state(t, a.ID))
+		require.Empty(t, f.reservedMovements(t, a.ID))
+
+		_, err = f.repo.ReserveStock(ctx, []domain.StockRequest{{ProductID: "9b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b", Quantity: 1}}, "purchase-2")
+		var unavailable *app.ProductUnavailableError
+		require.ErrorAs(t, err, &unavailable)
+		require.Equal(t, "9b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b", unavailable.ProductID)
+	})
+
+	t.Run("a writer without reference does not inherit the previous one in the same transaction", func(t *testing.T) {
+		f.reset(t)
+		a := f.create(t, "A-1", "Alpha", "Sports", "1.00", 5)
+		tm, err := database.NewTxManager(f.pool)
+		require.NoError(t, err)
+		require.NoError(t, tm.WithinTx(ctx, func(ctx context.Context) error {
+			if _, err := f.repo.ReserveStock(ctx, req(a, 1), "purchase-1"); err != nil {
+				return err
+			}
+			_, err := f.repo.Update(ctx, a.ID, a.Version, domain.Changes{Stock: ip(9)})
+			return err
+		}))
+		require.Equal(t, [][3]any{{0, 1, "reservation:purchase-1"}, {4, 0, "manual_adjustment:"}}, f.reservedMovements(t, a.ID),
+			"the reservation did not change the version the edit was based on")
+	})
+
 	t.Run("the operations run in the caller's transaction", func(t *testing.T) {
 		f.reset(t)
 		a := f.create(t, "A-1", "Alpha", "Sports", "1.00", 5)

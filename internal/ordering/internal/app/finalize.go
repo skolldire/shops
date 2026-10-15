@@ -25,9 +25,11 @@ func (f finalizer) finalize(ctx context.Context, p domain.Purchase, o domain.Out
 		}
 		switch o.Status {
 		case domain.StatusConfirmed:
-			err = f.carts.RemovePurchased(ctx, p.UserID, p.Items)
+			if err = f.stock.Commit(ctx, p.Quantities(), string(p.ID)); err == nil {
+				err = f.carts.RemovePurchased(ctx, p.UserID, p.Items)
+			}
 		case domain.StatusFailed:
-			err = f.stock.Return(ctx, p.Quantities(), string(p.ID))
+			err = f.stock.Release(ctx, p.Quantities(), string(p.ID))
 		default:
 			err = domain.ErrInvalidTransition
 		}

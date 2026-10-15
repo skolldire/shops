@@ -10,8 +10,9 @@ import (
 )
 
 type Catalog interface {
-	TakeStock(ctx context.Context, items []catalog.StockRequest, reference string) ([]catalog.StockLine, error)
-	ReturnStock(ctx context.Context, items []catalog.StockRequest, reference string) error
+	ReserveStock(ctx context.Context, items []catalog.StockRequest, reference string) ([]catalog.StockLine, error)
+	ReleaseStock(ctx context.Context, items []catalog.StockRequest, reference string) error
+	CommitStock(ctx context.Context, items []catalog.StockRequest, reference string) error
 	Get(ctx context.Context, id string) (catalog.Product, error)
 }
 
@@ -26,8 +27,8 @@ func New(c Catalog) (*Stock, error) {
 	return &Stock{catalog: c}, nil
 }
 
-func (s *Stock) Take(ctx context.Context, items []domain.Quantity, reference string) ([]domain.ReservedLine, error) {
-	lines, err := s.catalog.TakeStock(ctx, requests(items), reference)
+func (s *Stock) Reserve(ctx context.Context, items []domain.Quantity, reference string) ([]domain.ReservedLine, error) {
+	lines, err := s.catalog.ReserveStock(ctx, requests(items), reference)
 	if err != nil {
 		return nil, translate(err)
 	}
@@ -38,8 +39,12 @@ func (s *Stock) Take(ctx context.Context, items []domain.Quantity, reference str
 	return out, nil
 }
 
-func (s *Stock) Return(ctx context.Context, items []domain.Quantity, reference string) error {
-	return translate(s.catalog.ReturnStock(ctx, requests(items), reference))
+func (s *Stock) Release(ctx context.Context, items []domain.Quantity, reference string) error {
+	return translate(s.catalog.ReleaseStock(ctx, requests(items), reference))
+}
+
+func (s *Stock) Commit(ctx context.Context, items []domain.Quantity, reference string) error {
+	return translate(s.catalog.CommitStock(ctx, requests(items), reference))
 }
 
 func (s *Stock) Product(ctx context.Context, id domain.ID) (app.Product, error) {

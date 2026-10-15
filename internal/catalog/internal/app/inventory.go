@@ -29,22 +29,6 @@ func NewInventory(store StockStore) (*Inventory, error) {
 	return &Inventory{store: store}, nil
 }
 
-func (i *Inventory) TakeStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
-	sorted, err := sortedRequests(items)
-	if err != nil {
-		return nil, err
-	}
-	return i.store.TakeStock(ctx, sorted, reference)
-}
-
-func (i *Inventory) ReturnStock(ctx context.Context, items []domain.StockRequest, reference string) error {
-	sorted, err := sortedRequests(items)
-	if err != nil {
-		return err
-	}
-	return i.store.ReturnStock(ctx, sorted, reference)
-}
-
 func (i *Inventory) ReserveStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
 	sorted, err := sortedRequests(items)
 	if err != nil {

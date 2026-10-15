@@ -128,6 +128,11 @@ func (f fixture) stock(t *testing.T, id string) int {
 	return n
 }
 
+func (f fixture) reserved(t *testing.T, id string) int {
+	t.Helper()
+	return f.count(t, `SELECT reserved FROM products WHERE id = $1::uuid`, id)
+}
+
 func (f fixture) count(t *testing.T, sql string, args ...any) int {
 	t.Helper()
 	var n int
@@ -238,7 +243,9 @@ func TestDeclinedCheckoutReturnsStockOnceAndKeepsTheCart(t *testing.T) {
 	require.Equal(t, ordering.StatusFailed, res.Purchase.Status)
 	require.Equal(t, "card_declined", res.Purchase.FailureReason)
 	require.Equal(t, 5, f.stock(t, a.ID))
-	require.Equal(t, 1, f.movements(t, "sale_reversal"))
+	require.Zero(t, f.reserved(t, a.ID))
+	require.Equal(t, 1, f.movements(t, "reservation_release"))
+	require.Zero(t, f.movements(t, "sale"))
 	require.Equal(t, map[string]int{a.ID: 2}, f.cartQuantities(t, "alice"))
 }
 
@@ -267,13 +274,16 @@ func TestConcurrentFinalizationsApplyTheirEffectsOnce(t *testing.T) {
 
 			if token == "pm_declined" {
 				require.Equal(t, 5, f.stock(t, a.ID))
-				require.Equal(t, 1, f.movements(t, "sale_reversal"))
+				require.Equal(t, 1, f.movements(t, "reservation_release"))
+				require.Zero(t, f.movements(t, "sale"))
 			} else {
 				require.Equal(t, 3, f.stock(t, a.ID))
-				require.Zero(t, f.movements(t, "sale_reversal"))
+				require.Zero(t, f.movements(t, "reservation_release"))
+				require.Equal(t, 1, f.movements(t, "sale"))
 				require.Empty(t, f.cartQuantities(t, "alice"))
 			}
-			require.Equal(t, 1, f.movements(t, "sale"))
+			require.Zero(t, f.reserved(t, a.ID))
+			require.Equal(t, 1, f.movements(t, "reservation"))
 			require.Equal(t, 1, f.pay.effective())
 			p, err := f.orders.Purchase(ctx, "alice", res.Purchase.ID)
 			require.NoError(t, err)
@@ -370,14 +380,14 @@ func TestRecoveryWithAnUnavailableProviderKeepsPendingAndConfirmsLater(t *testin
 	res, err := f.orders.CheckoutCart(ctx, "alice", key, "pm_approved")
 	require.NoError(t, err)
 	require.Equal(t, ordering.StatusPending, res.Purchase.Status)
-	require.Equal(t, 4, f.stock(t, a.ID))
+	require.Equal(t, []int{5, 1}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)})
 
 	f.pay.set(unavailable)
 	report, err := f.orders.RecoverPending(ctx)
 	require.NoError(t, err)
 	require.Len(t, report.StillPending, 1)
 	require.Equal(t, res.Purchase.ID, report.StillPending[0].ID)
-	require.Equal(t, 4, f.stock(t, a.ID))
+	require.Equal(t, []int{5, 1}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)})
 
 	f.pay.set(approve)
 	report, err = f.orders.RecoverPending(ctx)
@@ -388,6 +398,7 @@ func TestRecoveryWithAnUnavailableProviderKeepsPendingAndConfirmsLater(t *testin
 	require.NoError(t, err)
 	require.Equal(t, ordering.StatusConfirmed, p.Status)
 	require.Equal(t, "sim_"+p.ID, p.PaymentRef)
+	require.Equal(t, []int{4, 0}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)})
 
 	report, err = f.orders.RecoverPending(ctx)
 	require.NoError(t, err)
@@ -442,7 +453,7 @@ func TestAC07UnknownOutcomeIsRecoveredWithoutASecondCharge(t *testing.T) {
 	res, err := f.orders.CheckoutCart(ctx, "alice", key, "pm_approved")
 	require.NoError(t, err)
 	require.Equal(t, ordering.StatusPending, res.Purchase.Status)
-	require.Equal(t, 3, f.stock(t, a.ID), "the stock stays taken while the outcome is unknown")
+	require.Equal(t, []int{5, 2}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)}, "the units stay reserved while the outcome is unknown")
 	require.Equal(t, 1, f.pay.effective())
 	charged := f.pay.charges[res.Purchase.ID]
 
@@ -456,7 +467,7 @@ func TestAC07UnknownOutcomeIsRecoveredWithoutASecondCharge(t *testing.T) {
 	p, err := f.orders.Purchase(ctx, "alice", res.Purchase.ID)
 	require.NoError(t, err)
 	require.Equal(t, ordering.StatusConfirmed, p.Status)
-	require.Equal(t, 3, f.stock(t, a.ID))
+	require.Equal(t, []int{3, 0}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)})
 	require.Empty(t, f.cartQuantities(t, "alice"))
 
 	report, err = f.orders.RecoverPending(ctx)

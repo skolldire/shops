@@ -141,7 +141,7 @@ func TestAC11DeclinedPaymentFromTheUIKeepsTheCart(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Contains(t, body, "The payment was declined", "a double submit shows the same purchase")
 	require.Equal(t, 1, c.scalar(`SELECT count(*) FROM purchases`))
-	require.Equal(t, 1, c.scalar(`SELECT count(*) FROM inventory_movements WHERE reason = 'sale_reversal' AND product_id = $1::uuid`, a))
+	require.Equal(t, 1, c.scalar(`SELECT count(*) FROM inventory_movements WHERE reason = 'reservation_release' AND product_id = $1::uuid`, a))
 }
 
 func TestAC05PriceChangeIsShownInTheCart(t *testing.T) {

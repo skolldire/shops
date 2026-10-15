@@ -234,7 +234,8 @@ func TestAC06DeclinedPaymentReturnsTheStockOnce(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, body, again)
 	require.Equal(t, 4, c.stockOf(id))
-	require.Equal(t, 1, c.scalar(`SELECT count(*) FROM inventory_movements WHERE reason = 'sale_reversal'`))
+	require.Equal(t, 1, c.scalar(`SELECT count(*) FROM inventory_movements WHERE reason = 'reservation_release'`))
+	require.Zero(t, c.scalar(`SELECT count(*) FROM inventory_movements WHERE reason = 'sale'`))
 
 	resp, body = c.checkout("alice", uuid.NewString(), checkoutBody("pm_other", item(id, 1, "5.00")))
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -355,18 +356,20 @@ func (c client) requireAuditInvariant() {
 	c.t.Helper()
 	require.Zero(c.t, c.scalar(`
 		SELECT count(*) FROM products p
-		WHERE p.stock <> (SELECT COALESCE(sum(m.delta), 0) FROM inventory_movements m WHERE m.product_id = p.id)`),
-		"every product satisfies stock = sum(delta)")
+		WHERE p.stock <> (SELECT COALESCE(sum(m.delta), 0) FROM inventory_movements m WHERE m.product_id = p.id)
+		   OR p.reserved <> (SELECT COALESCE(sum(m.reserved_delta), 0) FROM inventory_movements m WHERE m.product_id = p.id)`),
+		"every product satisfies stock = sum(delta) and reserved = sum(reserved_delta)")
 	require.Zero(c.t, c.scalar(`SELECT count(*) FROM inventory_movements WHERE reason = 'unattributed'`))
 	require.Zero(c.t, c.scalar(`
 		SELECT count(*) FROM inventory_movements m
 		WHERE NOT (
 			(m.reason IN ('initial_stock', 'manual_adjustment') AND m.reference IS NULL)
 			OR (m.reason = 'import' AND m.reference ~ '^[0-9a-f]{64}$')
-			OR (m.reason IN ('sale', 'sale_reversal') AND EXISTS (SELECT 1 FROM purchases p WHERE p.id::text = m.reference))
+			OR (m.reason IN ('reservation', 'sale', 'reservation_release') AND EXISTS (SELECT 1 FROM purchases p WHERE p.id::text = m.reference))
 		)`), "every movement carries the reason and reference of its writer")
 	require.Zero(c.t, c.scalar(`
 		SELECT count(*) FROM inventory_movements m
-		WHERE m.reason = 'sale_reversal'
-		  AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.id::text = m.reference AND p.status = 'FAILED')`))
+		WHERE (m.reason = 'reservation_release' AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.id::text = m.reference AND p.status = 'FAILED'))
+		   OR (m.reason = 'sale' AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.id::text = m.reference AND p.status = 'CONFIRMED'))`),
+		"a release belongs to a declined purchase and a sale to a confirmed one")
 }

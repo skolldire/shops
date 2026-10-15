@@ -50,6 +50,8 @@ func TestStartRecoversPendingPurchasesBeforeServing(t *testing.T) {
 	_, err := c.pool.Exec(context.Background(),
 		`UPDATE purchases SET status = 'PENDING', payment_ref = NULL WHERE id = $1::uuid`, purchase.ID)
 	require.NoError(t, err)
+	_, err = c.pool.Exec(context.Background(), `UPDATE products SET stock = stock + 2, reserved = reserved + 2 WHERE id = $1::uuid`, id)
+	require.NoError(t, err)
 
 	t.Run("a database error stops the startup", func(t *testing.T) {
 		_, err := c.pool.Exec(context.Background(), `ALTER TABLE purchases RENAME TO purchases_hidden`)
@@ -95,7 +97,8 @@ func TestStartRecoversPendingPurchasesBeforeServing(t *testing.T) {
 			`SELECT status, payment_ref FROM purchases WHERE id = $1::uuid`, purchase.ID).Scan(&status, &ref))
 		require.Equal(t, "CONFIRMED", status)
 		require.Equal(t, "fake_"+purchase.ID, ref)
-		require.Equal(t, 3, c.stockOf(id), "the stock taken before the interruption is kept, not taken again")
+		require.Equal(t, 3, c.stockOf(id), "the reservation made before the interruption becomes the sale")
+		require.Zero(t, c.scalar(`SELECT reserved FROM products WHERE id = $1::uuid`, id))
 
 		cancel()
 		select {
