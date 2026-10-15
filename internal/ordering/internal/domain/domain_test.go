@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -178,6 +179,45 @@ func TestSnapshotComparesPrices(t *testing.T) {
 
 	_, err = domain.Snapshot(req, []domain.ReservedLine{{ProductID: productA, Price: *price("5"), Quantity: 1}})
 	require.ErrorIs(t, err, domain.ErrReservationMismatch)
+}
+
+func TestSnapshotLineTotalsAreExactToTheCent(t *testing.T) {
+	cases := []struct {
+		price    string
+		quantity int
+		line     string
+	}{
+		{"0.10", 3, "0.3"},
+		{"1.15", 7, "8.05"},
+		{"0.07", 99, "6.93"},
+		{"33.33", 3, "99.99"},
+		{"19.99", 99, "1979.01"},
+		{"0.01", 1, "0.01"},
+		{"1234567.89", 99, "122222221.11"},
+	}
+	inputs := make([]domain.CheckoutItemInput, len(cases))
+	lines := make([]domain.ReservedLine, len(cases))
+	want := map[domain.ID]string{}
+	sum := decimal.Zero
+	for i, c := range cases {
+		id := fmt.Sprintf("%08d-0000-4000-8000-000000000000", i+1)
+		inputs[i] = item(id, c.quantity, c.price)
+		lines[i] = domain.ReservedLine{ProductID: domain.ID(id), Price: *price(c.price), Quantity: c.quantity}
+		want[domain.ID(id)] = c.line
+	}
+	req, err := domain.NewCheckoutRequest("alice", input(inputs...))
+	require.NoError(t, err)
+
+	items, err := domain.Snapshot(req, lines)
+	require.NoError(t, err)
+	require.Len(t, items, len(cases))
+	for _, it := range items {
+		require.Equal(t, want[it.ProductID], it.LineTotal.String(), "no rounding at any step")
+		require.GreaterOrEqual(t, it.LineTotal.Exponent(), int32(-2), "at most 2 decimals")
+		sum = sum.Add(it.LineTotal)
+	}
+	require.True(t, req.Total.Equal(sum), "the total is the exact sum of the line totals")
+	require.Equal(t, "122224315.40", req.Total.StringFixed(2))
 }
 
 func TestPurchaseTransitions(t *testing.T) {
