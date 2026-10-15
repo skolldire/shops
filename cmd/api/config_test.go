@@ -104,6 +104,8 @@ func TestValidate(t *testing.T) {
 	cfg.Log.Level = "verbose"
 	cfg.Telemetry.Tracing.Enabled = true
 	cfg.Telemetry.Tracing.SamplingRate = 2
+	cfg.Import.PreviewTTL = 0
+	cfg.Import.MaxActivePreviews = 0
 
 	err := cfg.Validate()
 
@@ -111,9 +113,20 @@ func TestValidate(t *testing.T) {
 		"http.addr", "metrics.addr must be", "metrics.addr must differ", "http.read_timeout",
 		"database.port", "database.password", "database.ssl_mode", "database.max_conns",
 		"log.level", "telemetry.tracing.endpoint", "telemetry.tracing.sampling_rate",
+		"import.preview_ttl", "import.max_active_previews",
 	} {
 		require.ErrorContains(t, err, want)
 	}
+}
+
+func TestShippedConfigImportDefaults(t *testing.T) {
+	cfg := shippedConfig(t)
+	require.Equal(t, time.Hour, cfg.Import.PreviewTTL)
+	require.Equal(t, 20, cfg.Import.MaxActivePreviews)
+
+	local, err := loadConfig(t, "../../config/config.local.yaml", map[string]string{"DB_PASSWORD": testPassword}, nil)
+	require.NoError(t, err)
+	require.Equal(t, cfg.Import, local.Import)
 }
 
 func TestShippedConfigCheckoutDefaults(t *testing.T) {
