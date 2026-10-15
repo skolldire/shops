@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -105,4 +106,22 @@ func TestStartRecoversPendingPurchasesBeforeServing(t *testing.T) {
 		}
 		require.NoError(t, lc.Close(context.Background()))
 	})
+}
+
+func TestCheckoutMetricsAreExposed(t *testing.T) {
+	c := startApp(t)
+	_, err := c.app.ordering.RecoverPending(t.Context())
+	require.NoError(t, err)
+	id := c.product("MET-1", "2.00", 5)
+	resp, _ := c.checkout("alice", uuid.NewString(), checkoutBody("pm_approved", item(id, 1, "2.00")))
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	rec := httptest.NewRecorder()
+	c.app.metrics.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	require.Contains(t, body, `checkout_total{outcome="confirmed"} 1`)
+	require.Contains(t, body, `checkout_recovery_total{outcome="still_pending"} 0`)
+	require.Contains(t, body, `checkout_recovery_total{outcome="confirmed"} 0`)
+	require.NotContains(t, body, "alice")
+	require.NotContains(t, body, "pm_approved")
 }

@@ -55,15 +55,15 @@ func (r *Recovery) RecoverPending(ctx context.Context) (RecoveryReport, error) {
 		switch {
 		case err != nil:
 			report.StillPending = append(report.StillPending, StillPending{PurchaseID: p.ID, Cause: err})
-			r.rec.Recovery(ctx, RecoveryStillPending)
 		case status == domain.StatusConfirmed:
 			report.Confirmed++
-			r.rec.Recovery(ctx, RecoveryConfirmed)
 		default:
 			report.Declined++
-			r.rec.Recovery(ctx, RecoveryDeclined)
 		}
 	}
+	r.rec.Recovery(ctx, RecoveryConfirmed, report.Confirmed)
+	r.rec.Recovery(ctx, RecoveryDeclined, report.Declined)
+	r.rec.Recovery(ctx, RecoveryStillPending, len(report.StillPending))
 	return report, nil
 }
 

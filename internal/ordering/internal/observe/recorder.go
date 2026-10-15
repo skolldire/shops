@@ -50,6 +50,6 @@ func (r *CheckoutRecorder) Checkout(ctx context.Context, outcome string, p *doma
 	r.log.Info(ctx, "ordering: checkout finished", fields)
 }
 
-func (r *CheckoutRecorder) Recovery(ctx context.Context, outcome string) {
-	r.counters.Counter(ctx, recoveryTotal, 1, attribute.String(outcomeKey, outcome))
+func (r *CheckoutRecorder) Recovery(ctx context.Context, outcome string, n int) {
+	r.counters.Counter(ctx, recoveryTotal, int64(n), attribute.String(outcomeKey, outcome))
 }

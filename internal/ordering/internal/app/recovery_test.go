@@ -40,7 +40,7 @@ func TestRecoveryConfirmsAnUnknownChargeWithoutChargingTwice(t *testing.T) {
 	require.Equal(t, domain.StatusConfirmed, p.Status)
 	require.Equal(t, 3, f.w.stockOf(f.a))
 	require.Empty(t, f.w.state.carts["alice"])
-	require.Equal(t, []string{app.RecoveryConfirmed}, f.rec.recovery)
+	require.Equal(t, map[string]int{app.RecoveryConfirmed: 1, app.RecoveryDeclined: 0, app.RecoveryStillPending: 0}, f.rec.recovery)
 
 	report, err = f.recovery(t, time.Minute).RecoverPending(context.Background())
 	require.NoError(t, err)
@@ -68,7 +68,7 @@ func TestRecoveryKeepsPendingWhileTheProviderIsUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Confirmed)
 	require.Equal(t, 1, f.pay.effective())
-	require.Equal(t, []string{app.RecoveryStillPending, app.RecoveryConfirmed}, f.rec.recovery)
+	require.Equal(t, map[string]int{app.RecoveryConfirmed: 1, app.RecoveryDeclined: 0, app.RecoveryStillPending: 1}, f.rec.recovery)
 }
 
 func TestRecoveryDeclinesAndReturnsStockOnce(t *testing.T) {
@@ -125,4 +125,12 @@ func TestNewRecoveryValidatesItsDependencies(t *testing.T) {
 	require.Error(t, err)
 	_, err = app.NewRecovery(w, nil, newProvider(approve), w, w, &recorder{}, budgets, time.Minute)
 	require.Error(t, err)
+}
+
+func TestRecoveryWithoutPendingPurchasesStillRecordsEveryOutcome(t *testing.T) {
+	f := setup(t, approve)
+	report, err := f.recovery(t, time.Minute).RecoverPending(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, app.RecoveryReport{}, report)
+	require.Equal(t, map[string]int{app.RecoveryConfirmed: 0, app.RecoveryDeclined: 0, app.RecoveryStillPending: 0}, f.rec.recovery)
 }

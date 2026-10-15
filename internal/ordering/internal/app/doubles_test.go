@@ -434,7 +434,7 @@ type event struct {
 type recorder struct {
 	mu       sync.Mutex
 	events   []event
-	recovery []string
+	recovery map[string]int
 }
 
 func (r *recorder) Checkout(_ context.Context, outcome string, p *domain.Purchase, cause error) {
@@ -448,10 +448,13 @@ func (r *recorder) Checkout(_ context.Context, outcome string, p *domain.Purchas
 	r.events = append(r.events, event{outcome: outcome, purchase: copied, cause: cause})
 }
 
-func (r *recorder) Recovery(_ context.Context, outcome string) {
+func (r *recorder) Recovery(_ context.Context, outcome string, n int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.recovery = append(r.recovery, outcome)
+	if r.recovery == nil {
+		r.recovery = map[string]int{}
+	}
+	r.recovery[outcome] += n
 }
 
 func (r *recorder) outcomes() []string {

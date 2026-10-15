@@ -64,5 +64,5 @@ type Carts interface {
 
 type CheckoutRecorder interface {
 	Checkout(ctx context.Context, outcome string, p *domain.Purchase, cause error)
-	Recovery(ctx context.Context, outcome string)
+	Recovery(ctx context.Context, outcome string, n int)
 }

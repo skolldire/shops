@@ -76,8 +76,12 @@ func TestPendingCheckoutLogsItsCauseOnceAsAWarning(t *testing.T) {
 
 func TestRecoveryCountsItsOutcome(t *testing.T) {
 	r, c, logs := newRecorder(t)
-	r.Recovery(context.Background(), "still_pending")
-	require.Equal(t, []counter{{"checkout_recovery_total", 1, []attribute.KeyValue{attribute.String("outcome", "still_pending")}}}, c.got)
+	r.Recovery(context.Background(), "still_pending", 2)
+	r.Recovery(context.Background(), "confirmed", 0)
+	require.Equal(t, []counter{
+		{"checkout_recovery_total", 2, []attribute.KeyValue{attribute.String("outcome", "still_pending")}},
+		{"checkout_recovery_total", 0, []attribute.KeyValue{attribute.String("outcome", "confirmed")}},
+	}, c.got, "zero is recorded too, so the series exists after a startup without pending purchases")
 	require.Empty(t, logs.String())
 }
 
