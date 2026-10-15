@@ -40,6 +40,7 @@ type provider struct {
 	mu       sync.Mutex
 	mode     mode
 	received int
+	attempts []payment.ChargeRequest
 	charges  map[string]payment.ChargeRequest
 	results  map[string]payment.ChargeResult
 	onCharge func(ctx context.Context)
@@ -68,6 +69,7 @@ func (p *provider) Charge(ctx context.Context, r payment.ChargeRequest) (payment
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.received++
+	p.attempts = append(p.attempts, r)
 	if p.mode == unavailable {
 		return payment.ChargeResult{}, payment.ErrUnavailable
 	}
