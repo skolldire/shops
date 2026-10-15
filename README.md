@@ -479,6 +479,23 @@ All errors are `application/problem+json` with a stable `code`. Item details use
 
 The payment token is stored in `purchases.payment_token` because the recovery repeats the charge with it. It is a demo token, not card data: it is never logged and never returned by the API. This does not decide how a real provider's credentials would be stored.
 
+### Monetary invariants
+
+A purchase keeps its own copy of what was sold: `purchase_items` holds the SKU, name, unit price, quantity and line total, and `purchases.total` the amount. The history, the purchase detail (API and UI), the recovery and the charge read only that copy, never `products`, so no later import, edit or deletion changes what a purchase shows or charges. A `PENDING` purchase recovered after a price change charges the stored amount. The cart and the checkout do not change: a changed price is a warning in the cart and `409 price_changed` at checkout, so the client never pays a price it did not see.
+
+| Invariant | Where it is guaranteed | Proved by |
+|---|---|---|
+| `line_total = unit_price × quantity`, exact to the cent | `domain.Snapshot` with `decimal`; prices are validated to 2 decimals and no `float` is used on any money path; `numeric(12,2)` in the schema | `TestSnapshotLineTotalsAreExactToTheCent` |
+| `purchases.total = SUM(purchase_items.line_total)` | The total is the sum of the expected prices, and the reservation rejects the purchase unless every expected price equals the current one, in the same transaction that writes the items | Aggregation query in `requireMoneyInvariants` (integration) |
+| No half-persisted purchase | Purchase, stock, items and movements are written in one transaction; a price change, a short stock, a deleted product or a database error rolls all of it back | `TestAFailedReservationLeavesNoPurchaseStockChangeOrMovement` |
+| A repetition or a recovery charges the same reference, token, amount and currency | Every charge reads them from the persisted purchase; a repeated key replays the stored purchase without charging | `TestEveryChargeAttemptMatchesThePersistedPurchase`, with a double that records every attempt |
+| The price does not change after buying | The copy above, plus the triggers below | `TestAConfirmedPurchaseKeepsItsPriceAfterTheCatalogChanges`, `TestARecoveredPurchaseChargesTheStoredAmountAfterAPriceChange` |
+| The copy cannot be rewritten | `purchase_items_immutable` and `purchase_items_no_truncate` reject `UPDATE`, `DELETE` and `TRUNCATE` of items; `purchases_snapshot_immutable` rejects an `UPDATE` that changes `id`, `user_id`, `idempotency_key`, `request_hash`, `currency`, `total`, `payment_token` or `created_at` (SQLSTATE `42501`). The outcome (`status`, `payment_ref`, `failure_reason`, `updated_at`) can still change | `TestPurchaseSnapshotsAreImmutable` |
+
+`total = SUM(line_total)` is checked by the tests, not by a trigger: the items are inserted after the purchase, so a row-level check would need a deferred constraint trigger for a rule the transaction already guarantees.
+
+What stays outside these guarantees: the owner of the tables or a superuser can disable the triggers (`ALTER TABLE … DISABLE TRIGGER`), and a session with `session_replication_role = replica` skips them, which is what the test helper `dbtest.Truncate` does. The application connects as the owner. A direct `INSERT` can still write a purchase whose total does not match its items, and a direct `UPDATE` of `status` is not checked against the allowed transitions. In production the tables would belong to another role, as described for the movements in [Evolution](#evolution).
+
 ### Payment contract (provisional)
 
 `payment.Charge(ctx, ChargeRequest{Reference, Token, Amount, Currency})` returns `APPROVED` with a provider reference, or `DECLINED` with a reason. Errors never mean a decline. Two classifiable errors let ordering decide without knowing the provider: `ErrOutcomeUnknown` (the request may have reached the provider and it is unknown whether it charged) and `ErrUnavailable` (the provider is not available). After the reservation both keep the purchase `PENDING`.
@@ -541,7 +558,7 @@ The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it 
 - **An import and a checkout can deadlock.** They lock products in different orders (SKU and product id). PostgreSQL aborts one of them; a reservation answers `503 try_again`, a finalization leaves the purchase `PENDING`.
 - **Pending purchases wait for the next start.** There is no periodic recovery and the recovery assumes a single instance.
 - **The payment is an in-process fake.** It never times out or fails, so the unknown and unavailable outcomes are exercised only by the tests.
-- **Movements are immutable only for the application.** The table owner or a superuser can disable its triggers.
+- **Movements and purchase snapshots are immutable only for the application.** The table owner or a superuser can disable their triggers, and `session_replication_role = replica` skips them.
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
 
 ## Evolution
@@ -552,7 +569,7 @@ Pieces left out of this phase, with what would justify them:
 |---|---|
 | Real HTTP payment provider (phase 4b: simulator, HTTP adapter, retries, circuit breaker, remote lookup by reference) | Choosing a provider, or demonstrating a timeout without a double charge. It plugs in behind the payment facade without changing ordering |
 | Periodic recovery with a minimum age and a lock | Running more than one replica, or pending purchases that cannot wait for a restart |
-| `inventory_movements` owned by a separate role, with `REVOKE UPDATE, DELETE` for the application role | Production, where the audit must hold even against the application's own credentials |
+| `inventory_movements`, `purchases` and `purchase_items` owned by a separate role, with `REVOKE UPDATE, DELETE` (column-level `UPDATE` grants for the purchase outcome) for the application role | Production, where the audit must hold even against the application's own credentials |
 | Real authentication and sessions instead of demo users | Anyone other than an evaluator using the store |
 | Configurable public host for the same-origin check | Serving the app behind a reverse proxy |
 | Outbox and message broker | Phase 5 |
