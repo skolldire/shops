@@ -21,6 +21,7 @@ const csvHeader = "name,sku,description,category,price,stock,weight_kg\n"
 type fakeStore struct {
 	existing   map[string]domain.Product
 	deleted    map[string]bool
+	reserved   map[string]int
 	failBatch  bool
 	failSKU    map[string]bool
 	batches    [][]string
@@ -52,6 +53,9 @@ func (f *fakeStore) Upsert(ctx context.Context, products []domain.Product, refer
 			return nil, errors.New("row exploded: host=10.0.0.5")
 		case f.deleted[p.SKU]:
 			out[p.SKU] = app.OutcomeDeleted
+		case p.Stock < f.reserved[p.SKU]:
+			out[p.SKU] = app.OutcomeBelowReserved
+			continue
 		case !found:
 			out[p.SKU] = app.OutcomeCreated
 		case current.Name == p.Name && current.Stock == p.Stock && current.Price.Equal(p.Price):
@@ -302,7 +306,8 @@ func TestImportCountsEveryOutcome(t *testing.T) {
 			"SAME-1": product(t, "SAME-1", "Same", "5", 1),
 			"CHG-1":  product(t, "CHG-1", "Old name", "5", 1),
 		},
-		deleted: map[string]bool{"GONE-1": true},
+		deleted:  map[string]bool{"GONE-1": true},
+		reserved: map[string]int{"HELD-1": 3},
 	}
 	body := csvHeader +
 		"New,NEW-1,,A,5,1,1\n" +
@@ -310,19 +315,21 @@ func TestImportCountsEveryOutcome(t *testing.T) {
 		"New name,CHG-1,,A,5,1,1\n" +
 		"Gone,GONE-1,,A,5,1,1\n" +
 		",,,,,,\n" +
-		"Bad,BAD-1,,A,free,1,1\n"
+		"Bad,BAD-1,,A,free,1,1\n" +
+		"Held,HELD-1,,A,5,2,1\n"
 
 	report, rec := run(t, store, body)
 
-	require.Equal(t, 6, report.Records)
+	require.Equal(t, 7, report.Records)
 	require.Equal(t, 1, report.Skipped)
 	require.Equal(t, 1, report.Created)
 	require.Equal(t, 1, report.Updated)
 	require.Equal(t, 1, report.Unchanged)
-	require.Equal(t, 2, report.Rejected)
+	require.Equal(t, 3, report.Rejected)
 	require.Equal(t, report.Records, report.Skipped+report.Created+report.Updated+report.Unchanged+report.Rejected)
-	require.Equal(t, []string{"5 GONE-1 sku sku_deleted", "7 BAD-1 price invalid_format"}, codes(report))
-	require.Equal(t, map[string]int{"created": 1, "updated": 1, "unchanged": 1, "skipped": 1, "rejected": 2}, rec.rows)
+	require.Equal(t, []string{"5 GONE-1 sku sku_deleted", "7 BAD-1 price invalid_format", "8 HELD-1 stock below_reserved"}, codes(report))
+	require.Equal(t, "must be at least the units reserved by pending purchases", report.Errors[2].Message)
+	require.Equal(t, map[string]int{"created": 1, "updated": 1, "unchanged": 1, "skipped": 1, "rejected": 3}, rec.rows)
 }
 
 func TestImportRecordsEveryOutcomeEvenWhenItIsZero(t *testing.T) {

@@ -27,12 +27,17 @@ ON CONFLICT (sku) DO UPDATE SET
     version = products.version + 1,
     updated_at = now()
 WHERE products.status = 'ACTIVE'
+  AND EXCLUDED.stock >= products.reserved
   AND (products.name, products.description, products.category, products.price, products.stock, products.weight_kg)
       IS DISTINCT FROM
       (EXCLUDED.name, EXCLUDED.description, EXCLUDED.category, EXCLUDED.price, EXCLUDED.stock, EXCLUDED.weight_kg)
 RETURNING sku, (xmax = 0)`
 
 const deletedSKUs = `SELECT sku FROM products WHERE sku = ANY($1) AND status = 'DELETED'`
+
+const belowReservedSKUs = `SELECT p.sku FROM products p
+JOIN unnest($1::text[], $2::integer[]) AS input(sku, stock) ON input.sku = p.sku
+WHERE p.status = 'ACTIVE' AND p.reserved > input.stock`
 
 func (r *Repository) Upsert(ctx context.Context, products []domain.Product, reference string) (map[string]app.UpsertOutcome, error) {
 	outcomes := make(map[string]app.UpsertOutcome, len(products))
@@ -86,13 +91,20 @@ func (r *Repository) Upsert(ctx context.Context, products []domain.Product, refe
 			return fmt.Errorf("catalog: upsert products: %w", err)
 		}
 
-		var untouched []string
-		for _, sku := range in.skus {
+		var (
+			untouched []string
+			stocks    []int
+		)
+		for i, sku := range in.skus {
 			if outcomes[sku] == app.OutcomeUnchanged {
 				untouched = append(untouched, sku)
+				stocks = append(stocks, in.stocks[i])
 			}
 		}
-		return markDeleted(ctx, q, untouched, outcomes)
+		if err := markDeleted(ctx, q, untouched, outcomes); err != nil {
+			return err
+		}
+		return markBelowReserved(ctx, q, untouched, stocks, outcomes)
 	})
 	if err != nil {
 		return nil, err
@@ -110,6 +122,20 @@ func markDeleted(ctx context.Context, q database.Querier, skus []string, outcome
 	}
 	for _, sku := range deleted {
 		outcomes[sku] = app.OutcomeDeleted
+	}
+	return nil
+}
+
+func markBelowReserved(ctx context.Context, q database.Querier, skus []string, stocks []int, outcomes map[string]app.UpsertOutcome) error {
+	if len(skus) == 0 {
+		return nil
+	}
+	below, err := collect(q.Query(ctx, belowReservedSKUs, skus, stocks))
+	if err != nil {
+		return fmt.Errorf("catalog: find skus below their reserved units: %w", err)
+	}
+	for _, sku := range below {
+		outcomes[sku] = app.OutcomeBelowReserved
 	}
 	return nil
 }

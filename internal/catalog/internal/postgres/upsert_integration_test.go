@@ -164,6 +164,24 @@ func TestUpsert(t *testing.T) {
 		require.Equal(t, "Race", after.Name)
 	})
 
+	t.Run("a row below the reserved units is reported and changes nothing", func(t *testing.T) {
+		f.reset(t)
+		held := f.create(t, "HELD-1", "Held", "Imports", "1.00", 5)
+		_, err := f.repo.ReserveStock(ctx, []domain.StockRequest{{ProductID: held.ID, Quantity: 3}}, "purchase-1")
+		require.NoError(t, err)
+		before := f.stored(t, "HELD-1")
+
+		outcomes, err := f.repo.Upsert(ctx, []domain.Product{item("HELD-1", "Renamed", "9.00", 2), item("NEW-1", "New", "1.00", 1)}, "sha")
+		require.NoError(t, err)
+		require.Equal(t, map[string]app.UpsertOutcome{"HELD-1": app.OutcomeBelowReserved, "NEW-1": app.OutcomeCreated}, outcomes)
+		require.Equal(t, before, f.stored(t, "HELD-1"), "neither the stock nor the other attributes change")
+
+		outcomes, err = f.repo.Upsert(ctx, []domain.Product{item("HELD-1", "Renamed", "9.00", 3)}, "sha")
+		require.NoError(t, err)
+		require.Equal(t, map[string]app.UpsertOutcome{"HELD-1": app.OutcomeUpdated}, outcomes, "the reserved units themselves are enough")
+		require.Equal(t, 3, f.stored(t, "HELD-1").Stock)
+	})
+
 	t.Run("an empty batch does nothing", func(t *testing.T) {
 		f.reset(t)
 		outcomes, err := f.repo.Upsert(ctx, nil, "sha")

@@ -24,6 +24,8 @@ const (
 	OutcomeUnchanged UpsertOutcome = "unchanged"
 	OutcomeDeleted   UpsertOutcome = "deleted"
 
+	OutcomeBelowReserved UpsertOutcome = CodeBelowReserved
+
 	outcomeSkipped  = "skipped"
 	outcomeRejected = "rejected"
 
@@ -209,6 +211,12 @@ func count(report *ImportReport, row importRow, outcome UpsertOutcome) {
 		report.Errors = append(report.Errors, RowError{
 			Line: row.line, SKU: row.sku, Field: "sku", Code: CodeSKUDeleted,
 			Message: "belongs to a deleted product and cannot be reused",
+		})
+	case OutcomeBelowReserved:
+		report.Rejected++
+		report.Errors = append(report.Errors, RowError{
+			Line: row.line, SKU: row.sku, Field: "stock", Code: CodeBelowReserved,
+			Message: "must be at least the units reserved by pending purchases",
 		})
 	default:
 		report.Unchanged++
