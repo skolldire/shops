@@ -35,6 +35,20 @@ type fakeCatalog struct {
 	imports    int
 	importName string
 	importBody string
+	movements  []catalog.Movement
+	paging     catalog.Paging
+}
+
+func (f *fakeCatalog) Movements(_ context.Context, _ string, p catalog.Paging) (catalog.MovementPage, error) {
+	f.paging = p
+	if p.Page == 0 {
+		p = catalog.Paging{Page: 1, PageSize: 20}
+	}
+	total := len(f.movements)
+	if f.total > 0 {
+		total = f.total
+	}
+	return catalog.MovementPage{Items: f.movements, Page: p.Page, PageSize: p.PageSize, Total: total}, f.err
 }
 
 func (f *fakeCatalog) Import(_ context.Context, r io.Reader, opts catalog.ImportOptions) (catalog.ImportReport, error) {

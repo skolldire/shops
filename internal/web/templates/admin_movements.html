@@ -1,0 +1,41 @@
+{{define "title"}}Movements · {{.Product.Name}}{{end}}
+{{define "content"}}
+<p><a href="/admin/products">← Back to products</a></p>
+<div class="page-header">
+<h1>Stock movements of {{.Product.Name}}</h1>
+</div>
+<p class="results-summary">SKU {{.Product.SKU}} · current stock {{.Product.Stock}}</p>
+{{if .Invalid}}
+<p class="notice error">The page parameters are not valid.</p>
+{{else if .Page.Items}}
+<p class="results-summary">{{.Page.Total}} movements, newest first</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>When</th><th class="numeric">Change</th><th class="numeric">Stock after</th><th>Reason</th><th class="optional">Reference</th><th class="optional">Database role</th></tr>
+</thead>
+<tbody>
+{{range .Page.Items}}
+<tr>
+<td>{{.CreatedAt.UTC.Format "2006-01-02 15:04:05"}} UTC</td>
+<td class="numeric">{{if gt .Delta 0}}+{{end}}{{.Delta}}</td>
+<td class="numeric">{{.StockAfter}}</td>
+<td>{{.Reason}}</td>
+<td class="optional">{{.Reference}}</td>
+<td class="optional">{{.DBUser}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{if or .PrevURL .NextURL}}
+<nav class="pagination" aria-label="Pagination">
+{{if .PrevURL}}<a class="button secondary" href="{{.PrevURL}}">Previous</a>{{end}}
+<span>Page {{.Page.Page}}</span>
+{{if .NextURL}}<a class="button secondary" href="{{.NextURL}}">Next</a>{{end}}
+</nav>
+{{end}}
+{{else}}
+<p class="results-summary">This product has no stock movements.</p>
+{{end}}
+{{end}}

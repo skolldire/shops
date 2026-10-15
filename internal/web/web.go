@@ -31,6 +31,7 @@ type Catalog interface {
 	Update(ctx context.Context, id string, in catalog.UpdateInput) (catalog.Product, error)
 	Delete(ctx context.Context, id string, version int) error
 	Categories(ctx context.Context) ([]string, error)
+	Movements(ctx context.Context, productID string, p catalog.Paging) (catalog.MovementPage, error)
 	Import(ctx context.Context, r io.Reader, opts catalog.ImportOptions) (catalog.ImportReport, error)
 }
 
@@ -85,6 +86,7 @@ func (ui *UI) Routes() http.Handler {
 			r.Get("/new", ui.newProduct)
 			r.Get("/{id}/edit", ui.editProduct)
 			r.Post("/{id}", ui.updateProduct)
+			r.Get("/{id}/movements", ui.movements)
 			r.Get("/{id}/delete", ui.confirmDelete)
 			r.Post("/{id}/delete", ui.deleteProduct)
 		})
