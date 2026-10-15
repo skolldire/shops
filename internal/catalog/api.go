@@ -44,6 +44,18 @@ func (e *InsufficientStockError) Error() string {
 	return fmt.Sprintf("catalog: insufficient stock for product %s: %d available", e.ProductID, e.Available)
 }
 
+type ProductUnavailableError struct {
+	ProductID string
+}
+
+func (e *ProductUnavailableError) Error() string {
+	return fmt.Sprintf("catalog: product %s is unavailable", e.ProductID)
+}
+
+func (e *ProductUnavailableError) Is(target error) bool {
+	return target == ErrProductUnavailable
+}
+
 type StockRequest struct {
 	ProductID string
 	Quantity  int

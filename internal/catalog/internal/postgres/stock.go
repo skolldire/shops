@@ -61,11 +61,11 @@ func (r *Repository) stockShortage(ctx context.Context, q database.Querier, id s
 	err := q.QueryRow(ctx, `SELECT status, stock FROM products WHERE id = $1::uuid`, id).Scan(&status, &stock)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return app.ErrProductUnavailable
+		return &app.ProductUnavailableError{ProductID: id}
 	case err != nil:
 		return fmt.Errorf("catalog: check stock: %w", err)
 	case status != "ACTIVE":
-		return app.ErrProductUnavailable
+		return &app.ProductUnavailableError{ProductID: id}
 	}
 	return &app.InsufficientStockError{ProductID: id, Available: stock}
 }

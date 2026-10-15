@@ -39,7 +39,7 @@ func (m *memoryRepo) TakeStock(_ context.Context, items []domain.StockRequest, r
 		p, ok := m.products[it.ProductID]
 		switch {
 		case !ok:
-			return nil, app.ErrProductUnavailable
+			return nil, &app.ProductUnavailableError{ProductID: it.ProductID}
 		case p.Stock < it.Quantity:
 			return nil, &app.InsufficientStockError{ProductID: it.ProductID, Available: p.Stock}
 		}
@@ -294,6 +294,9 @@ func TestModuleStockTranslatesErrors(t *testing.T) {
 
 	_, err = m.TakeStock(context.Background(), []StockRequest{{ProductID: missingID, Quantity: 1}}, "purchase-3")
 	require.ErrorIs(t, err, ErrProductUnavailable)
+	var unavailable *ProductUnavailableError
+	require.ErrorAs(t, err, &unavailable)
+	require.Equal(t, missingID, unavailable.ProductID)
 
 	_, err = m.TakeStock(context.Background(), []StockRequest{{ProductID: p.ID, Quantity: 0}}, "purchase-4")
 	require.ErrorIs(t, err, ErrInvalidStockRequest)

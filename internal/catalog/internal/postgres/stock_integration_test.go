@@ -112,6 +112,9 @@ func TestStock(t *testing.T) {
 		require.NoError(t, f.repo.Delete(ctx, a.ID, a.Version))
 		_, err := f.repo.TakeStock(ctx, []domain.StockRequest{{ProductID: a.ID, Quantity: 1}}, "purchase-1")
 		require.ErrorIs(t, err, app.ErrProductUnavailable)
+		var unavailable *app.ProductUnavailableError
+		require.ErrorAs(t, err, &unavailable)
+		require.Equal(t, a.ID, unavailable.ProductID)
 		_, err = f.repo.TakeStock(ctx, []domain.StockRequest{{ProductID: "9b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b", Quantity: 1}}, "purchase-1")
 		require.ErrorIs(t, err, app.ErrProductUnavailable)
 	})

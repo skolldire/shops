@@ -315,12 +315,15 @@ func publicImportError(err error) error {
 }
 
 func publicError(err error) error {
-	var short *app.InsufficientStockError
+	var (
+		short       *app.InsufficientStockError
+		unavailable *app.ProductUnavailableError
+	)
 	switch {
 	case errors.As(err, &short):
 		return &InsufficientStockError{ProductID: short.ProductID, Available: short.Available}
-	case errors.Is(err, app.ErrProductUnavailable):
-		return ErrProductUnavailable
+	case errors.As(err, &unavailable):
+		return &ProductUnavailableError{ProductID: unavailable.ProductID}
 	case errors.Is(err, app.ErrInvalidStockRequest):
 		return ErrInvalidStockRequest
 	case errors.Is(err, app.ErrNotFound):
