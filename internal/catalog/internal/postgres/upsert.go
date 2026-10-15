@@ -34,7 +34,7 @@ RETURNING sku, (xmax = 0)`
 
 const deletedSKUs = `SELECT sku FROM products WHERE sku = ANY($1) AND status = 'DELETED'`
 
-func (r *Repository) Upsert(ctx context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
+func (r *Repository) Upsert(ctx context.Context, products []domain.Product, reference string) (map[string]app.UpsertOutcome, error) {
 	outcomes := make(map[string]app.UpsertOutcome, len(products))
 	if len(products) == 0 {
 		return outcomes, nil
@@ -42,6 +42,9 @@ func (r *Repository) Upsert(ctx context.Context, products []domain.Product) (map
 	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
 		clear(outcomes)
 		q := database.Q(ctx, r.pool)
+		if err := setStockReason(ctx, q, reasonImport, reference); err != nil {
+			return err
+		}
 
 		skus := make([]string, len(products))
 		for i, p := range products {

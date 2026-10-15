@@ -42,8 +42,7 @@ func setup(t *testing.T) fixture {
 
 func (f fixture) reset(t *testing.T) {
 	t.Helper()
-	_, err := f.pool.Exec(context.Background(), `TRUNCATE products`)
-	require.NoError(t, err)
+	dbtest.Truncate(t, f.pool, "inventory_movements, products")
 }
 
 func (f fixture) create(t *testing.T, sku, name, category, price string, stock int) domain.Product {

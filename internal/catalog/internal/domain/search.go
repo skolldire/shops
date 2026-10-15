@@ -73,18 +73,8 @@ func NewSearch(in SearchInput) (Search, error) {
 	}
 	s.Sort, s.Descending = parseSort(&errs, in.Sort)
 
-	switch {
-	case s.Page == 0:
-		s.Page = 1
-	case s.Page < 0 || s.Page > maxPage:
-		errs.Add("page", validation.CodeOutOfRange, "must be between 1 and 100000")
-	}
-	switch {
-	case s.PageSize == 0:
-		s.PageSize = defaultPageSize
-	case s.PageSize < 0 || s.PageSize > maxPageSize:
-		errs.Add("page_size", validation.CodeOutOfRange, "must be between 1 and 100")
-	}
+	paging := checkPaging(&errs, s.Page, s.PageSize)
+	s.Page, s.PageSize = paging.Page, paging.PageSize
 
 	if err := errs.Err(); err != nil {
 		return Search{}, err

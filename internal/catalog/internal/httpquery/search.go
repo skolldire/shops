@@ -57,6 +57,19 @@ func ParseParams(p Params) (domain.Search, error) {
 	return search, nil
 }
 
+func ParsePaging(values url.Values) (domain.Paging, error) {
+	return ParsePagingParams(values.Get("page"), values.Get("page_size"))
+}
+
+func ParsePagingParams(page, pageSize string) (domain.Paging, error) {
+	var format validation.Errors
+	p, err := domain.NewPaging(positiveParam(&format, "page", page), positiveParam(&format, "page_size", pageSize))
+	if merged := validation.Merge(format, err); merged != nil {
+		return domain.Paging{}, merged
+	}
+	return p, nil
+}
+
 func decimalParam(errs *validation.Errors, field, raw string) *decimal.Decimal {
 	if raw == "" {
 		return nil

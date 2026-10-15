@@ -38,15 +38,18 @@ type seedGuard interface {
 type store interface {
 	app.Repository
 	app.ProductUpserter
+	app.StockStore
 	seedGuard
 }
 
 type Module struct {
-	svc      *app.Service
-	importer *observe.InstrumentedImporter
-	seed     seedGuard
-	http     *httpapi.Handler
-	imports  *httpapi.ImportHandler
+	svc       *app.Service
+	inventory *app.Inventory
+	importer  *observe.InstrumentedImporter
+	seed      seedGuard
+	http      *httpapi.Handler
+	movements *httpapi.MovementsHandler
+	imports   *httpapi.ImportHandler
 }
 
 func NewModule(d Deps) (*Module, error) {
@@ -62,7 +65,15 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	inventory, err := app.NewInventory(s)
+	if err != nil {
+		return nil, err
+	}
 	h, err := httpapi.New(svc, d.Log)
+	if err != nil {
+		return nil, err
+	}
+	movements, err := httpapi.NewMovements(inventory, d.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -90,11 +101,12 @@ func newModule(s store, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Module{svc: svc, importer: importer, seed: s, http: h, imports: imports}, nil
+	return &Module{svc: svc, inventory: inventory, importer: importer, seed: s, http: h, movements: movements, imports: imports}, nil
 }
 
 func (m *Module) RegisterRoutes(r chi.Router) {
 	m.http.Routes(r)
+	m.movements.Routes(r)
 }
 
 func (m *Module) RegisterImportRoutes(r chi.Router) {
@@ -204,6 +216,57 @@ func (m *Module) Categories(ctx context.Context) ([]string, error) {
 	return categories, nil
 }
 
+func (m *Module) TakeStock(ctx context.Context, items []StockRequest, reference string) ([]StockLine, error) {
+	lines, err := m.inventory.TakeStock(ctx, toStockRequests(items), reference)
+	if err != nil {
+		return nil, publicError(err)
+	}
+	out := make([]StockLine, len(lines))
+	for i, l := range lines {
+		out[i] = StockLine{ProductID: l.ProductID, SKU: l.SKU, Name: l.Name, Price: l.Price, Quantity: l.Quantity}
+	}
+	return out, nil
+}
+
+func (m *Module) ReturnStock(ctx context.Context, items []StockRequest, reference string) error {
+	return publicError(m.inventory.ReturnStock(ctx, toStockRequests(items), reference))
+}
+
+func ParsePaging(page, pageSize string) (Paging, error) {
+	p, err := httpquery.ParsePagingParams(page, pageSize)
+	if err != nil {
+		return Paging{}, err
+	}
+	return Paging{Page: p.Page, PageSize: p.PageSize}, nil
+}
+
+func (m *Module) Movements(ctx context.Context, productID string, p Paging) (MovementPage, error) {
+	paging, err := domain.NewPaging(p.Page, p.PageSize)
+	if err != nil {
+		return MovementPage{}, err
+	}
+	page, err := m.inventory.Movements(ctx, productID, paging)
+	if err != nil {
+		return MovementPage{}, publicError(err)
+	}
+	out := MovementPage{Items: make([]Movement, len(page.Items)), Page: page.Page, PageSize: page.PageSize, Total: page.Total}
+	for i, mv := range page.Items {
+		out.Items[i] = Movement{
+			ID: mv.ID, ProductID: mv.ProductID, Delta: mv.Delta, StockAfter: mv.StockAfter, Reason: mv.Reason,
+			Reference: mv.Reference, DBUser: mv.DBUser, TxID: mv.TxID, CreatedAt: mv.CreatedAt,
+		}
+	}
+	return out, nil
+}
+
+func toStockRequests(items []StockRequest) []domain.StockRequest {
+	out := make([]domain.StockRequest, len(items))
+	for i, it := range items {
+		out[i] = domain.StockRequest{ProductID: it.ProductID, Quantity: it.Quantity}
+	}
+	return out
+}
+
 func fromCore(p domain.Product) Product {
 	return Product{
 		ID: p.ID, SKU: p.SKU, Name: p.Name, Description: p.Description, Category: p.Category,
@@ -252,7 +315,14 @@ func publicImportError(err error) error {
 }
 
 func publicError(err error) error {
+	var short *app.InsufficientStockError
 	switch {
+	case errors.As(err, &short):
+		return &InsufficientStockError{ProductID: short.ProductID, Available: short.Available}
+	case errors.Is(err, app.ErrProductUnavailable):
+		return ErrProductUnavailable
+	case errors.Is(err, app.ErrInvalidStockRequest):
+		return ErrInvalidStockRequest
 	case errors.Is(err, app.ErrNotFound):
 		return ErrNotFound
 	case errors.Is(err, app.ErrSKUTaken):

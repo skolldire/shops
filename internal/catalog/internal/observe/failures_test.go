@@ -73,7 +73,7 @@ type flakyStore struct {
 	failSKU string
 }
 
-func (f flakyStore) Upsert(_ context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
+func (f flakyStore) Upsert(_ context.Context, products []domain.Product, _ string) (map[string]app.UpsertOutcome, error) {
 	if len(products) > 1 {
 		return nil, errors.New("batch exploded")
 	}

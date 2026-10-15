@@ -7,7 +7,7 @@ import (
 )
 
 type ProductUpserter interface {
-	Upsert(ctx context.Context, products []domain.Product) (map[string]UpsertOutcome, error)
+	Upsert(ctx context.Context, products []domain.Product, reference string) (map[string]UpsertOutcome, error)
 }
 
 type ImportFailureReporter interface {
@@ -26,4 +26,10 @@ type Repository interface {
 	Delete(ctx context.Context, id string, version int) error
 	Search(ctx context.Context, s domain.Search) ([]domain.Product, int, error)
 	Categories(ctx context.Context) ([]string, error)
+}
+
+type StockStore interface {
+	TakeStock(ctx context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error)
+	ReturnStock(ctx context.Context, items []domain.StockRequest, reference string) error
+	Movements(ctx context.Context, productID string, p domain.Paging) ([]domain.Movement, int, error)
 }

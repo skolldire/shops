@@ -18,11 +18,48 @@ import (
 	"github.com/skolldire/shops/internal/platform/validation"
 )
 
-const productID = "2b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
+const (
+	productID = "2b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
+	missingID = "9b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
+)
 
 type memoryRepo struct {
-	products map[string]domain.Product
-	search   domain.Search
+	products  map[string]domain.Product
+	search    domain.Search
+	taken     []domain.StockRequest
+	returned  []domain.StockRequest
+	reference string
+	movements []domain.Movement
+}
+
+func (m *memoryRepo) TakeStock(_ context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
+	m.reference = reference
+	lines := make([]domain.StockLine, 0, len(items))
+	for _, it := range items {
+		p, ok := m.products[it.ProductID]
+		switch {
+		case !ok:
+			return nil, app.ErrProductUnavailable
+		case p.Stock < it.Quantity:
+			return nil, &app.InsufficientStockError{ProductID: it.ProductID, Available: p.Stock}
+		}
+		m.taken = append(m.taken, it)
+		lines = append(lines, domain.StockLine{ProductID: p.ID, SKU: p.SKU, Name: p.Name, Price: p.Price, Quantity: it.Quantity})
+	}
+	return lines, nil
+}
+
+func (m *memoryRepo) ReturnStock(_ context.Context, items []domain.StockRequest, reference string) error {
+	m.reference = reference
+	m.returned = append(m.returned, items...)
+	return nil
+}
+
+func (m *memoryRepo) Movements(_ context.Context, productID string, _ domain.Paging) ([]domain.Movement, int, error) {
+	if _, ok := m.products[productID]; !ok {
+		return nil, 0, app.ErrNotFound
+	}
+	return m.movements, len(m.movements), nil
 }
 
 func (m *memoryRepo) Create(_ context.Context, p domain.Product) (domain.Product, error) {
@@ -89,7 +126,7 @@ func testDeps(log logger.Service) Deps {
 	return Deps{Log: log, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(), Import: ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}}
 }
 
-func (m *memoryRepo) Upsert(ctx context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
+func (m *memoryRepo) Upsert(ctx context.Context, products []domain.Product, _ string) (map[string]app.UpsertOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -237,4 +274,56 @@ func TestNewModuleRequiresDependencies(t *testing.T) {
 		_, err = newModule(&memoryRepo{}, deps)
 		require.Error(t, err, name)
 	}
+}
+
+func TestModuleStockTranslatesErrors(t *testing.T) {
+	m, repo := newTestModule(t)
+	p, err := m.Create(context.Background(), validCreate())
+	require.NoError(t, err)
+
+	lines, err := m.TakeStock(context.Background(), []StockRequest{{ProductID: p.ID, Quantity: 2}}, "purchase-1")
+	require.NoError(t, err)
+	require.Equal(t, []StockLine{{ProductID: p.ID, SKU: p.SKU, Name: p.Name, Price: p.Price, Quantity: 2}}, lines)
+	require.Equal(t, "purchase-1", repo.reference)
+
+	_, err = m.TakeStock(context.Background(), []StockRequest{{ProductID: p.ID, Quantity: 1000}}, "purchase-2")
+	var short *InsufficientStockError
+	require.ErrorAs(t, err, &short)
+	require.Equal(t, p.ID, short.ProductID)
+	require.Equal(t, p.Stock, short.Available)
+
+	_, err = m.TakeStock(context.Background(), []StockRequest{{ProductID: missingID, Quantity: 1}}, "purchase-3")
+	require.ErrorIs(t, err, ErrProductUnavailable)
+
+	_, err = m.TakeStock(context.Background(), []StockRequest{{ProductID: p.ID, Quantity: 0}}, "purchase-4")
+	require.ErrorIs(t, err, ErrInvalidStockRequest)
+
+	require.NoError(t, m.ReturnStock(context.Background(), []StockRequest{{ProductID: p.ID, Quantity: 2}}, "purchase-1"))
+	require.Equal(t, []domain.StockRequest{{ProductID: p.ID, Quantity: 2}}, repo.returned)
+}
+
+func TestModuleMovements(t *testing.T) {
+	m, repo := newTestModule(t)
+	p, err := m.Create(context.Background(), validCreate())
+	require.NoError(t, err)
+	repo.movements = []domain.Movement{{ID: 1, ProductID: p.ID, Delta: 10, StockAfter: 10, Reason: "initial_stock"}}
+
+	page, err := m.Movements(context.Background(), p.ID, Paging{})
+	require.NoError(t, err)
+	require.Equal(t, 1, page.Page)
+	require.Equal(t, 20, page.PageSize)
+	require.Equal(t, []Movement{{ID: 1, ProductID: p.ID, Delta: 10, StockAfter: 10, Reason: "initial_stock"}}, page.Items)
+
+	_, err = m.Movements(context.Background(), missingID, Paging{})
+	require.ErrorIs(t, err, ErrNotFound)
+
+	_, err = m.Movements(context.Background(), p.ID, Paging{PageSize: 101})
+	var errs validation.Errors
+	require.ErrorAs(t, err, &errs)
+
+	paging, err := ParsePaging("2", "")
+	require.NoError(t, err)
+	require.Equal(t, Paging{Page: 2, PageSize: 20}, paging)
+	_, err = ParsePaging("x", "0")
+	require.ErrorAs(t, err, &errs)
 }

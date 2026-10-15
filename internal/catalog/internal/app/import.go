@@ -169,7 +169,7 @@ func (i *Importer) apply(ctx context.Context, batch []importRow, report *ImportR
 	for index, row := range batch {
 		products[index] = row.product
 	}
-	outcomes, err := i.store.Upsert(ctx, products)
+	outcomes, err := i.store.Upsert(ctx, products, report.File.SHA256)
 	if err == nil {
 		for _, row := range batch {
 			count(report, row, outcomes[row.sku])
@@ -181,7 +181,7 @@ func (i *Importer) apply(ctx context.Context, batch []importRow, report *ImportR
 	}
 	i.failures.BatchRetried(ctx, len(batch), err)
 	for _, row := range batch {
-		outcomes, err := i.store.Upsert(ctx, []domain.Product{row.product})
+		outcomes, err := i.store.Upsert(ctx, []domain.Product{row.product}, report.File.SHA256)
 		if err == nil {
 			count(report, row, outcomes[row.sku])
 			continue

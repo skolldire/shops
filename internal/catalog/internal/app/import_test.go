@@ -19,15 +19,17 @@ import (
 const csvHeader = "name,sku,description,category,price,stock,weight_kg\n"
 
 type fakeStore struct {
-	existing  map[string]domain.Product
-	deleted   map[string]bool
-	failBatch bool
-	failSKU   map[string]bool
-	batches   [][]string
-	onBatch   func(applied int)
+	existing   map[string]domain.Product
+	deleted    map[string]bool
+	failBatch  bool
+	failSKU    map[string]bool
+	batches    [][]string
+	references []string
+	onBatch    func(applied int)
 }
 
-func (f *fakeStore) Upsert(ctx context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
+func (f *fakeStore) Upsert(ctx context.Context, products []domain.Product, reference string) (map[string]app.UpsertOutcome, error) {
+	f.references = append(f.references, reference)
 	skus := make([]string, len(products))
 	for i, p := range products {
 		skus[i] = p.SKU

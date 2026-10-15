@@ -13,6 +13,9 @@ var (
 	ErrSKUTaken        = errors.New("catalog: sku already taken")
 	ErrVersionConflict = errors.New("catalog: version conflict")
 
+	ErrProductUnavailable  = errors.New("catalog: product unavailable")
+	ErrInvalidStockRequest = errors.New("catalog: invalid stock request")
+
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")
 	ErrTooManyRows   = errors.New("catalog: the csv has too many rows")
@@ -30,6 +33,52 @@ func (e *InvalidCSVError) Error() string {
 
 func (e *InvalidCSVError) Is(target error) bool {
 	return target == ErrInvalidCSV
+}
+
+type InsufficientStockError struct {
+	ProductID string
+	Available int
+}
+
+func (e *InsufficientStockError) Error() string {
+	return fmt.Sprintf("catalog: insufficient stock for product %s: %d available", e.ProductID, e.Available)
+}
+
+type StockRequest struct {
+	ProductID string
+	Quantity  int
+}
+
+type StockLine struct {
+	ProductID string
+	SKU       string
+	Name      string
+	Price     decimal.Decimal
+	Quantity  int
+}
+
+type Paging struct {
+	Page     int
+	PageSize int
+}
+
+type Movement struct {
+	ID         int64
+	ProductID  string
+	Delta      int
+	StockAfter int
+	Reason     string
+	Reference  string
+	DBUser     string
+	TxID       string
+	CreatedAt  time.Time
+}
+
+type MovementPage struct {
+	Items    []Movement
+	Page     int
+	PageSize int
+	Total    int
 }
 
 type ImportLimits struct {

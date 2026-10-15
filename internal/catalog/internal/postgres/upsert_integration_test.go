@@ -78,14 +78,14 @@ func TestUpsert(t *testing.T) {
 
 	t.Run("creates, updates and leaves unchanged rows alone", func(t *testing.T) {
 		f.reset(t)
-		first, err := f.repo.Upsert(ctx, []domain.Product{item("A-1", "Alpha", "1.00", 1), item("B-1", "Beta", "2.00", 2)})
+		first, err := f.repo.Upsert(ctx, []domain.Product{item("A-1", "Alpha", "1.00", 1), item("B-1", "Beta", "2.00", 2)}, "sha")
 		require.NoError(t, err)
 		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeCreated, "B-1": app.OutcomeCreated}, first)
 		before := f.stored(t, "A-1")
 
 		second, err := f.repo.Upsert(ctx, []domain.Product{
 			item("A-1", "Alpha", "1.0", 1), item("B-1", "Beta", "2.00", 9), item("C-1", "Gamma", "3.00", 3),
-		})
+		}, "sha")
 
 		require.NoError(t, err)
 		require.Equal(t, map[string]app.UpsertOutcome{
@@ -101,11 +101,11 @@ func TestUpsert(t *testing.T) {
 	t.Run("importing the same rows again changes nothing", func(t *testing.T) {
 		f.reset(t)
 		rows := []domain.Product{item("A-1", "Alpha", "1.00", 1), item("B-1", "Beta", "2.00", 2)}
-		_, err := f.repo.Upsert(ctx, rows)
+		_, err := f.repo.Upsert(ctx, rows, "sha")
 		require.NoError(t, err)
 		before := []stored{f.stored(t, "A-1"), f.stored(t, "B-1")}
 
-		again, err := f.repo.Upsert(ctx, rows)
+		again, err := f.repo.Upsert(ctx, rows, "sha")
 
 		require.NoError(t, err)
 		require.Equal(t, map[string]app.UpsertOutcome{"A-1": app.OutcomeUnchanged, "B-1": app.OutcomeUnchanged}, again)
@@ -118,14 +118,14 @@ func TestUpsert(t *testing.T) {
 		require.NoError(t, f.repo.Delete(ctx, gone.ID, gone.Version))
 		before := f.stored(t, "GONE-1")
 
-		outcomes, err := f.repo.Upsert(ctx, []domain.Product{item("GONE-1", "Back again", "5.00", 5), item("NEW-1", "New", "1.00", 1)})
+		outcomes, err := f.repo.Upsert(ctx, []domain.Product{item("GONE-1", "Back again", "5.00", 5), item("NEW-1", "New", "1.00", 1)}, "sha")
 
 		require.NoError(t, err)
 		require.Equal(t, map[string]app.UpsertOutcome{"GONE-1": app.OutcomeDeleted, "NEW-1": app.OutcomeCreated}, outcomes)
 		require.Equal(t, before, f.stored(t, "GONE-1"))
 		require.Equal(t, "DELETED", before.Status)
 
-		only, err := f.repo.Upsert(ctx, []domain.Product{item("GONE-1", "Back again", "5.00", 5)})
+		only, err := f.repo.Upsert(ctx, []domain.Product{item("GONE-1", "Back again", "5.00", 5)}, "sha")
 		require.NoError(t, err)
 		require.Equal(t, map[string]app.UpsertOutcome{"GONE-1": app.OutcomeDeleted}, only)
 	})
@@ -145,7 +145,7 @@ func TestUpsert(t *testing.T) {
 		}
 		done := make(chan result, 1)
 		go func() {
-			outcomes, err := f.repo.Upsert(ctx, []domain.Product{item("RACE-1", "Race again", "9.00", 9), item("RACE-2", "Other", "1.00", 1)})
+			outcomes, err := f.repo.Upsert(ctx, []domain.Product{item("RACE-1", "Race again", "9.00", 9), item("RACE-2", "Other", "1.00", 1)}, "sha")
 			done <- result{outcomes, err}
 		}()
 		require.Eventually(t, func() bool {
@@ -166,14 +166,14 @@ func TestUpsert(t *testing.T) {
 
 	t.Run("an empty batch does nothing", func(t *testing.T) {
 		f.reset(t)
-		outcomes, err := f.repo.Upsert(ctx, nil)
+		outcomes, err := f.repo.Upsert(ctx, nil, "sha")
 		require.NoError(t, err)
 		require.Empty(t, outcomes)
 	})
 
 	t.Run("a batch the database rejects applies none of its rows", func(t *testing.T) {
 		f.reset(t)
-		_, err := f.repo.Upsert(ctx, []domain.Product{item("OK-1", "Fine", "1.00", 1), item("BAD-1", "Free", "0", 1)})
+		_, err := f.repo.Upsert(ctx, []domain.Product{item("OK-1", "Fine", "1.00", 1), item("BAD-1", "Free", "0", 1)}, "sha")
 
 		require.Error(t, err)
 		require.Zero(t, f.count(t))

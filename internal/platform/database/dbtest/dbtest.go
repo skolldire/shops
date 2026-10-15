@@ -56,3 +56,16 @@ func Start(t *testing.T) (*pgxpool.Pool, database.Config) {
 	t.Cleanup(pool.Close)
 	return pool, cfg
 }
+
+func Truncate(t *testing.T, pool *pgxpool.Pool, tables string) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `TRUNCATE `+tables)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+}
