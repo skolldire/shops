@@ -58,14 +58,17 @@ type RowError struct {
 }
 
 type ImportReport struct {
-	File      ImportFile
-	Records   int
-	Skipped   int
-	Created   int
-	Updated   int
-	Unchanged int
-	Rejected  int
-	Errors    []RowError
+	ID             string
+	Mode           domain.ImportMode
+	PreviewChanged bool
+	File           ImportFile
+	Records        int
+	Skipped        int
+	Created        int
+	Updated        int
+	Unchanged      int
+	Rejected       int
+	Errors         []RowError
 }
 
 type Importer struct {
