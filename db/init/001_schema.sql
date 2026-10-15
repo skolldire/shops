@@ -108,6 +108,39 @@ CREATE TABLE purchase_items (
     PRIMARY KEY (purchase_id, product_id)
 );
 
+CREATE FUNCTION reject_purchase_item_change() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'purchase_items is append-only: % is not allowed', TG_OP
+        USING ERRCODE = 'insufficient_privilege';
+END;
+$$;
+
+CREATE TRIGGER purchase_items_immutable
+BEFORE UPDATE OR DELETE ON purchase_items
+FOR EACH ROW EXECUTE FUNCTION reject_purchase_item_change();
+
+CREATE TRIGGER purchase_items_no_truncate
+BEFORE TRUNCATE ON purchase_items
+FOR EACH STATEMENT EXECUTE FUNCTION reject_purchase_item_change();
+
+CREATE FUNCTION guard_purchase_snapshot() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF (NEW.id, NEW.user_id, NEW.idempotency_key, NEW.request_hash, NEW.currency, NEW.total, NEW.payment_token, NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.id, OLD.user_id, OLD.idempotency_key, OLD.request_hash, OLD.currency, OLD.total, OLD.payment_token, OLD.created_at) THEN
+        RAISE EXCEPTION 'purchases keep their amount, identity and payment token: only the outcome may change'
+            USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER purchases_snapshot_immutable
+BEFORE UPDATE ON purchases
+FOR EACH ROW EXECUTE FUNCTION guard_purchase_snapshot();
+
 CREATE TABLE cart_items (
     user_id         text          NOT NULL,
     product_id      uuid          NOT NULL,
