@@ -57,6 +57,8 @@ type productJSON struct {
 	Category    string    `json:"category"`
 	Price       string    `json:"price"`
 	Stock       int       `json:"stock"`
+	Reserved    int       `json:"reserved"`
+	Available   int       `json:"available"`
 	WeightKg    string    `json:"weight_kg"`
 	Version     int       `json:"version"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -79,6 +81,8 @@ func toJSON(p domain.Product) productJSON {
 		Category:    p.Category,
 		Price:       p.Price.StringFixed(2),
 		Stock:       p.Stock,
+		Reserved:    p.Reserved,
+		Available:   p.Available(),
 		WeightKg:    p.WeightKg.StringFixed(3),
 		Version:     p.Version,
 		CreatedAt:   p.CreatedAt.UTC(),

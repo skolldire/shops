@@ -89,10 +89,10 @@ func TestStockTranslatesTheCatalog(t *testing.T) {
 	require.ErrorIs(t, err, app.ErrProductUnavailable)
 
 	c.err = nil
-	c.product = catalog.Product{ID: id, SKU: "A-1", Name: "Alpha", Price: decimal.RequireFromString("3"), Stock: 4}
+	c.product = catalog.Product{ID: id, SKU: "A-1", Name: "Alpha", Price: decimal.RequireFromString("3"), Stock: 6, Reserved: 2, Available: 4}
 	p, err := s.Product(ctx, id)
 	require.NoError(t, err)
-	require.Equal(t, app.Product{ID: id, SKU: "A-1", Name: "Alpha", Price: decimal.RequireFromString("3"), Stock: 4}, p)
+	require.Equal(t, app.Product{ID: id, SKU: "A-1", Name: "Alpha", Price: decimal.RequireFromString("3"), Available: 4}, p)
 
 	_, err = catalogstock.New(nil)
 	require.Error(t, err)

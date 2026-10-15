@@ -55,7 +55,7 @@ func (s *Stock) Product(ctx context.Context, id domain.ID) (app.Product, error) 
 	if err != nil {
 		return app.Product{}, err
 	}
-	return app.Product{ID: domain.ID(p.ID), SKU: p.SKU, Name: p.Name, Price: p.Price, Stock: p.Stock}, nil
+	return app.Product{ID: domain.ID(p.ID), SKU: p.SKU, Name: p.Name, Price: p.Price, Available: p.Available}, nil
 }
 
 func requests(items []domain.Quantity) []catalog.StockRequest {

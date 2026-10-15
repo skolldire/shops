@@ -148,6 +148,19 @@ func TestReservations(t *testing.T) {
 			"the reservation did not change the version the edit was based on")
 	})
 
+	t.Run("reads and the in-stock filter use the available units", func(t *testing.T) {
+		f.reset(t)
+		a, b := f.create(t, "A-1", "Alpha", "Sports", "1.00", 2), f.create(t, "B-1", "Beta", "Sports", "1.00", 3)
+		_, err := f.repo.ReserveStock(ctx, []domain.StockRequest{{ProductID: a.ID, Quantity: 2}, {ProductID: b.ID, Quantity: 1}}, "purchase-1")
+		require.NoError(t, err)
+		got, err := f.repo.Get(ctx, a.ID)
+		require.NoError(t, err)
+		require.Equal(t, []int{2, 2, 0}, []int{got.Stock, got.Reserved, got.Available()})
+		skus, total := search(t, f, domain.SearchInput{InStock: true})
+		require.Equal(t, []string{"B-1"}, skus, "a product with every unit reserved is not in stock")
+		require.Equal(t, 1, total)
+	})
+
 	t.Run("the operations run in the caller's transaction", func(t *testing.T) {
 		f.reset(t)
 		a := f.create(t, "A-1", "Alpha", "Sports", "1.00", 5)

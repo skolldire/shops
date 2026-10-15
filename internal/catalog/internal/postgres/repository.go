@@ -20,7 +20,7 @@ import (
 const (
 	uniqueViolation = "23505"
 	skuConstraint   = "products_sku_key"
-	columns         = `id::text, sku, name, description, category, price::text, stock, weight_kg::text, version, created_at, updated_at`
+	columns         = `id::text, sku, name, description, category, price::text, stock, reserved, weight_kg::text, version, created_at, updated_at`
 )
 
 type Repository struct {
@@ -180,7 +180,7 @@ func scanProduct(row pgx.Row) (domain.Product, error) {
 		price, weight string
 	)
 	if err := row.Scan(&p.ID, &p.SKU, &p.Name, &p.Description, &p.Category,
-		&price, &p.Stock, &weight, &p.Version, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&price, &p.Stock, &p.Reserved, &weight, &p.Version, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return domain.Product{}, err
 	}
 	var err error

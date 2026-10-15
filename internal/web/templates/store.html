@@ -59,7 +59,7 @@
 <h2><a href="/products/{{.ID}}">{{.Name}}</a></h2>
 <span class="category">{{.Category}}</span>
 <span class="price">${{money .Price}}</span>
-{{if gt .Stock 0}}<span class="stock">{{.Stock}} in stock</span>{{else}}<span class="stock out">Out of stock</span>{{end}}
+{{if gt .Available 0}}<span class="stock">{{.Available}} in stock</span>{{else}}<span class="stock out">Out of stock</span>{{end}}
 </li>
 {{end}}
 </ul>

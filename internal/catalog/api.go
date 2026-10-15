@@ -136,6 +136,8 @@ type Product struct {
 	Category    string
 	Price       decimal.Decimal
 	Stock       int
+	Reserved    int
+	Available   int
 	WeightKg    decimal.Decimal
 	Version     int
 	CreatedAt   time.Time

@@ -17,7 +17,7 @@ import (
 )
 
 func stockedShoes(stock int) map[string]catalog.Product {
-	return map[string]catalog.Product{"p1": {ID: "p1", SKU: "RS-001", Name: "Running Shoes", Price: money("29.99"), Stock: stock, WeightKg: money("1")}}
+	return map[string]catalog.Product{"p1": {ID: "p1", SKU: "RS-001", Name: "Running Shoes", Price: money("29.99"), Stock: stock + 2, Reserved: 2, Available: stock, WeightKg: money("1")}}
 }
 
 func TestProductPageOffersTheCartOnlyWithStock(t *testing.T) {

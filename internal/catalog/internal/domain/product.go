@@ -35,10 +35,15 @@ type Product struct {
 	Category    string
 	Price       decimal.Decimal
 	Stock       int
+	Reserved    int
 	WeightKg    decimal.Decimal
 	Version     int
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+func (p Product) Available() int {
+	return p.Stock - p.Reserved
 }
 
 type NewProductInput struct {

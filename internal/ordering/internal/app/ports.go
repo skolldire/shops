@@ -13,11 +13,11 @@ type Tx interface {
 }
 
 type Product struct {
-	ID    domain.ID
-	SKU   string
-	Name  string
-	Price decimal.Decimal
-	Stock int
+	ID        domain.ID
+	SKU       string
+	Name      string
+	Price     decimal.Decimal
+	Available int
 }
 
 type Stock interface {

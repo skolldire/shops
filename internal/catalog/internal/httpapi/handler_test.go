@@ -30,7 +30,7 @@ var stamp = time.Date(2026, 10, 9, 17, 0, 0, 0, time.UTC)
 func sample() domain.Product {
 	return domain.Product{
 		ID: id, SKU: "RS-001", Name: "Running Shoes", Description: "Light", Category: "Sports",
-		Price: decimal.RequireFromString("29.9"), Stock: 10, WeightKg: decimal.RequireFromString("0.85"),
+		Price: decimal.RequireFromString("29.9"), Stock: 10, Reserved: 4, WeightKg: decimal.RequireFromString("0.85"),
 		Version: 3, CreatedAt: stamp, UpdatedAt: stamp.Add(5 * time.Minute),
 	}
 }
@@ -135,7 +135,7 @@ func TestCreate(t *testing.T) {
 	require.Equal(t, "/api/v1/products/"+id, rec.Header().Get("Location"))
 	require.Equal(t, `"1"`, rec.Header().Get("ETag"))
 	require.JSONEq(t, `{"id":"`+id+`","sku":"RS-001","name":"Running Shoes","description":"Light","category":"Sports",
-		"price":"29.90","stock":10,"weight_kg":"0.850","version":1,
+		"price":"29.90","stock":10,"reserved":4,"available":6,"weight_kg":"0.850","version":1,
 		"created_at":"2026-10-09T17:00:00Z","updated_at":"2026-10-09T17:05:00Z"}`, rec.Body.String())
 	require.Equal(t, "29.99", svc.created.Price.String())
 	require.Equal(t, "0.85", svc.created.WeightKg.String())

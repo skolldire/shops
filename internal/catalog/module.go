@@ -274,7 +274,7 @@ func toStockRequests(items []StockRequest) []domain.StockRequest {
 func fromCore(p domain.Product) Product {
 	return Product{
 		ID: p.ID, SKU: p.SKU, Name: p.Name, Description: p.Description, Category: p.Category,
-		Price: p.Price, Stock: p.Stock, WeightKg: p.WeightKg, Version: p.Version,
+		Price: p.Price, Stock: p.Stock, Reserved: p.Reserved, Available: p.Available(), WeightKg: p.WeightKg, Version: p.Version,
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}
 }

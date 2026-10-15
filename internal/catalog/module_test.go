@@ -185,7 +185,7 @@ func TestModuleLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Product{
 		ID: productID, SKU: "RS-001", Name: "Running Shoes", Category: "Sports",
-		Price: *dec("29.99"), Stock: 10, WeightKg: *dec("0.850"), Version: 1,
+		Price: *dec("29.99"), Stock: 10, Available: 10, WeightKg: *dec("0.850"), Version: 1,
 	}, created)
 
 	got, err := m.Get(ctx, productID)

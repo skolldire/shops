@@ -18,7 +18,7 @@ const productID = "2b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
 func shoes() catalog.Product {
 	return catalog.Product{
 		ID: productID, SKU: "RS-001", Name: "Running Shoes", Description: "Light and fast", Category: "Sports",
-		Price: decimal.RequireFromString("29.9"), Stock: 3, WeightKg: decimal.RequireFromString("0.85"), Version: 2,
+		Price: decimal.RequireFromString("29.9"), Stock: 5, Reserved: 2, Available: 3, WeightKg: decimal.RequireFromString("0.85"), Version: 2,
 	}
 }
 

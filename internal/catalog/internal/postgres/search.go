@@ -71,7 +71,7 @@ func filters(s domain.Search) (string, []any) {
 		conds = append(conds, "price <= "+param(s.MaxPrice.String())+"::numeric")
 	}
 	if s.InStock {
-		conds = append(conds, "stock > 0")
+		conds = append(conds, "stock - reserved > 0")
 	}
 	return strings.Join(conds, " AND "), args
 }

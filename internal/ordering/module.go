@@ -151,7 +151,7 @@ func (m *Module) Cart(ctx context.Context, userID string) (Cart, error) {
 	for i, l := range view.Lines {
 		out.Lines[i] = CartLine{
 			ProductID: string(l.Item.ProductID), SKU: l.Product.SKU, Name: l.Product.Name, Quantity: l.Item.Quantity,
-			UnitPriceSeen: l.Item.UnitPriceSeen, CurrentPrice: l.Product.Price, Available: l.Product.Stock,
+			UnitPriceSeen: l.Item.UnitPriceSeen, CurrentPrice: l.Product.Price, Available: l.Product.Available,
 			Unavailable: l.Unavailable, LowStock: l.LowStock, PriceChanged: l.PriceChanged,
 		}
 	}

@@ -69,14 +69,14 @@ func newWorld() *world {
 
 func (w *world) product(id, sku, price string, stock int) domain.ID {
 	pid := domain.ID(id)
-	w.state.stock[pid] = app.Product{ID: pid, SKU: sku, Name: "Product " + sku, Price: decimal.RequireFromString(price), Stock: stock}
+	w.state.stock[pid] = app.Product{ID: pid, SKU: sku, Name: "Product " + sku, Price: decimal.RequireFromString(price), Available: stock}
 	return pid
 }
 
 func (w *world) stockOf(id domain.ID) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.state.stock[id].Stock
+	return w.state.stock[id].Available
 }
 
 func (w *world) count() int {
@@ -246,11 +246,11 @@ func (w *world) Reserve(ctx context.Context, items []domain.Quantity, _ string) 
 			case !ok || w.state.deleted[it.ProductID]:
 				err = &app.UnavailableProductError{ProductID: it.ProductID}
 				return
-			case p.Stock < it.Quantity:
-				err = &app.InsufficientStockError{ProductID: it.ProductID, Available: p.Stock}
+			case p.Available < it.Quantity:
+				err = &app.InsufficientStockError{ProductID: it.ProductID, Available: p.Available}
 				return
 			}
-			p.Stock -= it.Quantity
+			p.Available -= it.Quantity
 			w.state.stock[it.ProductID] = p
 			w.state.reserved[it.ProductID] += it.Quantity
 			lines = append(lines, domain.ReservedLine{ProductID: p.ID, SKU: p.SKU, Name: p.Name, Price: p.Price, Quantity: it.Quantity})
@@ -263,7 +263,7 @@ func (w *world) Reserve(ctx context.Context, items []domain.Quantity, _ string) 
 func (w *world) Release(ctx context.Context, items []domain.Quantity, _ string) error {
 	return w.settle(ctx, items, func(id domain.ID, q int) {
 		p := w.state.stock[id]
-		p.Stock += q
+		p.Available += q
 		w.state.stock[id] = p
 	}, &w.state.releases)
 }

@@ -8,11 +8,11 @@
 <dl>
 <dt>SKU</dt><dd>{{.Data.Product.SKU}}</dd>
 <dt>Category</dt><dd>{{.Data.Product.Category}}</dd>
-<dt>Availability</dt><dd>{{if gt .Data.Product.Stock 0}}{{.Data.Product.Stock}} in stock{{else}}<span class="stock out">Out of stock</span>{{end}}</dd>
+<dt>Availability</dt><dd>{{if gt .Data.Product.Available 0}}{{.Data.Product.Available}} in stock{{else}}<span class="stock out">Out of stock</span>{{end}}</dd>
 <dt>Weight</dt><dd>{{weight .Data.Product.WeightKg}} kg</dd>
 </dl>
 {{with .Data.Error}}<p class="notice error" role="alert">{{.}}</p>{{end}}
-{{if gt .Data.Product.Stock 0}}
+{{if gt .Data.Product.Available 0}}
 <form class="add-to-cart" action="/cart/items" method="post">
 <input type="hidden" name="product_id" value="{{.Data.Product.ID}}">
 <div class="field">

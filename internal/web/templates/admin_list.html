@@ -32,7 +32,7 @@
 <div class="table-wrap">
 <table>
 <thead>
-<tr><th>SKU</th><th>Name</th><th class="optional">Category</th><th class="numeric">Price</th><th class="numeric">Stock</th><th>Actions</th></tr>
+<tr><th>SKU</th><th>Name</th><th class="optional">Category</th><th class="numeric">Price</th><th class="numeric">Stock</th><th class="numeric">Reserved</th><th>Actions</th></tr>
 </thead>
 <tbody>
 {{range .Page.Items}}
@@ -41,7 +41,7 @@
 <td><a href="/products/{{.ID}}">{{.Name}}</a></td>
 <td class="optional">{{.Category}}</td>
 <td class="numeric">${{money .Price}}</td>
-<td class="numeric">{{.Stock}}</td>
+<td class="numeric">{{.Stock}}</td><td class="numeric">{{.Reserved}}</td>
 <td class="actions"><a href="/admin/products/{{.ID}}/edit">Edit</a> <a href="/admin/products/{{.ID}}/movements">Movements</a> <a href="/admin/products/{{.ID}}/delete">Delete</a></td>
 </tr>
 {{end}}

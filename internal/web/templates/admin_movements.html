@@ -4,7 +4,7 @@
 <div class="page-header">
 <h1>Stock movements of {{.Data.Product.Name}}</h1>
 </div>
-<p class="results-summary">SKU {{.Data.Product.SKU}} · current stock {{.Data.Product.Stock}}</p>
+<p class="results-summary">SKU {{.Data.Product.SKU}} · stock {{.Data.Product.Stock}} · reserved {{.Data.Product.Reserved}}</p>
 {{if .Data.Invalid}}
 <p class="notice error">The page parameters are not valid.</p>
 {{else if .Data.Page.Items}}

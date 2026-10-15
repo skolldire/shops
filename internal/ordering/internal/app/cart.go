@@ -59,7 +59,7 @@ func (c *Cart) View(ctx context.Context, userID string) (CartView, error) {
 			return CartView{}, err
 		default:
 			line.Product = p
-			line.LowStock = p.Stock < it.Quantity
+			line.LowStock = p.Available < it.Quantity
 			line.PriceChanged = !p.Price.Equal(it.UnitPriceSeen)
 		}
 		view.EstimatedTotal = view.EstimatedTotal.Add(it.UnitPriceSeen.Mul(decimal.NewFromInt(int64(it.Quantity))))
