@@ -2,7 +2,7 @@
 
 E-commerce application built as a modular monolith in Go.
 
-It currently ships the platform layer (`internal/platform`), the product catalog with its JSON API and CSV import (`internal/catalog`) and a server-rendered UI to browse and manage products (`internal/web`). Ordering and payments arrive in later phases.
+It currently ships the platform layer (`internal/platform`), the product catalog with its JSON API, CSV import and inventory audit (`internal/catalog`), the cart, checkout and purchases (`internal/ordering`), a simulated payment (`internal/payment`) and a server-rendered UI to browse, buy and manage products (`internal/web`).
 
 ## Requirements
 
@@ -32,11 +32,13 @@ Open `http://localhost:8080` for the store and `http://localhost:8080/admin/prod
 
 ### Upgrading an existing stack
 
-There are no data migrations: `db/init/001_schema.sql` only runs when the data volume is created. Phase 2 adds the `version` column to `products` and moves to PostgreSQL 18, so a stack created before it must be recreated:
+There are no data migrations: `db/init/001_schema.sql` only runs when the data volume is created. Every schema change requires recreating the stack, which deletes the demo data:
 
 ```sh
 make down && make up
 ```
+
+Phase 2 added the `version` column to `products` and moved to PostgreSQL 18. Phase 4 adds `inventory_movements` with its triggers and the `payment_token` column of `purchases`. A stack created before phase 4 keeps the old schema, and the app stops at startup because the purchase recovery reads columns that do not exist.
 
 ### Debug stack
 
@@ -82,7 +84,7 @@ Every pull request to `master` runs:
 |---|---|
 | Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS), the dependency rules described in [Architecture](#architecture), tidy modules, hadolint on the Dockerfile |
 | Unit tests | Race detector on the `go.mod` version and on the latest stable Go |
-| Integration tests | Repositories, transactions and an HTTP acceptance test of the product lifecycle against PostgreSQL |
+| Integration tests | Repositories, transactions, the inventory audit and HTTP acceptance tests of the product lifecycle, the checkout (concurrent buyers, idempotency, rejections, declined payments, recovery) and the UI purchase flow against PostgreSQL |
 | govulncheck | Known vulnerabilities in reachable code |
 | Image scan and end-to-end smoke | Trivy on the image, then the compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
 | Dependency review | OSV-Scanner compares the base branch with the pull request and fails on newly introduced vulnerable dependencies. Accepted exceptions live in `osv-scanner.toml` with a reason and an expiry date |
@@ -122,7 +124,21 @@ HTTP handler or facade
                  -> postgres        one transaction per batch, one span per statement
 ```
 
-`make lint-arch` enforces this on every pull request. It fails if `domain` or `app` import anything outside their closed lists (so `domain` cannot import `app`, and neither can import an adapter), if they reach transport, persistence, logging or telemetry packages even indirectly, or if `internal/platform` imports a business module.
+The ordering module follows the same layout:
+
+| Package | Role | May import |
+|---|---|---|
+| `domain` | Purchases and their states, the checkout rules, the canonical request hash, cart limits and `ParseID` | A closed list: `crypto/sha256`, `encoding/hex`, `errors`, `regexp`, `slices`, `strconv`, `strings`, `time`, `shopspring/decimal` and `platform/validation` |
+| `app` | Checkout, finalization, recovery, cart and purchase queries, and the ports `Tx`, `Stock`, `Payments`, `Purchases`, `Carts` and `CheckoutRecorder` | A closed list: `context`, `errors`, `fmt`, `slices`, `time`, `shopspring/decimal`, `domain` and `platform/validation` |
+| `httpapi` | The checkout and purchase endpoints. Reads `X-Demo-User-ID` and `Idempotency-Key`, decodes JSON and parses prices with `catalog.ParseDecimal` | `app`, `domain`, `platform` and the catalog facade for number parsing |
+| `postgres` | `Tx`, `Purchases` and `Carts` on `purchases`, `purchase_items` and `cart_items` | `app`, `domain` and `platform` |
+| `catalogstock` | Implements `Stock` with the catalog facade (`TakeStock`, `ReturnStock`, `Get`) | `app`, `domain` and the catalog facade |
+| `paymentgw` | Implements `Payments` with the payment facade and translates its errors | `app` and the payment facade |
+| `observe` | Implements `CheckoutRecorder`: the checkout metrics and the one log line per checkout | `domain` and `platform` |
+
+`payment` has no `internal/` packages because its only piece is the simulated charge; a real provider adapter would go to `payment/internal` behind the same facade. Each module owns its tables: ordering never reads `products`, it goes through the catalog facade, and catalog and payment do not know ordering.
+
+`make lint-arch` enforces this on every pull request. It fails if `domain` or `app` of catalog or ordering import anything outside their closed lists (so `domain` cannot import `app`, and neither can import an adapter), if they reach transport, persistence, logging or telemetry packages even indirectly, if ordering's `domain` or `app` reach `internal/catalog` or `internal/payment`, if catalog or payment depend on ordering, if payment depends on catalog, or if `internal/platform` imports a business module. `make lint-decimals` only allows `decimal.NewFromString` where PostgreSQL text is read back (`catalog/internal/postgres`, `ordering/internal/postgres`) and in the decimal grammar itself; everything else parses with `catalog.ParseDecimal`.
 
 ## Endpoints
 
@@ -130,10 +146,10 @@ HTTP handler or facade
 |---|---|---|
 | 8080 | `GET /health/live` | `200 {"status":"up"}` while the process responds |
 | 8080 | `GET /health/ready` | `200` or `503` with `{"status":"up\|down","checks":{"postgres":"up\|down"}}` |
-| 8080 | `/api/v1/...` | The product API, described below. Unknown routes answer `404` or `405` as `application/problem+json` (RFC 9457), with `Allow` on 405 |
+| 8080 | `/api/v1/...` | The product API and the checkout and purchase API, described below. Unknown routes answer `404` or `405` as `application/problem+json` (RFC 9457), with `Allow` on 405 |
 | 8080 | `/health/...` | Unknown health routes answer `404` as `application/problem+json` |
 | 8080 | anything else | The web UI. Unknown pages answer an HTML `404` |
-| 9100 | `GET /metrics` | Prometheus metrics: HTTP server, Go runtime and process |
+| 9100 | `GET /metrics` | Prometheus metrics: HTTP server, Go runtime, process, imports and checkouts |
 
 ## Product API
 
@@ -144,6 +160,7 @@ HTTP handler or facade
 | `GET /api/v1/products/{id}` | `200` with the product and `ETag: "<version>"` | |
 | `PATCH /api/v1/products/{id}` | `200` with the product and the new `ETag` | Requires `If-Match`. Only the fields sent are changed |
 | `DELETE /api/v1/products/{id}` | `204` | Requires `If-Match`. Deletion is logical |
+| `GET /api/v1/products/{id}/movements` | `200` with a page of stock movements, newest first | `page` and `page_size` as in the search. Also lists the movements of a deleted product; `404` only if the product never existed |
 | `GET /api/v1/categories` | `200` with `["Audio","Books",...]` | Distinct categories of active products |
 
 A product:
@@ -211,6 +228,8 @@ curl -i -X PATCH localhost:8080/api/v1/products/$ID \
 If someone changed the product in the meantime, the request fails with `412` instead of overwriting their change.
 
 `If-Match` is compared strongly, as RFC 9110 requires, so a weak entity tag such as `W/"3"` never matches and is rejected with `412`.
+
+Sales change the version too. The stock is part of the resource the `ETag` protects, so taking stock for a checkout and returning it after a declined payment both increase `version`. An administrator who edits a product with an `ETag` read before a sale gets `412` instead of overwriting the stock that the sale lowered.
 
 ### Errors
 
@@ -310,28 +329,233 @@ When the whole file is rejected, the answer is `application/problem+json`:
 
 The image ships that file. When `demo.seed` is `true`, the app imports `demo.seed_file` at startup, before it starts serving, and only if the `products` table has no rows at all, deleted ones included. So `make down && make up` gives a populated store, while restarting the app neither imports again nor brings back products that were deleted. The seed goes through the same import as the API, and its summary is logged at `info` level as `demo seed imported`. Rejected rows are not a failure; a seed file that is missing or cannot be read stops the startup.
 
+## Inventory audit
+
+Every change of stock is recorded in `inventory_movements`, written in the same transaction as the change. The stock of any product can be rebuilt from its movements:
+
+```
+current stock = COALESCE(SUM(delta), 0)
+```
+
+Creating a product with a positive stock records one movement with `delta` equal to that stock; there is no other starting balance. A product created with stock 0 has no movement (`delta <> 0`), and the formula still holds. An update records `delta = new stock - old stock`, and no movement when the stock does not change, so reimporting `unchanged` rows records nothing. The product and its movement commit or roll back together.
+
+**Captured by a trigger, not by hand.** `AFTER INSERT OR UPDATE OF stock ON products` inserts the movement whenever the stock changes. The guarantee does not depend on every code path remembering to write it: even a manual `UPDATE` from `psql` is recorded. Each writer sets `shop.stock_reason` and `shop.stock_reference` with `set_config(..., true)` inside its transaction, always both of them, with an empty reference when there is none, so a writer never inherits the reason or reference of an earlier statement in the same transaction. The create and edit paths now run in a transaction for that reason.
+
+| Path | `reason` | `reference` |
+|---|---|---|
+| Create with stock above 0 (API or UI) | `initial_stock` | none |
+| Edit that changes the stock (API or UI) | `manual_adjustment` | none |
+| Import and demo seed, only rows created or updated | `import` | SHA-256 of the file |
+| Checkout, when the stock is taken | `sale` | purchase id |
+| Declined payment, when the stock is returned | `sale_reversal` | purchase id |
+| Direct SQL | `unattributed` | none |
+
+A product created by CSV gets one `import` movement, not an `initial_stock` plus an `import`. The file hash identifies the content, not one run: two imports of the same file share the reference. `db_user` is the database role of the connection (`shop` for the application), not the demo user. `tx_id` is the PostgreSQL transaction id.
+
+**Immutable in the database.** A `BEFORE UPDATE OR DELETE` trigger on `inventory_movements` and a statement-level `BEFORE TRUNCATE` trigger raise an error, so the application cannot change or remove history. The limit: the owner of the table or a superuser can disable triggers, and the application connects as the owner. In production the table would belong to a role other than the application role, with `REVOKE UPDATE, DELETE` (see [Evolution](#evolution)).
+
+`GET /api/v1/products/{id}/movements` lists them newest first (`id` descending), and `/admin/products/{id}/movements` shows the same history from the product table.
+
+## Purchases
+
+### Demo users
+
+There is no authentication. The identity is a demo user taken from `demo.users` (`alice`, `bob` and `carol` by default). An empty list, an empty name or a repeated name stops the startup.
+
+- **API:** `X-Demo-User-ID` is required on `/api/v1/checkout` and `/api/v1/purchases`. A missing or unknown user answers `400 invalid_demo_user`; the error does not list the valid users.
+- **UI:** the selector in the header stores the user in the `demo_user` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/`). Without a cookie, or with an unknown value, the UI uses the first user of the list.
+
+This is not authentication: any client can pick any demo user. The use cases receive the user as a plain value and never read headers or cookies.
+
+**CodeRabbit exception.** The repository rule that no configuration value reaches a response has one deliberate exception: the UI header renders `demo.users` so the evaluator can switch users. Nothing else exposes them, and secrets and internal settings stay private. `.coderabbit.yaml` states the exception.
+
+### Same-origin check for forms
+
+Because the UI falls back to the first demo user without a cookie, `SameSite=Lax` alone is not enough: another site could send a form that runs as that user. Every UI request other than `GET`, `HEAD` and `OPTIONS`, the admin forms included, must come from the same origin:
+
+- If `Origin` is present it must match the scheme and the authority (host and port, default ports included) of the request. The values are parsed as URLs, never compared as prefixes. `Origin: null` and unparsable values are rejected.
+- Without `Origin`, `Referer` is checked with the same rule.
+- With neither header the request is rejected. Current browsers send `Origin` on form posts.
+- `X-Forwarded-*` and other proxy headers are ignored.
+
+A rejection answers `403` with the HTML error page. The compose stack serves the app directly; behind a reverse proxy the public host would have to be configured. The JSON API does not use cookies, so it does not have this check.
+
+### Checkout
+
+```sh
+curl -i localhost:8080/api/v1/checkout \
+  -H 'X-Demo-User-ID: alice' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H 'Content-Type: application/json' \
+  -d '{"items":[{"product_id":"<id>","quantity":2,"expected_unit_price":"29.99"}],"payment_token":"pm_approved"}'
+```
+
+Totals sent by the client are ignored and the currency is always `USD`. The fake payment accepts `pm_approved` and declines `pm_declined` with `card_declined`; any other token is declined with `unknown_payment_token`.
+
+| Rule | |
+|---|---|
+| `Idempotency-Key` | A UUID in its canonical form with hyphens. Upper case is normalized; `urn:`, braces and the form without hyphens are rejected |
+| `items` | 1 to 50, each `product_id` a canonical UUID, not repeated once normalized |
+| `quantity` | 1 to 99 |
+| `expected_unit_price` | A plain decimal, greater than 0, at most 2 decimals |
+| `payment_token` | Required, at most 64 characters |
+| Total | Computed by the server with exact decimals, at most `9999999999.99` |
+
+All UUIDs (product ids, the key and the purchase id of the queries) go through one validator in the ordering domain, so the API, the UI and the facade accept the same values.
+
+**Request hash.** The key is bound to a SHA-256 of a canonical, length-prefixed representation: the items sorted by normalized product id, each with its quantity and its price at 2 decimals, plus the token and the currency. Two bodies with the same meaning (another order of items, `29.9` instead of `29.90`, upper-case ids) have the same hash.
+
+### States and flow
+
+A purchase is `PENDING`, `CONFIRMED` or `FAILED`, and only `PENDING → CONFIRMED` and `PENDING → FAILED` exist. `PENDING` means the stock was taken and there is no definitive payment result yet; the UI never shows it as confirmed.
+
+1. **Reservation (one transaction).** The purchase is inserted as `PENDING` with `ON CONFLICT (user_id, idempotency_key) DO NOTHING`, already with its server-side total. If the key exists, the transaction is rolled back without touching stock and the stored purchase answers. Otherwise catalog takes the stock of every item, in product id order, in the same transaction, and ordering compares each current price with `expected_unit_price`. Any shortage, unavailable product or price change rolls back the purchase, the stock and the movements together. The items are stored with a snapshot of SKU, name, unit price, quantity and line total.
+2. **Charge.** Outside any transaction and without product locks, with the purchase id as the reference.
+3. **Finalization (one transaction, shared with the recovery).** `UPDATE purchases SET status = ... WHERE id = $1 AND status = 'PENDING'`. If no row changes, another finalization already won and nothing else is applied. Otherwise, in the same transaction: approved → `CONFIRMED` with the payment reference and the cart cleanup; declined → `FAILED` with the reason and the stock returned.
+
+Only a definitive decline leads to `FAILED`. A technical error, an unknown outcome, an unavailable provider or a failed finalization after the charge keep the purchase `PENDING` with its stock taken; the [recovery](#recovery-at-startup) settles it. There is no atomicity between PostgreSQL and the payment; the recovery covers the interruption windows.
+
+**Lock order.** Every path acquires locks in this order and none inverts it:
+
+| Path | Order |
+|---|---|
+| Add to cart | Advisory lock of the user's cart → cart row |
+| Change quantity, remove, accept price | Cart row |
+| Reservation | Purchase row → product rows by product id |
+| Finalization, confirmed | Purchase row → cart rows by product id |
+| Finalization, declined | Purchase row → product rows by product id |
+| Import | Product rows by SKU |
+| Product edit | One product row |
+
+The cart never takes a lock and then one of a purchase or a product, so it forms no cycle with the checkout. This does not remove every deadlock: the import locks by SKU and the checkout by product id, so an import running at the same time as a checkout or a declined finalization can end in `deadlock_detected`, and PostgreSQL aborts one of them. There are no SQL retries. A reservation that fails with `40P01` or `55P03`, with its rollback confirmed, answers `503 try_again` with `Retry-After: 1`, and the client can retry with the same key. A finalization that fails that way leaves the purchase `PENDING` and answers `202`.
+
+### Idempotency
+
+Keys are scoped by user.
+
+| Situation | Effect | Answer |
+|---|---|---|
+| New key, approved | Created, stock taken and confirmed once | `201`, `Location` and the `CONFIRMED` purchase |
+| New key, declined | Created, stock taken and returned once | `201`, `Location` and the `FAILED` purchase with its reason |
+| New key, technical error, unknown outcome or failed finalization after the reservation | The purchase and its taken stock are kept | `202`, `Location` and the `PENDING` purchase |
+| Same key and hash, finished purchase | Reads the stored result, no charge and no effects | `200` with the same body as the first answer |
+| Same key and hash, `PENDING` purchase | No new charge from this request | `202` with the `PENDING` purchase |
+| Same key, other hash | The purchase is not changed | `409 idempotency_conflict` |
+| Recoverable lock error in the reservation, rolled back | No purchase and no stock taken | `503 try_again`, `Retry-After: 1` |
+
+Concurrent requests with the same key wait on the unique index until the first reservation finishes, and then land in one of these rows. If a commit fails in a way that leaves unknown whether it was applied (for example the connection dropped), the answer is `500 internal_error`; if the purchase was persisted, a retry with the same key finds it and the recovery settles it.
+
+### Errors
+
+All errors are `application/problem+json` with a stable `code`. Item details use the `errors` list, with fields such as `items[0].quantity`.
+
+| Case | Status | `code` |
+|---|---|---|
+| Missing or unknown `X-Demo-User-ID` | 400 | `invalid_demo_user` |
+| Missing `Idempotency-Key` or not a UUID | 400 | `invalid_idempotency_key` |
+| Malformed JSON | 400 | `invalid_request` |
+| Body larger than 1 MB | 413 | `request_too_large` |
+| Field rules, with an `errors` list | 422 | `validation_failed` |
+| Unknown or deleted product, on `items[i].product_id` | 422 | `product_unavailable` |
+| Not enough stock, on `items[i].quantity` with the available units in the message | 409 | `insufficient_stock` |
+| Changed price, on `items[i].expected_unit_price` with the current price in the message | 409 | `price_changed` |
+| Same key with another body | 409 | `idempotency_conflict` |
+| Deadlock or lock not available in the reservation | 503 | `try_again` |
+| Unknown purchase, or a purchase of another user | 404 | `not_found` |
+| Unexpected technical failure | 500 | `internal_error`, without tokens, SQL, configuration or provider details |
+
+### Purchase representation and queries
+
+```json
+{"id":"…","status":"CONFIRMED","currency":"USD","total":"59.98","payment_ref":"fake_…","failure_reason":null,
+ "created_at":"…","items":[{"product_id":"…","sku":"RS-001","name":"Running Shoes","unit_price":"29.99","quantity":2,"line_total":"59.98"}]}
+```
+
+| Method and path | Answer |
+|---|---|
+| `POST /api/v1/checkout` | See above |
+| `GET /api/v1/purchases` | The purchases of the user, by `created_at` and `id` descending, with `page` and `page_size` (20 by default, 100 at most) and the page format of the products |
+| `GET /api/v1/purchases/{id}` | One purchase of the user; another user's purchase is `404`, like one that does not exist |
+
+The payment token is stored in `purchases.payment_token` because the recovery repeats the charge with it. It is a demo token, not card data: it is never logged and never returned by the API. This does not decide how a real provider's credentials would be stored.
+
+### Payment contract (provisional)
+
+`payment.Charge(ctx, ChargeRequest{Reference, Token, Amount, Currency})` returns `APPROVED` with a provider reference, or `DECLINED` with a reason. Errors never mean a decline. Two classifiable errors let ordering decide without knowing the provider: `ErrOutcomeUnknown` (the request may have reached the provider and it is unknown whether it charged) and `ErrUnavailable` (the provider is not available). After the reservation both keep the purchase `PENDING`.
+
+Any provider behind this contract must be idempotent by reference: the same reference with the same content does not charge twice and returns the original result; two concurrent charges with the same reference produce one charge; the same reference with other content is a conflict without a new charge. The recovery relies on it. The contract is provisional until a provider is chosen. The in-process fake keeps no state and never returns an error, so it does not prove this idempotency by itself; the tests prove the ordering side with a stateful double that tells requests from effective charges and returns unknown outcomes.
+
+### Time budgets
+
+| Setting | Default | Covers |
+|---|---|---|
+| `checkout.reserve_timeout` | 3s | The reservation transaction. Derived from the request context |
+| `checkout.charge_timeout` | 6s | The charge. Starts when the reservation commits, from the request context without its cancellation, so a client that disconnects does not leave the purchase half done |
+| `checkout.finalize_timeout` | 3s | The finalization. A fresh context, also without the client's cancellation; it never reuses the charge context, which may have expired |
+| `checkout.recovery_timeout` | 60s | The whole startup recovery. Each purchase uses the charge and finalize budgets inside it, so exhausting the total also stops the purchase in flight |
+
+All of them must be positive, and `reserve + charge + finalize + 2s` must not exceed `http.write_timeout` nor `http.shutdown_timeout`, or the app does not start. A graceful shutdown waits for the requests in flight; one that does not finish in time stays `PENDING` and the next startup settles it, if the database and the payment provider are available. These budgets do not guarantee that the client receives an answer. What they guarantee is correctness: if the client gets no answer, the idempotency key and the recovery bring the purchase to its right state.
+
+### Cart
+
+The cart lives on the server and is used from the UI only; there are no cart endpoints in the JSON API.
+
+- Adding a product stores its current catalog price as the price seen. Adding it again adds the quantities, up to 99. A deleted or unknown product is an error the UI shows.
+- At most 50 lines, because a checkout accepts at most 50 items. Adding a line takes `pg_advisory_xact_lock` on the user's cart and then counts, so two concurrent adds cannot both take the 50th slot. A hash collision of that advisory lock can make two different users wait for each other; it does not affect correctness.
+- The cart page checks every line against the catalog and warns about unavailable products, stock below the quantity and prices that changed, with a "Use current price" button.
+- The checkout from the cart builds the same items, with the price seen as the expected price, and calls the same use case as the API.
+- A confirmed purchase removes a cart line only if its quantity and price seen are still the ones that were bought, so a line changed in another tab during the payment stays as it was left. If the user removes a line and adds it back identical during the payment, that line is removed. A declined payment does not touch the cart.
+
+### Recovery at startup
+
+Before it starts serving, after the demo seed, the app takes every `PENDING` purchase, repeats the charge with the same reference, token, amount and currency, and applies the same finalization as the checkout. The contract guarantees that this does not charge twice. A purchase whose outcome is still unknown, or whose provider is unavailable, stays `PENDING`. The summary is logged at `info` (`pending purchases recovered`), every purchase that is still pending is logged at `warn` with its cause, and those purchases do not stop the startup. A database error reading the pending purchases does, like the seed.
+
+Decision and assumptions: the RFC proposed taking only purchases pending for more than a minute. The recovery runs before the server accepts requests and there is one instance, so there is no purchase in flight to protect. With several replicas this becomes a periodic job with a minimum age and a lock. A purchase interrupted while the app keeps running stays `PENDING` until the next start, because there is no periodic recovery yet. With the in-process fake the provider is never unavailable, so no readiness policy exists for that case; it will be defined with a real provider.
+
 ## Web UI
 
 | Page | What it does |
 |---|---|
 | `/` | Store with search, category, price range, in-stock filter, sorting and pagination. Results update with htmx without reloading, and the filters stay in the URL so searches can be shared and the Back button works |
-| `/products/{id}` | Product details |
+| `/products/{id}` | Product details, with "Add to cart" and a quantity when the product has stock |
+| `/cart` | The cart: lines, warnings (unavailable, not enough stock, changed price with "Use current price"), quantity changes, removal and the estimated total |
+| `/checkout` | The order and a test payment method (`pm_approved` or `pm_declined`). The page carries a fresh idempotency key in a hidden field, so a double click or a resubmission of the same attempt reuses it; disabling the button while the request runs is only a visual aid. If the cart changed and the checkout answers `idempotency_conflict`, the page is generated again with a new key. A price change goes back to the cart with its warnings |
+| `/purchases` | The purchase history of the current demo user |
+| `/purchases/{id}` | One purchase: confirmed, declined with its reason and the cart kept, or pending with a link to the history |
 | `/admin/products` | Product table with search, edit and delete actions |
 | `/admin/products/new` | Create a product. Validation errors appear next to each field |
 | `/admin/products/{id}/edit` | Edit a product. The form sends the version it showed; if the product changed meanwhile, the page explains it and offers to reload |
 | `/admin/products/{id}/delete` | Server-rendered confirmation before deleting |
+| `/admin/products/{id}/movements` | The stock movements of a product, newest first |
 | `/admin/imports` | Upload a CSV file. The page shows the counters of the import and a table with the rejected rows: line, SKU, field, code and message. A file that is rejected as a whole is explained on the same page |
 
-The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it works without internet access. Pages are served with a strict Content-Security-Policy (no inline scripts or styles), and htmx is configured so it does not inject inline styles.
+The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it works without internet access. Pages are served with a strict Content-Security-Policy (no inline scripts or styles), htmx is configured so it does not inject inline styles, and there is no custom JavaScript. The header shows the demo user selector and a link to the cart with its number of lines; if the cart cannot be read, the page is rendered without the counter and the failure is logged once. Error pages always use that reduced header.
 
 ## Known limitations
 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
 - **The search total is not transactionally consistent with the items.** They come from two separate queries, so with concurrent writes the `total` can differ from the items of a page.
-- **An import sets stock to the value in the file.** Stock is absolute, not a delta: once purchases exist, an import can overwrite stock that recent sales had just reduced.
-- **No authentication.** Anyone who can reach port 8080 can create, edit, delete and import products through `/api/v1` and `/admin`. Do not expose the published listener to untrusted clients without access control in front of it, such as an authenticating reverse proxy or a private network.
-- **No CSRF protection.** There is no session cookie yet, so there are no credentials another site could ride on. CSRF tokens become necessary as soon as authentication is added.
+- **An import sets stock to the value in the file.** Stock is absolute, not a delta: once purchases exist, an import can overwrite stock that recent sales had just reduced. The movement records it as `import`.
+- **No authentication.** Anyone who can reach port 8080 can create, edit, delete and import products through `/api/v1` and `/admin`, and act as any demo user. Do not expose the published listener to untrusted clients without access control in front of it, such as an authenticating reverse proxy or a private network.
+- **Forms are protected by a same-origin check, not by CSRF tokens.** Behind a reverse proxy that changes the host, the public host would have to be configured.
+- **An import and a checkout can deadlock.** They lock products in different orders (SKU and product id). PostgreSQL aborts one of them; a reservation answers `503 try_again`, a finalization leaves the purchase `PENDING`.
+- **Pending purchases wait for the next start.** There is no periodic recovery and the recovery assumes a single instance.
+- **The payment is an in-process fake.** It never times out or fails, so the unknown and unavailable outcomes are exercised only by the tests.
+- **Movements are immutable only for the application.** The table owner or a superuser can disable its triggers.
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
+
+## Evolution
+
+Pieces left out of this phase, with what would justify them:
+
+| Piece | Trigger |
+|---|---|
+| Real HTTP payment provider (phase 4b: simulator, HTTP adapter, retries, circuit breaker, remote lookup by reference) | Choosing a provider, or demonstrating a timeout without a double charge. It plugs in behind the payment facade without changing ordering |
+| Periodic recovery with a minimum age and a lock | Running more than one replica, or pending purchases that cannot wait for a restart |
+| `inventory_movements` owned by a separate role, with `REVOKE UPDATE, DELETE` for the application role | Production, where the audit must hold even against the application's own credentials |
+| Real authentication and sessions instead of demo users | Anyone other than an evaluator using the store |
+| Configurable public host for the same-origin check | Serving the app behind a reverse proxy |
+| Outbox and message broker | Phase 5 |
 
 ## Configuration
 
@@ -358,8 +582,16 @@ Secret fields (the database password) must be a placeholder without a default, s
 | `SEED_DEMO` | `true`. Imports the demo catalog at startup when there are no products |
 | `SEED_FILE` | `/etc/shop/seed.csv`, the official CSV shipped in the image. `config.local.yaml` uses `testdata/products.csv` |
 
+Keys without an environment variable:
+
+| Key | Default |
+|---|---|
+| `demo.users` | `[alice, bob, carol]`. The first one is used when the UI has no `demo_user` cookie |
+| `checkout.reserve_timeout`, `checkout.charge_timeout`, `checkout.finalize_timeout`, `checkout.recovery_timeout` | `3s`, `6s`, `3s` and `60s`. See [Time budgets](#time-budgets) |
+
 ## Observability
 
 - **Logs:** JSON on stdout with `timestamp`, `severity` and `message`. Every request line carries `request_id`, `trace_id` and `span_id`. Sensitive fields and values (passwords, tokens, bearer credentials, card numbers) are redacted. The configuration is never logged. An import that recovers from a failed batch logs it once as a warning; a row the database finally rejects is logged once as an error.
-- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish. Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole.
-- **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route. Under the request span, an import adds one `catalog.import` span for the whole operation, and every statement sent to PostgreSQL adds a `postgres <OPERATION>` child span, such as `postgres SELECT` or `postgres COMMIT`. The trace shows how long the import took, which statements ran, how long each one took and which one failed; the time not spent in PostgreSQL is reading, validating and preparing the rows. Spans carry the operation name only: never the SQL text, its arguments, a file name or a product value. A file rejected as a whole is an expected rejection: the caller still gets the error, but the span is not marked as failed.
+- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish (the image has no shell, so use `make up-debug`, which publishes it on `127.0.0.1:9100`). Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole. Every checkout that reaches the use case counts once in `checkout_total{outcome}`: `confirmed`, `declined`, `pending` (a stored purchase without a definitive payment result), `insufficient_stock`, `price_changed`, `product_unavailable`, `invalid` (field rules and the idempotency key, which the use case validates), `idempotency_conflict`, `replayed`, `in_progress`, `try_again` (only `40P01` and `55P03`) and `error` (unexpected failures); a failure counts as `try_again` or as `error`, never both. Requests rejected before the use case (unknown demo user, unreadable JSON, a body too large) are not counted there; the HTTP server metrics cover them. The startup recovery counts `checkout_recovery_total{outcome}` with `confirmed`, `declined` and `still_pending`. No label carries users, purchases, tokens or error text.
+- **Checkout logs:** every checkout that ends with a purchase writes one line with `purchase_id`, `user_id` and `status`, at `warn` with its cause when the purchase stays `PENDING`. The payment token is never logged. An unexpected failure is logged once, by the HTTP adapter.
+- **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route. Under the request span, an import adds one `catalog.import` span for the whole operation, and every statement sent to PostgreSQL adds a `postgres <OPERATION>` child span, such as `postgres SELECT` or `postgres COMMIT`. The trace shows how long the import took, which statements ran, how long each one took and which one failed; the time not spent in PostgreSQL is reading, validating and preparing the rows. Spans carry the operation name only: never the SQL text, its arguments, a file name or a product value. The checkout adds no spans of its own; its PostgreSQL statements hang from the request span. A file rejected as a whole is an expected rejection: the caller still gets the error, but the span is not marked as failed.
