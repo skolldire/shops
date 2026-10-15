@@ -40,10 +40,8 @@ type MetricsConfig struct {
 }
 
 type ImportConfig struct {
-	MaxBytes          int64         `mapstructure:"max_bytes"`
-	MaxRows           int           `mapstructure:"max_rows"`
-	PreviewTTL        time.Duration `mapstructure:"preview_ttl"`
-	MaxActivePreviews int           `mapstructure:"max_active_previews"`
+	MaxBytes int64 `mapstructure:"max_bytes"`
+	MaxRows  int   `mapstructure:"max_rows"`
 }
 
 type DemoConfig struct {
@@ -107,8 +105,6 @@ func (c AppConfig) Validate() error {
 
 	check(c.Import.MaxBytes > 0, "import.max_bytes must be greater than 0")
 	check(c.Import.MaxRows > 0, "import.max_rows must be greater than 0")
-	check(c.Import.PreviewTTL > 0, "import.preview_ttl must be greater than 0")
-	check(c.Import.MaxActivePreviews >= 1, "import.max_active_previews must be at least 1")
 
 	check(!c.Demo.Seed || c.Demo.SeedFile != "", "demo.seed_file is required when demo.seed is true")
 	errs = append(errs, validateUsers(c.Demo.Users)...)

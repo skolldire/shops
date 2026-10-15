@@ -3,6 +3,8 @@ package domain
 import (
 	"errors"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 type ImportMode string
@@ -27,15 +29,8 @@ func ParseImportMode(raw string) (ImportMode, error) {
 type ImportStatus string
 
 const (
-	ImportPreview   ImportStatus = "PREVIEW"
-	ImportApplying  ImportStatus = "APPLYING"
-	ImportApplied   ImportStatus = "APPLIED"
-	ImportCancelled ImportStatus = "CANCELLED"
-)
-
-const (
-	CancelledByUser  = "user"
-	CancelledExpired = "expired"
+	ImportApplying ImportStatus = "APPLYING"
+	ImportApplied  ImportStatus = "APPLIED"
 )
 
 type ImportStamp struct {
@@ -43,15 +38,10 @@ type ImportStamp struct {
 	AppliedAt time.Time
 }
 
-type PreviewLine struct {
-	SKU      string
-	Before   int
-	After    int
-	Reserved int
-}
-
-type ImportTarget struct {
-	Stock    int
-	Reserved int
-	Deleted  bool
+type ImportChange struct {
+	SKU         string
+	StockBefore int
+	StockAfter  int
+	PriceBefore decimal.Decimal
+	PriceAfter  decimal.Decimal
 }

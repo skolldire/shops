@@ -681,8 +681,6 @@ Keys without an environment variable:
 |---|---|
 | `demo.users` | `[alice, bob, carol]`. The first one is used when the UI has no `demo_user` cookie |
 | `import.max_bytes`, `import.max_rows` | `10485760` (10 MB) and `10000`. See [The file](#the-file) |
-| `import.preview_ttl` | `1h`. An import preview older than this expires: the next upload cancels it and frees its content, and confirming it answers `410 preview_expired` |
-| `import.max_active_previews` | `20`. Previews that keep their content at the same time, across every replica; one more answers `429 too_many_previews` |
 | `checkout.reserve_timeout`, `checkout.charge_timeout`, `checkout.finalize_timeout`, `checkout.recovery_timeout` | `3s`, `6s`, `3s` and `60s`. See [Time budgets](#time-budgets) |
 
 ## Observability
