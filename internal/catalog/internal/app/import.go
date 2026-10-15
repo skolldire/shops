@@ -72,17 +72,19 @@ type ImportReport struct {
 }
 
 type ImportOptions struct {
-	FileName string
-	Mode     domain.ImportMode
-	Key      string
+	FileName       string
+	Mode           domain.ImportMode
+	Key            string
+	AllowDuplicate bool
 }
 
 type ImportRequest struct {
-	File    ImportFile
-	Content []byte
-	Rows    []ImportRow
-	Mode    domain.ImportMode
-	Key     string
+	File           ImportFile
+	Content        []byte
+	Rows           []ImportRow
+	Mode           domain.ImportMode
+	Key            string
+	AllowDuplicate bool
 }
 
 type Importer struct {
@@ -213,6 +215,9 @@ func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportRepo
 				return ErrImportCancelled
 			}
 		}
+		if err := i.refuseDuplicate(ctx, rec, req.AllowDuplicate); err != nil {
+			return err
+		}
 		report = prepared
 		return i.applyAdd(ctx, rec.ID, &report, valid)
 	})
@@ -225,6 +230,20 @@ func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportRepo
 		i.record(ctx, report)
 	}
 	return report, nil
+}
+
+func (i *Importer) refuseDuplicate(ctx context.Context, rec ImportRecord, allow bool) error {
+	if allow {
+		return nil
+	}
+	previous, found, err := i.log.LastAppliedAdd(ctx, rec.File.SHA256, rec.ID)
+	switch {
+	case err != nil:
+		return err
+	case found:
+		return &DuplicateFileError{Previous: previous}
+	}
+	return nil
 }
 
 func (i *Importer) applyAdd(ctx context.Context, id string, report *ImportReport, valid []importRow) error {

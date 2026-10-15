@@ -23,6 +23,7 @@ var (
 	ErrIdempotencyKeyRequired = errors.New("catalog: an add import requires an idempotency key")
 	ErrIdempotencyConflict    = errors.New("catalog: the idempotency key was used with another file or mode")
 	ErrImportCancelled        = errors.New("catalog: the import was cancelled")
+	ErrDuplicateFile          = errors.New("catalog: the same file was already added")
 
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")
@@ -134,6 +135,19 @@ type ImportOptions struct {
 	FileName       string
 	Mode           ImportMode
 	IdempotencyKey string
+	AllowDuplicate bool
+}
+
+type DuplicateFileError struct {
+	AppliedAt time.Time
+}
+
+func (e *DuplicateFileError) Error() string {
+	return "catalog: the same file was already added to the stock on " + e.AppliedAt.UTC().Format(time.RFC3339)
+}
+
+func (e *DuplicateFileError) Is(target error) bool {
+	return target == ErrDuplicateFile
 }
 
 type ImportFile struct {

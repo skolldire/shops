@@ -127,7 +127,9 @@ func (m *Module) Import(ctx context.Context, r io.Reader, opts ImportOptions) (I
 	if err != nil {
 		return ImportReport{}, ErrInvalidImportMode
 	}
-	report, err := m.importer.Import(ctx, r, app.ImportOptions{FileName: opts.FileName, Mode: mode, Key: opts.IdempotencyKey})
+	report, err := m.importer.Import(ctx, r, app.ImportOptions{
+		FileName: opts.FileName, Mode: mode, Key: opts.IdempotencyKey, AllowDuplicate: opts.AllowDuplicate,
+	})
 	switch {
 	case err == nil:
 		return fromReport(report), nil
@@ -319,8 +321,13 @@ func fromReport(r app.ImportReport) ImportReport {
 }
 
 func publicImportError(err error) error {
-	var format *csvimport.FormatError
+	var (
+		format    *csvimport.FormatError
+		duplicate *app.DuplicateFileError
+	)
 	switch {
+	case errors.As(err, &duplicate):
+		return &DuplicateFileError{AppliedAt: duplicate.Previous.AppliedAt}
 	case errors.Is(err, csvimport.ErrFileTooLarge):
 		return ErrFileTooLarge
 	case errors.Is(err, csvimport.ErrInvalidHeader):

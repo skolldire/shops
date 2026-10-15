@@ -60,7 +60,9 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, opts app.ImportOptio
 		Bytes:  metered.n,
 		SHA256: hex.EncodeToString(metered.hash.Sum(nil)),
 	}
-	return i.rows.Import(ctx, app.ImportRequest{File: file, Content: content, Rows: rows, Mode: opts.Mode, Key: opts.Key})
+	return i.rows.Import(ctx, app.ImportRequest{
+		File: file, Content: content, Rows: rows, Mode: opts.Mode, Key: opts.Key, AllowDuplicate: opts.AllowDuplicate,
+	})
 }
 
 func (i *Importer) Rows(content []byte) ([]app.ImportRow, error) {

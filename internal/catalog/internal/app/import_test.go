@@ -565,6 +565,29 @@ func TestARetriedReplaceResumesAnImportLeftApplying(t *testing.T) {
 	require.Nil(t, stored.Content)
 }
 
+func TestAddingTheSameFileAgainNeedsAnExplicitConfirmation(t *testing.T) {
+	store := &fakeStore{}
+	importer, _ := newImporter(t, store, &fakeRecorder{})
+	body := csvHeader + "A,A-1,,A,5,1,1\n"
+	_, err := importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "h", body))
+	require.NoError(t, err)
+
+	_, err = importer.Import(context.Background(), keyed(domain.ImportAdd, otherKey, "h", body))
+	var duplicate *app.DuplicateFileError
+	require.ErrorAs(t, err, &duplicate)
+	require.ErrorIs(t, err, app.ErrDuplicateFile)
+	require.Len(t, store.batches, 1, "nothing is applied without the confirmation")
+
+	confirmed := keyed(domain.ImportAdd, otherKey, "h", body)
+	confirmed.AllowDuplicate = true
+	_, err = importer.Import(context.Background(), confirmed)
+	require.NoError(t, err)
+	require.Len(t, store.batches, 2)
+
+	_, err = importer.Import(context.Background(), keyed(domain.ImportReplace, "8f1c1d3e-2a4b-4c5d-8e9f-0a1b2c3d4e5f", "h", body))
+	require.NoError(t, err, "replacing with the same file again is harmless and needs no confirmation")
+}
+
 func TestNewImporterRequiresItsDependencies(t *testing.T) {
 	log, tx := apptest.NewLog(), apptest.Tx{}
 	_, err := app.NewImporter(nil, log, tx, &fakeRecorder{}, &fakeFailures{})

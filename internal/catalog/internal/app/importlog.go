@@ -15,7 +15,20 @@ var (
 	ErrIdempotencyConflict    = errors.New("catalog: the idempotency key was used with another file or mode")
 	ErrImportCancelled        = errors.New("catalog: the import was cancelled")
 	ErrImportNotApplicable    = errors.New("catalog: the import cannot be applied")
+	ErrDuplicateFile          = errors.New("catalog: the same file was already added")
 )
+
+type DuplicateFileError struct {
+	Previous domain.ImportStamp
+}
+
+func (e *DuplicateFileError) Error() string {
+	return "catalog: the same file was already added to the stock"
+}
+
+func (e *DuplicateFileError) Is(target error) bool {
+	return target == ErrDuplicateFile
+}
 
 type ImportRecord struct {
 	ID           string

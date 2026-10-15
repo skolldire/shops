@@ -167,7 +167,11 @@ func scanImport(row pgx.Row) (app.ImportRecord, error) {
 
 func (l *ImportLog) LastAppliedAdd(ctx context.Context, hash, exceptID string) (domain.ImportStamp, bool, error) {
 	var stamp domain.ImportStamp
-	err := database.Q(ctx, l.pool).QueryRow(ctx,
+	q := database.Q(ctx, l.pool)
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('catalog.import.file:' || $1, 0))`, hash); err != nil {
+		return domain.ImportStamp{}, false, fmt.Errorf("catalog: lock the file of an add import: %w", err)
+	}
+	err := q.QueryRow(ctx,
 		`SELECT created_at, applied_at FROM imports
 		 WHERE mode = 'add' AND status = 'APPLIED' AND file_hash = $1 AND id IS DISTINCT FROM NULLIF($2, '')::uuid
 		 ORDER BY applied_at DESC LIMIT 1`, hash, exceptID).Scan(&stamp.CreatedAt, &stamp.AppliedAt)
