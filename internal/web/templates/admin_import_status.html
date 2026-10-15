@@ -43,9 +43,9 @@
 </div>
 </section>
 {{else if eq $i.Status "APPLYING"}}
-<p class="notice warning" role="alert">This import stopped while it was being applied. Part of the file may already be in the inventory. Applying it again is safe and finishes it.</p>
+<p class="notice warning" role="alert">Interrupted: this import stopped while it was being applied, so part of the file may already be in the inventory. Retrying applies the whole file again, which is safe.</p>
 <form action="/admin/imports/{{$i.ID}}/confirm" method="post" class="actions">
-<button type="submit">Apply it again</button>
+<button type="submit">Retry</button>
 </form>
 {{else if eq $i.Status "CANCELLED"}}
 <p class="notice" role="status">{{if eq $i.CancelReason "expired"}}This preview expired before it was confirmed. Upload the file again to import it.{{else}}This import was cancelled. Nothing was changed.{{end}}</p>

@@ -190,7 +190,7 @@ func TestConfirmationProblemsStayOnTheImport(t *testing.T) {
 
 func TestEachImportStatusHasItsPage(t *testing.T) {
 	for status, want := range map[catalog.ImportStatus]string{
-		catalog.ImportApplying:  "This import stopped while it was being applied.",
+		catalog.ImportApplying:  "Interrupted: this import stopped while it was being applied",
 		catalog.ImportCancelled: "This import was cancelled. Nothing was changed.",
 		catalog.ImportApplied:   `<section id="import-report">`,
 	} {

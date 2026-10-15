@@ -195,8 +195,9 @@ var errFinishLost = errors.New("catalog: another confirmation applied the import
 func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportReport, error) {
 	prepared, valid := i.prepare(req)
 	var (
-		report ImportReport
-		replay bool
+		report  ImportReport
+		replay  bool
+		pending string
 	)
 	err := i.tx.WithinTx(ctx, func(ctx context.Context) error {
 		rec, created, err := i.log.Create(ctx, ImportRecord{Key: strings.ToLower(req.Key), Mode: req.Mode, Status: domain.ImportPreview, File: req.File})
@@ -213,6 +214,9 @@ func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportRepo
 				return nil
 			case domain.ImportCancelled:
 				return ErrImportCancelled
+			case domain.ImportPreview:
+				pending = rec.ID
+				return nil
 			}
 		}
 		if err := i.refuseDuplicate(ctx, rec, req.AllowDuplicate); err != nil {
@@ -226,6 +230,8 @@ func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportRepo
 		return i.applied(ctx, report.ID)
 	case err != nil:
 		return ImportReport{}, fmt.Errorf("catalog: add import not applied: %w", err)
+	case pending != "":
+		return i.confirmAdd(ctx, pending, req, false)
 	case !replay:
 		i.record(ctx, report)
 	}
