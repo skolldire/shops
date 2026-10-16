@@ -388,8 +388,6 @@ Creating a product with a positive stock records one movement with `delta` equal
 
 **Captured by a trigger, not by hand.** `AFTER INSERT OR UPDATE OF stock, reserved ON products` inserts the movement whenever either changes. The guarantee does not depend on every code path remembering to write it: even a manual `UPDATE` from `psql` is recorded. Each writer sets `shop.stock_reason` and `shop.stock_reference` with `set_config(..., true)` inside its transaction, always both of them, with an empty reference when there is none, so a writer never inherits the reason or reference of an earlier statement in the same transaction. The create and edit paths now run in a transaction for that reason.
 
-| Path | `reason` | `reference` |
-|---|---|---|
 | Path | `reason` | `delta` | `reserved_delta` | `reference` |
 |---|---|---|---|---|
 | Create with stock above 0 (API or UI) | `initial_stock` | +n | 0 | none |
