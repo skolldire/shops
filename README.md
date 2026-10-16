@@ -581,7 +581,7 @@ The demo provider is a fake persisted in `payment_fake_charges`, with the refere
 | `checkout.finalize_timeout` | 3s | The finalization. A fresh context, also without the client's cancellation; it never reuses the charge context, which may have expired |
 | `checkout.max_pending_age` | 30m | A purchase older than this is no longer charged again: the recovery resolves it with the provider (see [Periodic recovery](#periodic-recovery)) |
 
-All of them must be positive, and `reserve + charge + finalize + 2s` must not exceed `http.write_timeout` nor `http.shutdown_timeout`, or the app does not start. There is no `checkout.recovery_timeout` any more: it was the total budget of the recovery that ran before serving, which no longer exists. The periodic recovery is already bounded by the charge and finalize budgets of each purchase and by `recovery.batch_size` per cycle. A graceful shutdown waits for the requests in flight; one that does not finish in time stays `PENDING` and the recovery of any replica settles it. These budgets do not guarantee that the client receives an answer. What they guarantee is correctness: if the client gets no answer, the idempotency key and the recovery bring the purchase to its right state.
+All of them must be positive, and `reserve + charge + finalize + 2s` must not exceed `http.write_timeout`, or the app does not start. There is no `checkout.recovery_timeout` any more: it was the total budget of the recovery that ran before serving, which no longer exists. The periodic recovery has its own deadlines, described in [Periodic recovery](#periodic-recovery), and the shutdown budget covers both. A graceful shutdown waits for the requests in flight; one that does not finish in time stays `PENDING` and the recovery of any replica settles it. These budgets do not guarantee that the client receives an answer. What they guarantee is correctness: if the client gets no answer, the idempotency key and the recovery bring the purchase to its right state.
 
 ### Cart
 
@@ -604,7 +604,43 @@ Every replica runs one recovery worker. It starts with the servers without delay
 3. **Settle.** The purchase is charged again with the stored reference, token, amount and currency, and finalized with the same finalization as the checkout. No transaction or lock is open during the charge.
 4. **Without a definitive result** (unknown outcome, unavailable provider, reference conflict, failed finalization), one statement adds one attempt, sets `next_attempt_at` with exponential backoff, jitter and a ceiling, stores the sanitized cause and releases the lease (`lease_until` and `lease_owner` to `NULL`). A purchase never becomes `FAILED` this way.
 
-**Why the lease is renewed per purchase.** A lease set once for the whole batch runs while the batch is processed in series, so the last purchases of a batch could start after their lease expired, be claimed by another replica, and receive a second charge request. Renewing each purchase right before its charge makes `lease > charge_timeout + finalize_timeout + 2s` cover exactly one purchase, and the conditional renewal is what stops a worker from charging a purchase it no longer owns. All times are PostgreSQL's `now()`.
+**Why the lease is renewed per purchase.** A lease set once for the whole batch runs while the batch is processed in series, so the last purchases of a batch could start after their lease expired, be claimed by another replica, and receive a second charge request. Renewing each purchase right before its charge makes the lease cover exactly one purchase, and the conditional renewal is what stops a worker from charging a purchase it no longer owns. The lease is measured with PostgreSQL's `now()`.
+
+**Deadlines.** Every statement of the recovery and every call to the provider has a deadline, and each purchase has one fixed deadline for all its work:
+
+| Step | Budget | Context |
+|---|---|---|
+| Claim | `recovery.db_timeout` | The worker's, so a shutdown cancels it |
+| Renew | `recovery.db_timeout` | The worker's: a renewal that has not finished when the shutdown starts is cancelled, and that purchase is not charged |
+| Charge | `checkout.charge_timeout` | The purchase deadline |
+| Lookup, Void | `checkout.charge_timeout` each, the same budget as a charge because each one is a single call to the provider | The purchase deadline |
+| Finalization | `checkout.finalize_timeout` | The purchase deadline |
+| Reschedule | `recovery.db_timeout` | The purchase deadline |
+| Gauges | `recovery.db_timeout` | The worker's; skipped once the worker is stopping |
+
+Each step takes the shorter of its own budget and the time left to the purchase. The purchase deadline does not depend on the worker being cancelled, so a purchase that has started finishes, and it is counted from just before the renewal, on the process's monotonic clock:
+
+```text
+purchase = renew + max(charge, lookup + void) + finalize + reschedule
+         = 2 × db_timeout + 2 × charge_timeout + finalize_timeout        (19s with the defaults)
+lease    > purchase + 2s
+```
+
+PostgreSQL starts the lease at its `now()` inside the renewal, which is later than the moment the process starts counting, so a slow renewal is paid from the purchase deadline and never extends the work past the lease. Nothing compares the clocks of the app and the database. The 2s margin absorbs the commit of the last statement and the difference in clock rate, not the renewal, which already has its own term. The lease is never renewed in the middle of a purchase. With the defaults, a 30s lease leaves 9s of slack; a 12s lease with a 6s charge and a 3s finalization is rejected at startup.
+
+**When a deadline expires.**
+
+| Step | What happens |
+|---|---|
+| Claim | The cycle ends with the error; the next tick tries again |
+| Renew | The purchase is not charged. The failure is logged with its cause and the worker moves on to the next purchase if it is still running. The lease of the claim expires on its own |
+| Charge, Lookup, Void | The outcome is unknown, never a decline: the purchase stays `PENDING` and is rescheduled if there is time left |
+| Finalization | Its transaction rolls back, so there are no partial effects |
+| Any step once the purchase deadline has passed | No financial operation starts. The purchase stays `PENDING` and, without time left to reschedule, its lease expires |
+| Reschedule | Logged; the lease expires. The attempt is not counted, but `checkout.max_pending_age` still bounds the purchase |
+| Gauges | The last published values stay, and the cycle reports that they were not updated |
+
+A failed renewal or reschedule is logged at `info` with its cause below the threshold, like any attempt without a definitive result.
 
 **Stuck and overdue purchases.** When a purchase reaches `recovery.stuck_after_attempts`, or is older than `checkout.max_pending_age`, the worker stops charging it and resolves it with the provider within its renewed lease:
 
@@ -632,7 +668,13 @@ A purchase becomes `FAILED` only with a `DECLINED` or a `VOIDED` confirmed by th
 
 The attempt counter is returned by the database (`UPDATE … RETURNING recovery_attempts`), so the `error` is written once even with several replicas. **Alerts are defined on the metric `checkout_recovery_stuck`, not on the logs**: the gauge keeps the signal while a stuck purchase exists, and a single log line can be missed.
 
-**Shutdown.** The worker stops before the pool. It claims nothing more, and the purchase in progress finishes within its charge and finalize budgets; if it cannot, it stays `PENDING` with a lease that expires.
+**Shutdown.** SIGTERM reaches the worker and the HTTP servers at the same time:
+
+1. The worker stops claiming at once and does not start the next purchase of its batch.
+2. The purchase in progress finishes within its own deadline, while the HTTP servers drain the requests in flight.
+3. Once the servers are drained, the closers run in reverse order: the worker is awaited, then the pool and the telemetry are closed.
+4. `http.shutdown_timeout` is the single budget for all of it. It must be at least the longer of a checkout request (`reserve + charge + finalize + 2s`, 14s) and a recovered purchase (19s), plus 2s for the pool and the telemetry, so 21s. The default is 25s, and `stop_grace_period` in `compose.yaml` is 30s, so the container is not killed before the budget ends.
+5. If the budget runs out, the pool is not closed under a worker that still holds a connection. Its close is abandoned, and the app exits with an error that says the pool did not close in time. A purchase that did not finish stays `PENDING` and its lease expires.
 
 **Runbook, only for the open case (the provider does not answer).** Find the purchases with `checkout_recovery_stuck` and `checkout_recovery_stuck_reserved_units`, or with `SELECT id, recovery_attempts, last_recovery_error FROM purchases WHERE status = 'PENDING' ORDER BY created_at`. Check the provider by reference (the purchase id) and wait for the recovery to resolve them once it answers. **Never finalize a purchase with direct SQL**: it would skip the stock and cart rules and could contradict what the provider charged.
 
@@ -763,7 +805,7 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 - **An interrupted `replace` stays `APPLYING` until someone sends the same file again with the same key.** In the UI that means sending the same form again; a new form has a new key, and the interrupted import then remains `APPLYING` as a record. The stock is not wrong for it: the batches applied hold the values of the file.
 - **A large `add` holds the locks of all its products until it finishes**, so checkouts of those products wait for it.
 - **An import and a checkout can deadlock.** They lock products in different orders (SKU and product id). PostgreSQL aborts one of them; a reservation answers `503 try_again`, a finalization leaves the purchase `PENDING`.
-- **The lease reduces double charge requests but cannot remove them.** A worker frozen after renewing a lease and before charging, for longer than the lease, can charge at the same time as the replica that took the purchase over. Only the provider can close this, by rejecting the second request: that is why idempotency by reference is a non-negotiable requirement of any gateway. The database stays right either way (`Finish … WHERE status = 'PENDING'`), and the demo fake already rejects it with its primary key.
+- **The lease reduces double charge requests but cannot remove them.** A worker frozen after renewing a lease and before charging, for longer than the lease, can charge at the same time as the replica that took the purchase over. The purchase deadline narrows this window, because no step starts once the deadline has passed, but it cannot close it: the process can pause with a request already on its way, or resume and send one before its timers fire. Only the provider can close this, by rejecting the second request: that is why idempotency by reference is a non-negotiable requirement of any gateway. The database stays right either way (`Finish … WHERE status = 'PENDING'`), and the demo fake already rejects it with its primary key.
 - **A long outage of the provider keeps purchases open.** While `Lookup` and `Void` do not answer, a stuck purchase stays `PENDING` and its units stay reserved; `checkout_recovery_stuck_reserved_units` shows how many. See the runbook in [Periodic recovery](#periodic-recovery).
 - **A gateway that does not meet the payment contract can charge twice.** The contract test is the acceptance criterion for any provider.
 - **The payment is a simulated provider.** It is persisted and meets the contract, but it never times out on its own; unavailability is exercised by the tests.
@@ -816,7 +858,9 @@ Keys without an environment variable:
 | `checkout.max_pending_age` | `30m`. Must be greater than `recovery.min_age` and `recovery.lease`. See [Periodic recovery](#periodic-recovery) |
 | `recovery.interval`, `recovery.batch_size` | `10s` and `20` |
 | `recovery.min_age` | `30s`. Must be greater than `reserve + charge + finalize + 2s`, so the recovery never takes a checkout in progress |
-| `recovery.lease` | `30s`. Must be greater than `charge + finalize + 2s`, the time of one purchase |
+| `recovery.lease` | `30s`. Must be greater than `2 × db_timeout + 2 × charge + finalize + 2s`, the deadline of one purchase plus the margin |
+| `recovery.db_timeout` | `2s`. The deadline of each recovery statement. See [Periodic recovery](#periodic-recovery) |
+| `http.shutdown_timeout` | `25s`. Must be at least the longer of a checkout request and a recovered purchase, plus 2s |
 | `recovery.base_backoff`, `recovery.max_backoff` | `5s` and `5m`; the base cannot exceed the ceiling |
 | `recovery.stuck_after_attempts` | `10` |
 | `http.public_origins` | `[]`. See [Same-origin check for forms](#same-origin-check-for-forms) |
