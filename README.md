@@ -131,12 +131,12 @@ The ordering module follows the same layout:
 | Package | Role | May import |
 |---|---|---|
 | `domain` | Purchases and their states, the checkout rules, the canonical request hash, cart limits and `ParseID` | A closed list: `crypto/sha256`, `encoding/hex`, `errors`, `regexp`, `slices`, `strconv`, `strings`, `time`, `shopspring/decimal` and `platform/validation` |
-| `app` | Checkout, finalization, recovery, cart and purchase queries, and the ports `Tx`, `Stock`, `Payments`, `Purchases`, `Carts` and `CheckoutRecorder` | A closed list: `context`, `errors`, `fmt`, `slices`, `time`, `shopspring/decimal`, `domain` and `platform/validation` |
+| `app` | Checkout, finalization, recovery, cart and purchase queries, and small ports per consumer: `Tx`; `StockReservation`, `StockSettlement` and `ProductReader`; `PaymentCharger` and `Payments`; `PurchaseCreation`, `PurchaseLookup`, `PurchaseReader`, `PurchaseFinisher` and `PendingPurchases`; `CartEditor` and `PurchasedCartRemover`; `CheckoutRecorder` and `RecoveryRecorder`. Each use case receives only the ones it calls | A closed list: `context`, `errors`, `fmt`, `slices`, `time`, `shopspring/decimal`, `domain` and `platform/validation` |
 | `httpapi` | The checkout and purchase endpoints. Reads `X-Demo-User-ID` and `Idempotency-Key`, decodes JSON and parses prices with `catalog.ParseDecimal` | `app`, `domain`, `platform` and the catalog facade for number parsing |
-| `postgres` | `Tx`, `Purchases` and `Carts` on `purchases`, `purchase_items` and `cart_items` | `app`, `domain` and `platform` |
-| `catalogstock` | Implements `Stock` with the catalog facade (`ReserveStock`, `ReleaseStock`, `CommitStock`, `Get`) | `app`, `domain` and the catalog facade |
+| `postgres` | `Tx`, the purchase ports and the cart ports on `purchases`, `purchase_items` and `cart_items` | `app`, `domain` and `platform` |
+| `catalogstock` | Implements the stock and product ports with the catalog facade (`ReserveStock`, `ReleaseStock`, `CommitStock`, `Get`) | `app`, `domain` and the catalog facade |
 | `paymentgw` | Implements `Payments` with the payment facade and translates its errors | `app` and the payment facade |
-| `observe` | Implements `CheckoutRecorder`: the checkout metrics and the one log line per checkout | `domain` and `platform` |
+| `observe` | Implements `CheckoutRecorder` and `RecoveryRecorder`: the checkout and recovery metrics and logs | `domain` and `platform` |
 
 `payment` has no `internal/` packages because its only piece is the simulated charge; a real provider adapter would go to `payment/internal` behind the same facade. Each module owns its tables: ordering never reads `products`, it goes through the catalog facade, and catalog and payment do not know ordering.
 

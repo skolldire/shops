@@ -49,19 +49,26 @@ type RecoveryReport struct {
 	StillPending []StillPending
 }
 
-type Recovery struct {
-	finalizer
-	purchases RecoveryPurchases
-	payments  Payments
-	rec       RecoveryRecorder
-	budgets   Budgets
-	policy    RecoveryPolicy
-	item      time.Duration
+type RecoveryPorts struct {
+	Settlement
+	Pending  PendingPurchases
+	Payments Payments
+	Recorder RecoveryRecorder
 }
 
-func NewRecovery(tx Tx, stock StockSettlement, payments Payments, purchases RecoveryPurchases, carts PurchasedCartRemover, rec RecoveryRecorder, b Budgets, policy RecoveryPolicy) (*Recovery, error) {
+type Recovery struct {
+	finalizer
+	pending  PendingPurchases
+	payments Payments
+	rec      RecoveryRecorder
+	budgets  Budgets
+	policy   RecoveryPolicy
+	item     time.Duration
+}
+
+func NewRecovery(p RecoveryPorts, b Budgets, policy RecoveryPolicy) (*Recovery, error) {
 	switch {
-	case tx == nil, stock == nil, payments == nil, purchases == nil, carts == nil, rec == nil:
+	case !p.complete(), p.Pending == nil, p.Payments == nil, p.Recorder == nil:
 		return nil, errors.New("ordering: recovery requires a transaction manager, stock, payments, purchases, carts and a recorder")
 	case b.Charge <= 0, b.Finalize <= 0:
 		return nil, errors.New("ordering: recovery time budgets must be positive")
@@ -73,15 +80,14 @@ func NewRecovery(tx Tx, stock StockSettlement, payments Payments, purchases Reco
 		return nil, errors.New("ordering: the recovery lease must exceed the deadline of one purchase plus the margin")
 	}
 	return &Recovery{
-		finalizer: finalizer{tx: tx, purchases: purchases, stock: stock, carts: carts},
-		purchases: purchases,
-		payments:  payments, rec: rec, budgets: b, policy: policy, item: ItemBudget(b, policy.DBTimeout),
+		finalizer: p.finalizer(), pending: p.Pending,
+		payments: p.Payments, rec: p.Recorder, budgets: b, policy: policy, item: ItemBudget(b, policy.DBTimeout),
 	}, nil
 }
 
 func (r *Recovery) RunCycle(ctx context.Context) (RecoveryReport, error) {
 	claimCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
-	claimed, err := r.purchases.Claim(claimCtx, r.policy.Owner, r.policy.MinAge, r.policy.Lease, r.policy.Batch)
+	claimed, err := r.pending.Claim(claimCtx, r.policy.Owner, r.policy.MinAge, r.policy.Lease, r.policy.Batch)
 	cancel()
 	if err != nil {
 		return RecoveryReport{}, fmt.Errorf("ordering: claim pending purchases: %w", err)
@@ -98,7 +104,7 @@ func (r *Recovery) RunCycle(ctx context.Context) (RecoveryReport, error) {
 	}
 	statsCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
 	defer cancel()
-	stats, err := r.purchases.PendingStats(statsCtx, r.policy.StuckAfter)
+	stats, err := r.pending.PendingStats(statsCtx, r.policy.StuckAfter)
 	if err != nil {
 		return report, fmt.Errorf("ordering: the pending purchase gauges were not updated: %w", err)
 	}
@@ -111,7 +117,7 @@ func (r *Recovery) recover(ctx context.Context, p domain.Purchase, report *Recov
 	item, cancelItem := context.WithDeadline(context.WithoutCancel(ctx), start.Add(r.item))
 	defer cancelItem()
 	renewCtx, cancel := context.WithDeadline(ctx, start.Add(r.policy.DBTimeout))
-	renewed, owned, err := r.purchases.Renew(renewCtx, p.ID, r.policy.Owner, r.policy.Lease, r.policy.MaxPendingAge)
+	renewed, owned, err := r.pending.Renew(renewCtx, p.ID, r.policy.Owner, r.policy.Lease, r.policy.MaxPendingAge)
 	cancel()
 	switch {
 	case err != nil && ctx.Err() != nil:
@@ -196,7 +202,7 @@ func (r *Recovery) reschedule(ctx context.Context, p domain.Purchase, attempts i
 	)
 	rescheduleCtx, cancel, err := within(ctx, r.policy.DBTimeout)
 	if err == nil {
-		total, owned, err = r.purchases.Reschedule(rescheduleCtx, p.ID, r.policy.Owner, r.policy.Backoff(attempts), sanitize(cause))
+		total, owned, err = r.pending.Reschedule(rescheduleCtx, p.ID, r.policy.Owner, r.policy.Backoff(attempts), sanitize(cause))
 		cancel()
 	}
 	switch {

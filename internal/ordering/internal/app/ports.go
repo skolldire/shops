@@ -80,8 +80,12 @@ type PurchaseCreation interface {
 	ByKey(ctx context.Context, userID string, key domain.ID) (domain.Purchase, error)
 }
 
-type PurchaseReader interface {
+type PurchaseLookup interface {
 	Get(ctx context.Context, userID string, id domain.ID) (domain.Purchase, error)
+}
+
+type PurchaseReader interface {
+	PurchaseLookup
 	List(ctx context.Context, userID string, p domain.Page) ([]domain.Purchase, int, error)
 }
 
@@ -149,33 +153,6 @@ type RecoveryRecorder interface {
 	RecoveryAttempt(ctx context.Context, a RecoveryAttempt)
 	RecoveryResolution(ctx context.Context, r RecoveryResolution)
 	RecoveryGauges(ctx context.Context, s PendingStats)
-}
-
-type CheckoutStock interface {
-	StockReservation
-	StockSettlement
-}
-
-type CheckoutPurchases interface {
-	PurchaseCreation
-	PurchaseFinisher
-	Get(ctx context.Context, userID string, id domain.ID) (domain.Purchase, error)
-}
-
-type RecoveryPurchases interface {
-	PendingPurchases
-	PurchaseFinisher
-}
-
-type Purchases interface {
-	CheckoutPurchases
-	PurchaseReader
-	PendingPurchases
-}
-
-type Carts interface {
-	CartEditor
-	PurchasedCartRemover
 }
 
 type PendingPurchases interface {

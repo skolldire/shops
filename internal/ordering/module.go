@@ -42,9 +42,13 @@ type Module struct {
 }
 
 type ports struct {
-	tx        app.Tx
-	purchases app.Purchases
-	carts     app.Carts
+	tx       app.Tx
+	created  app.PurchaseCreation
+	reader   app.PurchaseReader
+	finisher app.PurchaseFinisher
+	pending  app.PendingPurchases
+	editor   app.CartEditor
+	remover  app.PurchasedCartRemover
 }
 
 func NewModule(d Deps) (*Module, error) {
@@ -67,7 +71,10 @@ func NewModule(d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newModule(ports{tx: tx, purchases: purchases, carts: carts}, d)
+	return newModule(ports{
+		tx: tx, created: purchases, reader: purchases, finisher: purchases, pending: purchases,
+		editor: carts, remover: carts,
+	}, d)
 }
 
 func newModule(p ports, d Deps) (*Module, error) {
@@ -87,11 +94,14 @@ func newModule(p ports, d Deps) (*Module, error) {
 		return nil, err
 	}
 	budgets := app.Budgets{Reserve: d.Budgets.Reserve, Charge: d.Budgets.Charge, Finalize: d.Budgets.Finalize}
-	checkout, err := app.NewCheckout(p.tx, stock, payments, p.purchases, p.carts, rec, budgets)
+	settlement := app.Settlement{Tx: p.tx, Finisher: p.finisher, Stock: stock, Carts: p.remover}
+	checkout, err := app.NewCheckout(app.CheckoutPorts{
+		Settlement: settlement, Reservations: stock, Purchases: p.created, Lookup: p.reader, Payments: payments, Recorder: rec,
+	}, budgets)
 	if err != nil {
 		return nil, err
 	}
-	recovery, err := app.NewRecovery(p.tx, stock, payments, p.purchases, p.carts, rec, budgets, app.RecoveryPolicy{
+	recovery, err := app.NewRecovery(app.RecoveryPorts{Settlement: settlement, Pending: p.pending, Payments: payments, Recorder: rec}, budgets, app.RecoveryPolicy{
 		Owner: uuid.NewString(), MinAge: d.Recovery.MinAge, Lease: d.Recovery.Lease, MaxPendingAge: d.Recovery.MaxPendingAge,
 		DBTimeout: d.Recovery.DBTimeout, Batch: d.Recovery.BatchSize, StuckAfter: d.Recovery.StuckAfterAttempts,
 		Backoff: backoff(d.Recovery.BaseBackoff, d.Recovery.MaxBackoff),
@@ -103,11 +113,11 @@ func newModule(p ports, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	queries, err := app.NewQueries(p.purchases)
+	queries, err := app.NewQueries(p.reader)
 	if err != nil {
 		return nil, err
 	}
-	cart, err := app.NewCart(p.carts, stock)
+	cart, err := app.NewCart(p.editor, stock)
 	if err != nil {
 		return nil, err
 	}

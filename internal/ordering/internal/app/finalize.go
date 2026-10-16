@@ -15,6 +15,21 @@ type finalizer struct {
 	carts     PurchasedCartRemover
 }
 
+type Settlement struct {
+	Tx       Tx
+	Finisher PurchaseFinisher
+	Stock    StockSettlement
+	Carts    PurchasedCartRemover
+}
+
+func (s Settlement) complete() bool {
+	return s.Tx != nil && s.Finisher != nil && s.Stock != nil && s.Carts != nil
+}
+
+func (s Settlement) finalizer() finalizer {
+	return finalizer{tx: s.Tx, purchases: s.Finisher, stock: s.Stock, carts: s.Carts}
+}
+
 func (f finalizer) finalize(ctx context.Context, p domain.Purchase, o domain.Outcome) (bool, error) {
 	applied := false
 	err := f.tx.WithinTx(ctx, func(ctx context.Context) error {

@@ -32,13 +32,25 @@ type fixture struct {
 	a, b     domain.ID
 }
 
+func settlement(w *world) app.Settlement {
+	return app.Settlement{Tx: w, Finisher: w, Stock: w, Carts: w}
+}
+
+func checkoutPorts(w *world, pay app.PaymentCharger, rec app.CheckoutRecorder) app.CheckoutPorts {
+	return app.CheckoutPorts{Settlement: settlement(w), Reservations: w, Purchases: w, Lookup: w, Payments: pay, Recorder: rec}
+}
+
+func recoveryPorts(w *world, pay app.Payments, rec app.RecoveryRecorder) app.RecoveryPorts {
+	return app.RecoveryPorts{Settlement: settlement(w), Pending: w, Payments: pay, Recorder: rec}
+}
+
 func setup(t *testing.T, m mode) *fixture {
 	t.Helper()
 	f := &fixture{w: newWorld(), pay: newProvider(m), rec: &recorder{}}
 	f.a = f.w.product(idA, "A-1", "29.99", 5)
 	f.b = f.w.product(idB, "B-1", "5.00", 10)
 	var err error
-	f.checkout, err = app.NewCheckout(f.w, f.w, f.pay, f.w, f.w, f.rec, budgets)
+	f.checkout, err = app.NewCheckout(checkoutPorts(f.w, f.pay, f.rec), budgets)
 	require.NoError(t, err)
 	return f
 }
@@ -308,7 +320,7 @@ func TestCancellingTheRequestAfterTheReservationStillSettles(t *testing.T) {
 func TestChargeTimeoutLeavesPendingAndFinalizeUsesAFreshContext(t *testing.T) {
 	f := setup(t, blockUntilDone)
 	short := app.Budgets{Reserve: time.Second, Charge: 20 * time.Millisecond, Finalize: time.Second}
-	c, err := app.NewCheckout(f.w, f.w, f.pay, f.w, f.w, f.rec, short)
+	c, err := app.NewCheckout(checkoutPorts(f.w, f.pay, f.rec), short)
 	require.NoError(t, err)
 	start := time.Now()
 	res, err := c.Checkout(context.Background(), "alice", f.standard())
@@ -319,7 +331,7 @@ func TestChargeTimeoutLeavesPendingAndFinalizeUsesAFreshContext(t *testing.T) {
 
 	slow := &slowApproval{delay: 30 * time.Millisecond}
 	f2 := setup(t, approve)
-	c, err = app.NewCheckout(f2.w, f2.w, slow, f2.w, f2.w, f2.rec, short)
+	c, err = app.NewCheckout(checkoutPorts(f2.w, slow, f2.rec), short)
 	require.NoError(t, err)
 	res, err = c.Checkout(context.Background(), "alice", f2.standard())
 	require.NoError(t, err)
@@ -368,11 +380,26 @@ func TestConcurrentCheckoutsWithTheSameKeyCreateOnePurchase(t *testing.T) {
 
 func TestNewCheckoutValidatesItsDependencies(t *testing.T) {
 	w := newWorld()
-	_, err := app.NewCheckout(nil, w, newProvider(approve), w, w, &recorder{}, budgets)
+	for name, drop := range map[string]func(p *app.CheckoutPorts){
+		"tx":           func(p *app.CheckoutPorts) { p.Tx = nil },
+		"finisher":     func(p *app.CheckoutPorts) { p.Finisher = nil },
+		"settlement":   func(p *app.CheckoutPorts) { p.Stock = nil },
+		"carts":        func(p *app.CheckoutPorts) { p.Carts = nil },
+		"reservations": func(p *app.CheckoutPorts) { p.Reservations = nil },
+		"purchases":    func(p *app.CheckoutPorts) { p.Purchases = nil },
+		"lookup":       func(p *app.CheckoutPorts) { p.Lookup = nil },
+		"payments":     func(p *app.CheckoutPorts) { p.Payments = nil },
+	} {
+		ports := checkoutPorts(w, newProvider(approve), &recorder{})
+		drop(&ports)
+		_, err := app.NewCheckout(ports, budgets)
+		require.Error(t, err, name)
+	}
+	_, err := app.NewCheckout(checkoutPorts(w, newProvider(approve), &recorder{}), budgets)
+	require.NoError(t, err)
+	_, err = app.NewCheckout(checkoutPorts(w, newProvider(approve), &recorder{}), app.Budgets{Reserve: time.Second, Charge: 0, Finalize: time.Second})
 	require.Error(t, err)
-	_, err = app.NewCheckout(w, w, newProvider(approve), w, w, &recorder{}, app.Budgets{Reserve: time.Second, Charge: 0, Finalize: time.Second})
-	require.Error(t, err)
-	_, err = app.NewCheckout(w, w, newProvider(approve), w, w, nil, budgets)
+	_, err = app.NewCheckout(checkoutPorts(w, newProvider(approve), nil), budgets)
 	require.Error(t, err)
 }
 

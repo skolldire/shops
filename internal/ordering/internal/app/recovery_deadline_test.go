@@ -150,7 +150,7 @@ var tightBudgets = app.Budgets{Reserve: time.Second, Charge: 200 * time.Millisec
 
 func (f *fixture) tightRecovery(t *testing.T) *app.Recovery {
 	t.Helper()
-	r, err := app.NewRecovery(f.w, f.w, f.pay, f.w, f.w, f.rec, tightBudgets, tight("worker-a"))
+	r, err := app.NewRecovery(recoveryPorts(f.w, f.pay, f.rec), tightBudgets, tight("worker-a"))
 	require.NoError(t, err)
 	return r
 }
@@ -167,7 +167,7 @@ func (f *fixture) stuck(t *testing.T) domain.Purchase {
 func TestTheItemBudgetCoversTheRenewalTheLongestPathAndTheReschedule(t *testing.T) {
 	require.Equal(t, 19*time.Second, app.ItemBudget(app.Budgets{Charge: 6 * time.Second, Finalize: 3 * time.Second}, 2*time.Second),
 		"2s renewal + 6s lookup + 6s void + 3s finalization + 2s reschedule")
-	_, err := app.NewRecovery(newWorld(), newWorld(), newProvider(approve), newWorld(), newWorld(), &recorder{},
+	_, err := app.NewRecovery(recoveryPorts(newWorld(), newProvider(approve), &recorder{}),
 		app.Budgets{Reserve: time.Second, Charge: 6 * time.Second, Finalize: 3 * time.Second},
 		app.RecoveryPolicy{Owner: "a", MinAge: time.Minute, Lease: 12 * time.Second, MaxPendingAge: time.Hour, DBTimeout: 2 * time.Second,
 			Batch: 1, StuckAfter: 1, Backoff: func(int) time.Duration { return time.Second }})
@@ -235,8 +235,8 @@ func (recoveryOnly) RecoveryGauges(context.Context, app.PendingStats)           
 
 func TestEachUseCaseTakesOnlyTheRecorderItUses(t *testing.T) {
 	w := newWorld()
-	_, err := app.NewCheckout(w, w, newProvider(approve), w, w, checkoutOnly{}, budgets)
+	_, err := app.NewCheckout(checkoutPorts(w, newProvider(approve), checkoutOnly{}), budgets)
 	require.NoError(t, err, "a checkout records checkouts only")
-	_, err = app.NewRecovery(w, w, newProvider(approve), w, w, recoveryOnly{}, budgets, policy("a"))
+	_, err = app.NewRecovery(recoveryPorts(w, newProvider(approve), recoveryOnly{}), budgets, policy("a"))
 	require.NoError(t, err, "a recovery records attempts, resolutions and gauges only")
 }

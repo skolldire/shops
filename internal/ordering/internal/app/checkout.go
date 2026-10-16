@@ -29,10 +29,20 @@ type CheckoutResult struct {
 	Kind     ResultKind
 }
 
+type CheckoutPorts struct {
+	Settlement
+	Reservations StockReservation
+	Purchases    PurchaseCreation
+	Lookup       PurchaseLookup
+	Payments     PaymentCharger
+	Recorder     CheckoutRecorder
+}
+
 type Checkout struct {
 	finalizer
-	stock     CheckoutStock
-	purchases CheckoutPurchases
+	stock     StockReservation
+	purchases PurchaseCreation
+	lookup    PurchaseLookup
 	payments  PaymentCharger
 	rec       CheckoutRecorder
 	budgets   Budgets
@@ -40,17 +50,16 @@ type Checkout struct {
 
 var errKeyExists = errors.New("ordering: the idempotency key already exists")
 
-func NewCheckout(tx Tx, stock CheckoutStock, payments PaymentCharger, purchases CheckoutPurchases, carts PurchasedCartRemover, rec CheckoutRecorder, b Budgets) (*Checkout, error) {
+func NewCheckout(p CheckoutPorts, b Budgets) (*Checkout, error) {
 	switch {
-	case tx == nil, stock == nil, payments == nil, purchases == nil, carts == nil, rec == nil:
+	case !p.complete(), p.Reservations == nil, p.Purchases == nil, p.Lookup == nil, p.Payments == nil, p.Recorder == nil:
 		return nil, errors.New("ordering: checkout requires a transaction manager, stock, payments, purchases, carts and a recorder")
 	case b.Reserve <= 0, b.Charge <= 0, b.Finalize <= 0:
 		return nil, errors.New("ordering: checkout time budgets must be positive")
 	}
 	return &Checkout{
-		finalizer: finalizer{tx: tx, purchases: purchases, stock: stock, carts: carts},
-		stock:     stock, purchases: purchases,
-		payments: payments, rec: rec, budgets: b,
+		finalizer: p.finalizer(), stock: p.Reservations, purchases: p.Purchases, lookup: p.Lookup,
+		payments: p.Payments, rec: p.Recorder, budgets: b,
 	}, nil
 }
 
@@ -181,7 +190,7 @@ func (c *Checkout) settle(ctx context.Context, p domain.Purchase) (domain.Purcha
 		return p, err
 	}
 	if !applied {
-		current, err := c.purchases.Get(finalizeCtx, p.UserID, p.ID)
+		current, err := c.lookup.Get(finalizeCtx, p.UserID, p.ID)
 		if err != nil {
 			return p, fmt.Errorf("ordering: read the purchase finalized elsewhere: %w", err)
 		}

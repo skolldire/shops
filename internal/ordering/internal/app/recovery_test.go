@@ -24,7 +24,7 @@ func policy(owner string) app.RecoveryPolicy {
 
 func (f *fixture) recovery(t *testing.T) *app.Recovery {
 	t.Helper()
-	r, err := app.NewRecovery(f.w, f.w, f.pay, f.w, f.w, f.rec, budgets, policy("worker-a"))
+	r, err := app.NewRecovery(recoveryPorts(f.w, f.pay, f.rec), budgets, policy("worker-a"))
 	require.NoError(t, err)
 	return r
 }
@@ -245,9 +245,21 @@ func TestRecoveryFailsWhenThePendingPurchasesCannotBeClaimed(t *testing.T) {
 
 func TestNewRecoveryValidatesItsDependencies(t *testing.T) {
 	f := setup(t, approve)
-	_, err := app.NewRecovery(nil, f.w, f.pay, f.w, f.w, f.rec, budgets, policy("a"))
-	require.Error(t, err)
-	_, err = app.NewRecovery(f.w, f.w, f.pay, f.w, f.w, f.rec, app.Budgets{}, policy("a"))
+	for name, drop := range map[string]func(p *app.RecoveryPorts){
+		"tx":       func(p *app.RecoveryPorts) { p.Tx = nil },
+		"finisher": func(p *app.RecoveryPorts) { p.Finisher = nil },
+		"pending":  func(p *app.RecoveryPorts) { p.Pending = nil },
+		"payments": func(p *app.RecoveryPorts) { p.Payments = nil },
+		"recorder": func(p *app.RecoveryPorts) { p.Recorder = nil },
+	} {
+		ports := recoveryPorts(f.w, f.pay, f.rec)
+		drop(&ports)
+		_, err := app.NewRecovery(ports, budgets, policy("a"))
+		require.Error(t, err, name)
+	}
+	_, err := app.NewRecovery(recoveryPorts(f.w, f.pay, f.rec), budgets, policy("a"))
+	require.NoError(t, err)
+	_, err = app.NewRecovery(recoveryPorts(f.w, f.pay, f.rec), app.Budgets{}, policy("a"))
 	require.Error(t, err)
 	for name, change := range map[string]func(p *app.RecoveryPolicy){
 		"owner":   func(p *app.RecoveryPolicy) { p.Owner = "" },
@@ -259,7 +271,7 @@ func TestNewRecoveryValidatesItsDependencies(t *testing.T) {
 	} {
 		p := policy("a")
 		change(&p)
-		_, err := app.NewRecovery(f.w, f.w, f.pay, f.w, f.w, f.rec, budgets, p)
+		_, err := app.NewRecovery(recoveryPorts(f.w, f.pay, f.rec), budgets, p)
 		require.Error(t, err, name)
 	}
 }
