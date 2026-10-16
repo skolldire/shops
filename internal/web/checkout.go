@@ -63,7 +63,7 @@ func (ui *UI) checkout(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/cart?notice=price_changed", http.StatusSeeOther)
 	case errors.As(err, &rejected) && errors.Is(err, ordering.ErrInsufficientStock):
 		http.Redirect(w, r, "/cart?notice=stock", http.StatusSeeOther)
-	case errors.As(err, &rejected):
+	case errors.As(err, &rejected) && errors.Is(err, ordering.ErrProductUnavailable):
 		http.Redirect(w, r, "/cart?notice=unavailable", http.StatusSeeOther)
 	case errors.Is(err, ordering.ErrIdempotencyConflict):
 		ui.renderCheckout(w, r, http.StatusConflict, uuid.NewString(), token,

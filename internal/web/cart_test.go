@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -175,6 +176,8 @@ func TestCheckoutResults(t *testing.T) {
 		{"stock", ordering.CheckoutResult{}, &ordering.RejectedError{Reason: ordering.ErrInsufficientStock}, http.StatusSeeOther, "/cart?notice=stock"},
 		{"unavailable", ordering.CheckoutResult{}, &ordering.RejectedError{Reason: ordering.ErrProductUnavailable}, http.StatusSeeOther, "/cart?notice=unavailable"},
 		{"empty cart", ordering.CheckoutResult{}, validation.Errors{{Field: "items", Code: "required", Message: "x"}}, http.StatusSeeOther, "/cart?notice=empty"},
+		{"another rejection is not shown as unavailable", ordering.CheckoutResult{}, &ordering.RejectedError{Reason: errors.New("ordering: a reason the UI does not know"),
+			Errors: validation.Errors{{Field: "items[0].quantity", Code: "x", Message: "x"}}}, http.StatusInternalServerError, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
