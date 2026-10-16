@@ -37,7 +37,7 @@ func (w *RecoveryWorker) Start(ctx context.Context) {
 	ctx, w.cancel = context.WithCancel(ctx)
 	w.done = make(chan struct{})
 	go w.run(ctx, w.done)
-	w.log.Info(ctx, "ordering: recovery worker started", map[string]any{"component": "ordering", "interval": w.interval.String()})
+	w.log.Info(ctx, "ordering: recovery worker started", map[string]any{"component": "ordering"})
 }
 
 func (w *RecoveryWorker) run(ctx context.Context, done chan struct{}) {

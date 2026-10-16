@@ -70,6 +70,12 @@ func TestTheWorkerRecoversALostPaymentAnswerWithoutARestart(t *testing.T) {
 	go func() { done <- start(ctx, cfg, log, lc) }()
 	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "server listening") }, 20*time.Second, 20*time.Millisecond)
 	require.Contains(t, logs.String(), "recovery worker started", "the worker starts with the servers, without blocking them")
+	for line := range strings.Lines(logs.String()) {
+		if strings.Contains(line, "recovery worker started") {
+			require.NotContains(t, line, "interval", "the worker logs no configuration")
+			require.NotContains(t, line, cfg.Recovery.Interval.String())
+		}
+	}
 
 	id := c.product("REC-1", "8.00", 5)
 	resp, body := c.checkout("alice", uuid.NewString(), checkoutBody("pm_unknown", item(id, 2, "8.00")))
