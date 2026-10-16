@@ -143,6 +143,9 @@ type RecoveryResolution struct {
 
 type CheckoutRecorder interface {
 	Checkout(ctx context.Context, outcome string, p *domain.Purchase, cause error)
+}
+
+type RecoveryRecorder interface {
 	RecoveryAttempt(ctx context.Context, a RecoveryAttempt)
 	RecoveryResolution(ctx context.Context, r RecoveryResolution)
 	RecoveryGauges(ctx context.Context, s PendingStats)

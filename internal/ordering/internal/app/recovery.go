@@ -53,13 +53,13 @@ type Recovery struct {
 	finalizer
 	purchases RecoveryPurchases
 	payments  Payments
-	rec       CheckoutRecorder
+	rec       RecoveryRecorder
 	budgets   Budgets
 	policy    RecoveryPolicy
 	item      time.Duration
 }
 
-func NewRecovery(tx Tx, stock StockSettlement, payments Payments, purchases RecoveryPurchases, carts PurchasedCartRemover, rec CheckoutRecorder, b Budgets, policy RecoveryPolicy) (*Recovery, error) {
+func NewRecovery(tx Tx, stock StockSettlement, payments Payments, purchases RecoveryPurchases, carts PurchasedCartRemover, rec RecoveryRecorder, b Budgets, policy RecoveryPolicy) (*Recovery, error) {
 	switch {
 	case tx == nil, stock == nil, payments == nil, purchases == nil, carts == nil, rec == nil:
 		return nil, errors.New("ordering: recovery requires a transaction manager, stock, payments, purchases, carts and a recorder")

@@ -222,3 +222,21 @@ func TestAVoidWithoutTimeLeftChangesNothingAndALaterCycleSettlesOnce(t *testing.
 	require.Equal(t, domain.StatusFailed, f.status(t, p.ID))
 	require.Equal(t, 1, f.w.state.releases, "a single release")
 }
+
+type checkoutOnly struct{}
+
+func (checkoutOnly) Checkout(context.Context, string, *domain.Purchase, error) {}
+
+type recoveryOnly struct{}
+
+func (recoveryOnly) RecoveryAttempt(context.Context, app.RecoveryAttempt)       {}
+func (recoveryOnly) RecoveryResolution(context.Context, app.RecoveryResolution) {}
+func (recoveryOnly) RecoveryGauges(context.Context, app.PendingStats)           {}
+
+func TestEachUseCaseTakesOnlyTheRecorderItUses(t *testing.T) {
+	w := newWorld()
+	_, err := app.NewCheckout(w, w, newProvider(approve), w, w, checkoutOnly{}, budgets)
+	require.NoError(t, err, "a checkout records checkouts only")
+	_, err = app.NewRecovery(w, w, newProvider(approve), w, w, recoveryOnly{}, budgets, policy("a"))
+	require.NoError(t, err, "a recovery records attempts, resolutions and gauges only")
+}
