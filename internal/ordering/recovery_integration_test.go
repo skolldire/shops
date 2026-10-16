@@ -22,6 +22,7 @@ import (
 	"github.com/skolldire/shops/internal/catalog"
 	"github.com/skolldire/shops/internal/ordering"
 	"github.com/skolldire/shops/internal/payment"
+	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/database/dbtest"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
@@ -94,6 +95,7 @@ type gate struct {
 	charges    map[string]int
 	failing    string
 	onCharge   func(reference string)
+	deadlines  map[string]time.Time
 	onLookup   func(reference string)
 	beforeVoid func(reference string)
 }
@@ -113,6 +115,9 @@ func (g *gate) set(down, chargeDown bool) {
 func (g *gate) Charge(ctx context.Context, r payment.ChargeRequest) (payment.ChargeResult, error) {
 	g.mu.Lock()
 	g.charges[r.Reference]++
+	if deadline, ok := ctx.Deadline(); ok {
+		g.deadlines[r.Reference] = deadline
+	}
 	hook := g.onCharge
 	g.mu.Unlock()
 	if hook != nil {
@@ -160,6 +165,7 @@ type replica struct {
 }
 
 type cluster struct {
+	cfg  database.Config
 	pool *pgxpool.Pool
 	cat  *catalog.Module
 	pay  *gate
@@ -168,16 +174,22 @@ type cluster struct {
 
 func newCluster(t *testing.T, stuckAfter int) cluster {
 	t.Helper()
-	pool, _ := dbtest.Start(t)
+	return newClusterWith(t, stuckAfter, func(*ordering.RecoveryConfig) {})
+}
+
+func newClusterWith(t *testing.T, stuckAfter int, tune func(*ordering.RecoveryConfig)) cluster {
+	t.Helper()
+	pool, cfg := dbtest.Start(t)
 	quiet, err := logger.New(logger.Config{Level: "error"}, io.Discard)
 	require.NoError(t, err)
 	cat, err := catalog.NewModule(catalog.Deps{Pool: pool, Log: quiet, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(), Import: catalog.ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}})
 	require.NoError(t, err)
 	real, err := payment.NewModule(pool)
 	require.NoError(t, err)
-	pay := &gate{real: real, charges: map[string]int{}}
+	pay := &gate{real: real, charges: map[string]int{}, deadlines: map[string]time.Time{}}
 	config := recoveryConfig
 	config.StuckAfterAttempts = stuckAfter
+	tune(&config)
 	newReplica := func() replica {
 		logs := &logBuffer{}
 		log, err := logger.New(logger.Config{Level: "info"}, logs)
@@ -191,7 +203,7 @@ func newCluster(t *testing.T, stuckAfter int) cluster {
 		require.NoError(t, err)
 		return replica{orders: orders, logs: logs, metrics: metrics}
 	}
-	return cluster{pool: pool, cat: cat, pay: pay, a: newReplica(), b: newReplica()}
+	return cluster{cfg: cfg, pool: pool, cat: cat, pay: pay, a: newReplica(), b: newReplica()}
 }
 
 func (c cluster) product(t *testing.T, sku string, stock int64) catalog.Product {

@@ -3,8 +3,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,4 +117,64 @@ func TestCheckoutMetricsAreExposed(t *testing.T) {
 	}
 	require.NotContains(t, body, "alice")
 	require.NotContains(t, body, "pm_approved")
+}
+
+func listening(t *testing.T, logs string) string {
+	t.Helper()
+	scanner := bufio.NewScanner(strings.NewReader(logs))
+	for scanner.Scan() {
+		var line struct {
+			Message string `json:"message"`
+			Addr    string `json:"addr"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &line) == nil && line.Addr != "" && strings.Contains(scanner.Text(), "server listening") {
+			return line.Addr
+		}
+	}
+	t.Fatal("the api server did not log its address")
+	return ""
+}
+
+func TestShutdownStopsTheWorkerWhileHTTPDrainsAndBeforeThePool(t *testing.T) {
+	c := startApp(t)
+	cfg := c.cfg
+	cfg.HTTP.Addr = "127.0.0.1:0"
+	cfg.Metrics.Addr = "127.0.0.1:0"
+	cfg.Demo.Seed = false
+	cfg.Recovery.Interval = 20 * time.Millisecond
+
+	var logs syncBuffer
+	log, err := logger.New(logger.Config{Level: "info"}, &logs)
+	require.NoError(t, err)
+	lc, err := lifecycle.New(log)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- start(ctx, cfg, log, lc) }()
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "server listening") }, 20*time.Second, 20*time.Millisecond)
+
+	conn, err := net.Dial("tcp", listening(t, logs.String()))
+	require.NoError(t, err)
+	_, err = conn.Write([]byte("POST /api/v1/products HTTP/1.1\r\nHost: shop\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n{"))
+	require.NoError(t, err)
+
+	cancel()
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "recovery worker stopped") }, 10*time.Second, 10*time.Millisecond,
+		"the worker stops as soon as the shutdown starts")
+	out := logs.String()
+	require.Contains(t, out, "shutdown requested")
+	require.NotContains(t, out, "shutdown complete", "the request in flight is still being drained")
+	require.NotContains(t, out, `"component":"postgres"`, "the pool is still open")
+
+	require.NoError(t, conn.Close())
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the app did not stop")
+	}
+	out = logs.String()
+	stopped := strings.Index(out, "recovery worker stopped")
+	require.Less(t, stopped, strings.Index(out, `"component":"recovery"`))
+	require.Less(t, strings.Index(out, `"component":"recovery"`), strings.Index(out, `"component":"postgres"`), "the worker stops before the pool")
 }

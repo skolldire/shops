@@ -42,6 +42,7 @@ func (w *RecoveryWorker) Start(ctx context.Context) {
 
 func (w *RecoveryWorker) run(ctx context.Context, done chan struct{}) {
 	defer close(done)
+	defer w.log.Info(context.WithoutCancel(ctx), "ordering: recovery worker stopped", map[string]any{"component": "ordering"})
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	for {
