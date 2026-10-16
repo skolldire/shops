@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skolldire/shops/internal/ordering"
 	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/health"
 	"github.com/skolldire/shops/internal/platform/logger"
@@ -141,8 +142,10 @@ func (c AppConfig) Validate() error {
 	check(r.StuckAfterAttempts >= 1, "recovery.stuck_after_attempts must be at least 1")
 	check(r.BaseBackoff <= r.MaxBackoff, "recovery.base_backoff must not exceed recovery.max_backoff")
 	check(r.MinAge > request, "recovery.min_age must be greater than checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s")
-	settle := c.Checkout.ChargeTimeout + c.Checkout.FinalizeTimeout + checkoutMargin
-	check(r.Lease > settle, "recovery.lease must be greater than checkout.charge_timeout + finalize_timeout + 2s")
+	item := ordering.RecoveryItemBudget(ordering.Budgets{
+		Reserve: c.Checkout.ReserveTimeout, Charge: c.Checkout.ChargeTimeout, Finalize: c.Checkout.FinalizeTimeout,
+	}, r.DBTimeout)
+	check(r.Lease > item+ordering.RecoveryLeaseMargin, "recovery.lease must be greater than 2 × recovery.db_timeout + 2 × checkout.charge_timeout + checkout.finalize_timeout + 2s: the renewal, a lookup and a void at checkout.charge_timeout each, the finalization, the reschedule and the margin")
 	check(c.Checkout.MaxPendingAge > r.MinAge, "checkout.max_pending_age must be greater than recovery.min_age")
 	check(c.Checkout.MaxPendingAge > r.Lease, "checkout.max_pending_age must be greater than recovery.lease")
 

@@ -3,6 +3,7 @@ package ordering
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -115,6 +116,12 @@ func newModule(p ports, d Deps) (*Module, error) {
 		return nil, err
 	}
 	return &Module{checkout: checkout, recovery: recovery, worker: worker, queries: queries, cart: cart, http: h}, nil
+}
+
+const RecoveryLeaseMargin = app.LeaseMargin
+
+func RecoveryItemBudget(b Budgets, dbTimeout time.Duration) time.Duration {
+	return app.ItemBudget(app.Budgets{Reserve: b.Reserve, Charge: b.Charge, Finalize: b.Finalize}, dbTimeout)
 }
 
 func (m *Module) RegisterRoutes(r chi.Router) {

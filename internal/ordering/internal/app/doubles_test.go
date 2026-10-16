@@ -467,13 +467,30 @@ type provider struct {
 	seenCtxOK []bool
 	lookups   int
 	voids     int
+	onLookup  func()
+	deadlines map[string]time.Time
+}
+
+func (p *provider) observe(ctx context.Context, op string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if deadline, ok := ctx.Deadline(); ok {
+		if p.deadlines == nil {
+			p.deadlines = map[string]time.Time{}
+		}
+		p.deadlines[op] = deadline
+	}
 }
 
 func newProvider(m mode) *provider {
 	return &provider{mode: m, charges: map[string]app.Charge{}, results: map[string]app.ChargeResult{}, voided: map[string]bool{}}
 }
 
-func (p *provider) Lookup(_ context.Context, reference string) (app.PaymentRecord, error) {
+func (p *provider) Lookup(ctx context.Context, reference string) (app.PaymentRecord, error) {
+	p.observe(ctx, "lookup")
+	if p.onLookup != nil {
+		p.onLookup()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lookups++
@@ -483,7 +500,8 @@ func (p *provider) Lookup(_ context.Context, reference string) (app.PaymentRecor
 	return p.record(reference), nil
 }
 
-func (p *provider) Void(_ context.Context, reference string) (app.PaymentRecord, error) {
+func (p *provider) Void(ctx context.Context, reference string) (app.PaymentRecord, error) {
+	p.observe(ctx, "void")
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.voids++

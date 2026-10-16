@@ -139,3 +139,86 @@ func TestStoppingBetweenPurchasesStartsNoOther(t *testing.T) {
 	require.Equal(t, domain.StatusPending, f.status(t, second.ID))
 	require.Equal(t, []string{"claim", "renew"}, c.ops(), "neither the second purchase nor the gauges are read after stopping")
 }
+
+func tight(owner string) app.RecoveryPolicy {
+	p := policy(owner)
+	p.DBTimeout = 50 * time.Millisecond
+	return p
+}
+
+var tightBudgets = app.Budgets{Reserve: time.Second, Charge: 200 * time.Millisecond, Finalize: 50 * time.Millisecond}
+
+func (f *fixture) tightRecovery(t *testing.T) *app.Recovery {
+	t.Helper()
+	r, err := app.NewRecovery(f.w, f.w, f.pay, f.w, f.w, f.rec, tightBudgets, tight("worker-a"))
+	require.NoError(t, err)
+	return r
+}
+
+func (f *fixture) stuck(t *testing.T) domain.Purchase {
+	t.Helper()
+	f.pay.set(unknownBeforeCharge)
+	res, err := f.run(t, f.standard())
+	require.NoError(t, err)
+	f.w.state.attempts[res.Purchase.ID] = stuckAfter
+	return res.Purchase
+}
+
+func TestTheItemBudgetCoversTheRenewalTheLongestPathAndTheReschedule(t *testing.T) {
+	require.Equal(t, 19*time.Second, app.ItemBudget(app.Budgets{Charge: 6 * time.Second, Finalize: 3 * time.Second}, 2*time.Second),
+		"2s renewal + 6s lookup + 6s void + 3s finalization + 2s reschedule")
+	_, err := app.NewRecovery(newWorld(), newWorld(), newProvider(approve), newWorld(), newWorld(), &recorder{},
+		app.Budgets{Reserve: time.Second, Charge: 6 * time.Second, Finalize: 3 * time.Second},
+		app.RecoveryPolicy{Owner: "a", MinAge: time.Minute, Lease: 12 * time.Second, MaxPendingAge: time.Hour, DBTimeout: 2 * time.Second,
+			Batch: 1, StuckAfter: 1, Backoff: func(int) time.Duration { return time.Second }})
+	require.ErrorContains(t, err, "lease must exceed the deadline of one purchase plus the margin")
+}
+
+func TestAProviderThatOverrunsLeavesTheNextStepOnlyTheTimeLeft(t *testing.T) {
+	f := setup(t, unknownBeforeCharge)
+	p := f.stuck(t)
+	f.pay.set(approve)
+	var renewedAt time.Time
+	f.w.control = func(_ context.Context, op string, _ domain.ID) error {
+		if op == "renew" {
+			renewedAt = time.Now()
+		}
+		return nil
+	}
+	f.pay.onLookup = func() { <-time.After(400 * time.Millisecond) }
+
+	_, err := f.tightRecovery(t).RunCycle(context.Background())
+	require.NoError(t, err)
+	item := app.ItemBudget(tightBudgets, 50*time.Millisecond)
+	void, ok := f.pay.deadlines["void"]
+	require.True(t, ok, "the void still had time")
+	require.False(t, void.After(renewedAt.Add(item)), "the void ends within the purchase deadline counted from before the renewal")
+	require.Less(t, void.Sub(renewedAt), 400*time.Millisecond+tightBudgets.Charge, "it did not get a full budget after the slow lookup")
+	require.Equal(t, domain.StatusFailed, f.status(t, p.ID))
+}
+
+func TestAVoidWithoutTimeLeftChangesNothingAndALaterCycleSettlesOnce(t *testing.T) {
+	f := setup(t, unknownBeforeCharge)
+	p := f.stuck(t)
+	f.pay.set(approve)
+	item := app.ItemBudget(tightBudgets, 50*time.Millisecond)
+	f.pay.onLookup = func() { <-time.After(item + 50*time.Millisecond) }
+
+	report, err := f.tightRecovery(t).RunCycle(context.Background())
+	require.NoError(t, err)
+	require.Len(t, report.StillPending, 1)
+	require.ErrorContains(t, report.StillPending[0].Cause, "used up its recovery deadline")
+	require.Zero(t, f.pay.voids, "no financial operation starts after the deadline")
+	require.Equal(t, domain.StatusPending, f.status(t, p.ID))
+	require.Zero(t, f.w.state.releases)
+	require.Equal(t, "worker-a", f.w.state.owners[p.ID], "no time is left to reschedule, so the lease expires on its own")
+	require.Equal(t, []string{app.ResolutionError}, f.rec.resolutionResults())
+
+	f.pay.onLookup = nil
+	delete(f.w.state.owners, p.ID)
+	report, err = f.tightRecovery(t).RunCycle(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, report.Voided)
+	require.Equal(t, domain.StatusFailed, f.status(t, p.ID))
+	require.Equal(t, 1, f.w.state.releases, "a single release")
+}

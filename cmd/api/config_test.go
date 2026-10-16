@@ -188,8 +188,15 @@ func TestValidateRecovery(t *testing.T) {
 		require.ErrorContains(t, cfg.Validate(), want)
 	}
 	cfg := shippedConfig(t)
-	cfg.Recovery.MinAge, cfg.Recovery.Lease = 15*time.Second, 12*time.Second
-	require.NoError(t, cfg.Validate(), "just above 3s + 6s + 3s + 2s and 6s + 3s + 2s")
+	cfg.Recovery.Lease = 12 * time.Second
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "recovery.lease must be greater than 2 × recovery.db_timeout + 2 × checkout.charge_timeout + checkout.finalize_timeout + 2s")
+	require.ErrorContains(t, err, "a lookup and a void at checkout.charge_timeout each")
+
+	cfg.Recovery.Lease = 21 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "recovery.lease must be greater than", "2s + 2s + 6s + 6s + 3s + 2s is not enough")
+	cfg.Recovery.MinAge, cfg.Recovery.Lease = 15*time.Second, 22*time.Second
+	require.NoError(t, cfg.Validate(), "just above 3s + 6s + 3s + 2s and 2s + 2s + 6s + 6s + 3s + 2s")
 }
 
 func TestValidatePublicOrigins(t *testing.T) {
