@@ -33,7 +33,7 @@ func (q *Queries) Purchase(ctx context.Context, userID, rawID string) (domain.Pu
 	return q.purchases.Get(ctx, userID, id)
 }
 
-func (q *Queries) Purchases(ctx context.Context, userID string, page, pageSize int) (PurchasePage, error) {
+func (q *Queries) Purchases(ctx context.Context, userID string, page, pageSize *int) (PurchasePage, error) {
 	if userID == "" {
 		return PurchasePage{}, domain.ErrUserRequired
 	}

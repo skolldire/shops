@@ -171,7 +171,7 @@ func (m *Module) Purchase(ctx context.Context, userID, id string) (Purchase, err
 	return fromPurchase(p), nil
 }
 
-func (m *Module) Purchases(ctx context.Context, userID string, page, pageSize int) (PurchasePage, error) {
+func (m *Module) Purchases(ctx context.Context, userID string, page, pageSize *int) (PurchasePage, error) {
 	res, err := m.queries.Purchases(ctx, userID, page, pageSize)
 	if err != nil {
 		return PurchasePage{}, publicError(err)

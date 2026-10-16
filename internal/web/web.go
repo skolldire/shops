@@ -45,7 +45,7 @@ type Ordering interface {
 	AcceptCurrentPrice(ctx context.Context, userID, productID string) error
 	CheckoutCart(ctx context.Context, userID, idempotencyKey, paymentToken string) (ordering.CheckoutResult, error)
 	Purchase(ctx context.Context, userID, id string) (ordering.Purchase, error)
-	Purchases(ctx context.Context, userID string, page, pageSize int) (ordering.PurchasePage, error)
+	Purchases(ctx context.Context, userID string, page, pageSize *int) (ordering.PurchasePage, error)
 }
 
 type Deps struct {

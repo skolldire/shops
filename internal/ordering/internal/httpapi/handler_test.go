@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,7 +50,8 @@ func (f *fakeCheckout) Checkout(_ context.Context, userID string, in domain.Chec
 type fakeQueries struct {
 	user           string
 	id             string
-	page, pageSize int
+	page, pageSize *int
+	listed         int
 	purchase       domain.Purchase
 	err            error
 }
@@ -59,15 +61,17 @@ func (f *fakeQueries) Purchase(_ context.Context, userID, id string) (domain.Pur
 	return f.purchase, f.err
 }
 
-func (f *fakeQueries) Purchases(_ context.Context, userID string, page, pageSize int) (app.PurchasePage, error) {
+func (f *fakeQueries) Purchases(_ context.Context, userID string, page, pageSize *int) (app.PurchasePage, error) {
+	f.listed++
 	f.user, f.page, f.pageSize = userID, page, pageSize
 	if f.err != nil {
 		return app.PurchasePage{}, f.err
 	}
-	if _, err := domain.NewPage(page, pageSize); err != nil {
+	p, err := domain.NewPage(page, pageSize)
+	if err != nil {
 		return app.PurchasePage{}, err
 	}
-	return app.PurchasePage{Items: []domain.Purchase{f.purchase}, Page: max(page, 1), PageSize: 20, Total: 1}, nil
+	return app.PurchasePage{Items: []domain.Purchase{f.purchase}, Page: p.Page, PageSize: p.PageSize, Total: 1}, nil
 }
 
 func purchase(status domain.Status) domain.Purchase {
@@ -361,16 +365,61 @@ func TestPurchaseQueries(t *testing.T) {
 	s.queries.purchase = purchase(domain.StatusFailed)
 	rec = s.do(http.MethodGet, "/api/v1/purchases?page=2&page_size=5", "", "X-Demo-User-ID", "alice")
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, [2]int{2, 5}, [2]int{s.queries.page, s.queries.pageSize})
+	require.Equal(t, [2]int{2, 5}, [2]int{*s.queries.page, *s.queries.pageSize})
 	var page map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
 	require.Len(t, page["items"], 1)
 	require.InDelta(t, 1, page["total"], 0)
 	require.NotContains(t, rec.Body.String(), "pm_approved")
 
-	rec = s.do(http.MethodGet, "/api/v1/purchases?page=x&page_size=101", "", "X-Demo-User-ID", "alice")
+	rec = s.do(http.MethodGet, "/api/v1/purchases?page=x&page_size=1.5", "", "X-Demo-User-ID", "alice")
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
-	require.Len(t, decodeProblem(t, rec).Errors, 2)
+	require.Len(t, decodeProblem(t, rec).Errors, 2, "every format error is reported")
+}
+
+func TestPurchasePagingInTheAPI(t *testing.T) {
+	for query, want := range map[string]struct {
+		status int
+		fields map[string]string
+		calls  int
+		page   string
+	}{
+		"":                             {http.StatusOK, nil, 1, "1/20"},
+		"?page=&page_size=":            {http.StatusOK, nil, 1, "1/20"},
+		"?page=%202%20":                {http.StatusOK, nil, 1, "2/20"},
+		"?page=0":                      {http.StatusUnprocessableEntity, map[string]string{"page": "out_of_range"}, 1, ""},
+		"?page_size=0":                 {http.StatusUnprocessableEntity, map[string]string{"page_size": "out_of_range"}, 1, ""},
+		"?page=-1&page_size=101":       {http.StatusUnprocessableEntity, map[string]string{"page": "out_of_range", "page_size": "out_of_range"}, 1, ""},
+		"?page=x":                      {http.StatusUnprocessableEntity, map[string]string{"page": "invalid_format"}, 0, ""},
+		"?page=1.5":                    {http.StatusUnprocessableEntity, map[string]string{"page": "invalid_format"}, 0, ""},
+		"?page=%2B2":                   {http.StatusUnprocessableEntity, map[string]string{"page": "invalid_format"}, 0, ""},
+		"?page=99999999999999999999":   {http.StatusUnprocessableEntity, map[string]string{"page": "out_of_range"}, 0, ""},
+		"?page_size=99999999999999999": {http.StatusUnprocessableEntity, map[string]string{"page_size": "out_of_range"}, 0, ""},
+	} {
+		t.Run(query, func(t *testing.T) {
+			s := newServer(t)
+			s.queries.purchase = purchase(domain.StatusConfirmed)
+			rec := s.do(http.MethodGet, "/api/v1/purchases"+query, "", "X-Demo-User-ID", "alice")
+			require.Equal(t, want.status, rec.Code, rec.Body.String())
+			require.Equal(t, want.calls, s.queries.listed, "a malformed parameter never reaches the purchase query")
+			if want.fields != nil {
+				p := decodeProblem(t, rec)
+				require.Equal(t, "validation_failed", p.Code)
+				got := map[string]string{}
+				for _, fe := range p.Errors {
+					got[fe.Field] = fe.Code
+				}
+				require.Equal(t, want.fields, got)
+				return
+			}
+			var body struct {
+				Page     int `json:"page"`
+				PageSize int `json:"page_size"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			require.Equal(t, want.page, fmt.Sprintf("%d/%d", body.Page, body.PageSize))
+		})
+	}
 }
 
 func TestNewRequiresItsDependencies(t *testing.T) {

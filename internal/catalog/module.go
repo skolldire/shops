@@ -171,6 +171,10 @@ func ParseWholeNumber(raw string) (int64, error) {
 	return domain.ParseWholeNumber(raw)
 }
 
+func WholeNumberErrorCode(err error) string {
+	return domain.WholeNumberErrorCode(err)
+}
+
 func ParseSearchQuery(p SearchParams) (SearchQuery, error) {
 	s, err := httpquery.ParseParams(httpquery.Params(p))
 	if err != nil {
