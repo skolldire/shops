@@ -155,8 +155,11 @@ func TestShutdownStopsTheWorkerWhileHTTPDrainsAndBeforeThePool(t *testing.T) {
 
 	conn, err := net.Dial("tcp", listening(t, logs.String()))
 	require.NoError(t, err)
-	_, err = conn.Write([]byte("POST /api/v1/products HTTP/1.1\r\nHost: shop\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n{"))
+	_, err = conn.Write([]byte("POST /api/v1/products HTTP/1.1\r\nHost: shop\r\nContent-Type: application/json\r\nContent-Length: 64\r\nExpect: 100-continue\r\n\r\n"))
 	require.NoError(t, err)
+	status, err := bufio.NewReader(conn).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "HTTP/1.1 100 Continue\r\n", status, "the handler is reading the body, so the request is in flight")
 
 	cancel()
 	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "recovery worker stopped") }, 10*time.Second, 10*time.Millisecond,
