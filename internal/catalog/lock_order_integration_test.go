@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog"
@@ -145,4 +146,75 @@ func TestACrossedImportAndCheckoutWaitInsteadOfDeadlocking(t *testing.T) {
 			require.Equal(t, 2, r.count(t, `SELECT sum(reserved)::int FROM products`))
 		})
 	}
+}
+
+func newProduct(sku string) catalog.CreateInput {
+	price, stock, weight := decimal.RequireFromString("10.00"), int64(5), decimal.RequireFromString("1")
+	return catalog.CreateInput{SKU: sku, Name: "Product " + sku, Category: "Tests", Price: &price, Stock: &stock, WeightKg: &weight}
+}
+
+func (r replicas) holdImportsLock(t *testing.T) func() {
+	t.Helper()
+	conn, err := r.pool.Acquire(context.Background())
+	require.NoError(t, err)
+	_, err = conn.Exec(context.Background(), `SELECT pg_advisory_lock(hashtextextended('catalog.imports', 0))`)
+	require.NoError(t, err)
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended('catalog.imports', 0))`)
+			conn.Release()
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
+func TestCreatingAProductDuringAnImportIsRefusedWithoutEffects(t *testing.T) {
+	r := twoReplicas(t)
+	ctx := context.Background()
+	release := r.holdImportsLock(t)
+
+	_, err := r.a.Create(ctx, newProduct("NEW-1"))
+	require.ErrorIs(t, err, catalog.ErrImportInProgress)
+	require.Zero(t, r.count(t, `SELECT count(*) FROM products WHERE sku = 'NEW-1'`), "nothing was created")
+	require.Zero(t, r.count(t, `SELECT count(*) FROM inventory_movements`), "no initial stock was recorded")
+
+	release()
+	_, err = r.a.Create(ctx, newProduct("NEW-1"))
+	require.NoError(t, err, "the same request works once the import is done")
+}
+
+func TestAnImportDuringAProductCreationIsRefusedAndTheCreationFinishes(t *testing.T) {
+	r := twoReplicas(t)
+	ctx := context.Background()
+	blocker, err := r.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(ctx) }()
+	_, err = blocker.Exec(ctx, `INSERT INTO products (sku, name, category, price, stock, weight_kg) VALUES ('NEW-2', 'Uncommitted', 'Tests', 1.00, 0, 1)`)
+	require.NoError(t, err)
+
+	created := make(chan error, 1)
+	go func() {
+		_, err := r.a.Create(context.Background(), newProduct("NEW-2"))
+		created <- err
+	}()
+	r.waitFor(t, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%INSERT INTO products%'`, 1)
+	r.waitFor(t, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND mode = 'ShareLock' AND granted`, 1)
+
+	_, err = r.b.Import(ctx, strings.NewReader(header+"Other,OTHER-1,,Tests,2.00,4,1\n"), add(keyOne, false))
+	require.ErrorIs(t, err, catalog.ErrImportInProgress, "the creation holds the imports lock in shared mode")
+	require.Zero(t, r.count(t, `SELECT count(*) FROM imports`), "the refused import left no row")
+	require.Zero(t, r.count(t, `SELECT count(*) FROM products WHERE sku = 'OTHER-1'`))
+
+	require.NoError(t, blocker.Rollback(ctx))
+	require.NoError(t, <-created, "the creation that holds the lock finishes normally")
+	require.Equal(t, 1, r.count(t, `SELECT count(*) FROM products WHERE sku = 'NEW-2'`))
+	require.Zero(t, r.count(t, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'`), "the shared lock ends with its transaction")
+
+	_, err = r.a.Create(ctx, newProduct("NEW-2"))
+	require.ErrorIs(t, err, catalog.ErrSKUTaken)
+	require.Zero(t, r.count(t, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'`), "a failed creation releases it too")
+	_, err = r.b.Import(ctx, strings.NewReader(header+"Other,OTHER-1,,Tests,2.00,4,1\n"), add(keyOne, false))
+	require.NoError(t, err, "the import works once no creation holds the lock")
 }

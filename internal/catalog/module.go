@@ -386,6 +386,8 @@ func publicError(err error) error {
 		return ErrNotFound
 	case errors.Is(err, app.ErrSKUTaken):
 		return ErrSKUTaken
+	case errors.Is(err, app.ErrImportInProgress):
+		return ErrImportInProgress
 	case errors.Is(err, app.ErrVersionConflict):
 		return ErrVersionConflict
 	}

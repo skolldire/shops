@@ -34,6 +34,9 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusNotFound, Code: "not_found", Detail: "The product does not exist."})
 	case errors.Is(err, app.ErrSKUTaken):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "sku_taken", Detail: "Another product already uses this SKU."})
+	case errors.Is(err, app.ErrImportInProgress):
+		w.Header().Set("Retry-After", importRetryAfter)
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "import_in_progress", Detail: "An import is being applied. Nothing was created; send the product again in a few seconds."})
 	case errors.As(err, &below):
 		httpx.WriteError(w, r, httpx.ErrorResponse{
 			Status: http.StatusConflict,

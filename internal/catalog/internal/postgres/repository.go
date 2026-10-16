@@ -43,6 +43,13 @@ func (r *Repository) Create(ctx context.Context, p domain.Product) (domain.Produ
 	var created domain.Product
 	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
 		q := database.Q(ctx, r.pool)
+		var shared bool
+		if err := q.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock_shared(`+importsLockKey+`)`).Scan(&shared); err != nil {
+			return fmt.Errorf("catalog: share the imports lock: %w", err)
+		}
+		if !shared {
+			return app.ErrImportInProgress
+		}
 		if err := setStockReason(ctx, q, reasonInitialStock, ""); err != nil {
 			return err
 		}

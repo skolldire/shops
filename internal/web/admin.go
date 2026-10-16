@@ -29,6 +29,7 @@ type productForm struct {
 	Values   formValues
 	Errors   map[string]string
 	Conflict bool
+	Busy     string
 	Reserved int
 }
 
@@ -67,6 +68,13 @@ func (ui *UI) createProduct(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, catalog.ErrSKUTaken) {
 		err = fieldError("sku", "is already used by another product")
+	}
+	if errors.Is(err, catalog.ErrImportInProgress) {
+		form := newProductForm(values, nil)
+		form.Busy = "An import is being applied. Nothing was created; try again in a few seconds."
+		w.Header().Set("Retry-After", "5")
+		ui.page(w, r, http.StatusConflict, "admin_form", form)
+		return
 	}
 	if fieldErrs, ok := asFieldErrors(err); ok {
 		ui.page(w, r, http.StatusUnprocessableEntity, "admin_form", newProductForm(values, fieldErrs))

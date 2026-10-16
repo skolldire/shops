@@ -179,6 +179,19 @@ func TestCreateProductSKUTaken(t *testing.T) {
 	require.Contains(t, fieldBlock(rec.Body.String(), "sku"), "is already used by another product")
 }
 
+func TestCreateProductDuringAnImportAsksToRetry(t *testing.T) {
+	cat := withProducts()
+	cat.writeErr = catalog.ErrImportInProgress
+	h, _ := newTestUI(t, cat)
+
+	rec := post(h, "/admin/products", validForm())
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	require.Equal(t, "5", rec.Header().Get("Retry-After"))
+	require.Contains(t, rec.Body.String(), `<p class="notice error" role="alert">An import is being applied. Nothing was created; try again in a few seconds.</p>`)
+	require.Contains(t, rec.Body.String(), `value="`+validForm().Get("sku")+`"`, "the form keeps what was typed")
+}
+
 func TestEditProduct(t *testing.T) {
 	cat := withProducts(shoes())
 	h, _ := newTestUI(t, cat)
