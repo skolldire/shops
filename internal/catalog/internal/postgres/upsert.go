@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -238,8 +239,11 @@ func (r *Repository) LockSeed(ctx context.Context) (context.Context, func(), err
 	}, nil
 }
 
+const advisoryReleaseTimeout = 5 * time.Second
+
 func releaseAdvisory(ctx context.Context, conn *pgxpool.Conn, unlock string) {
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), advisoryReleaseTimeout)
+	defer cancel()
 	var released bool
 	if err := conn.QueryRow(ctx, unlock).Scan(&released); err != nil || !released {
 		_ = conn.Conn().Close(ctx)
