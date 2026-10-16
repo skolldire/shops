@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -127,11 +125,11 @@ func (ui *UI) cartChange(w http.ResponseWriter, r *http.Request, notice string, 
 }
 
 func formQuantity(raw string) (int, bool) {
-	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	n, err := catalog.ParseWholeNumber(raw)
 	if err != nil {
 		return 0, false
 	}
-	return n, true
+	return int(n), true
 }
 
 func isFieldError(err error) bool {

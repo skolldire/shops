@@ -274,7 +274,7 @@ func requireNoInlineCode(t *testing.T, body string) {
 }
 
 func TestQuantityRangeValidationComesFromOrdering(t *testing.T) {
-	for _, quantity := range []string{"0", "-1", "100"} {
+	for _, quantity := range []string{"0", "-1", "100", " 3 "} {
 		t.Run(quantity, func(t *testing.T) {
 			orders := &fakeOrdering{writeErr: validation.Errors{{Field: "quantity", Code: "out_of_range", Message: "quantity rejected by ordering"}}}
 			h, _ := newOrderingUI(t, orders, &fakeCatalog{products: stockedShoes(3)})
@@ -323,6 +323,21 @@ func TestPurchaseNavigationKeepsThePageSize(t *testing.T) {
 	body := get(h, "/purchases?page=2&page_size=5").Body.String()
 	require.Contains(t, body, `href="/purchases?page=1&amp;page_size=5"`)
 	require.Contains(t, body, `href="/purchases?page=3&amp;page_size=5"`)
+}
+
+func TestQuantityFormatIsCheckedBeforeOrdering(t *testing.T) {
+	for _, quantity := range []string{"+5", "1.5", "x", "99999999999", ""} {
+		t.Run(quantity, func(t *testing.T) {
+			orders := &fakeOrdering{}
+			h, _ := newOrderingUI(t, orders, &fakeCatalog{products: stockedShoes(3)})
+			rec := submit(h, "/cart/items", url.Values{"product_id": {"p1"}, "quantity": {quantity}})
+			require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+			require.Contains(t, rec.Body.String(), "between 1 and 99")
+			rec = submit(h, "/cart/items/p1/quantity", url.Values{"quantity": {quantity}})
+			require.Equal(t, "/cart?notice=quantity", rec.Header().Get("Location"))
+			require.Empty(t, orders.calls, "a malformed quantity never reaches ordering")
+		})
+	}
 }
 
 func TestTheCartFullMessageUsesTheOrderingLimit(t *testing.T) {
