@@ -75,8 +75,7 @@ func (l *ImportLog) LockImports(ctx context.Context) (context.Context, func(), b
 		return ctx, func() {}, false, nil
 	}
 	return database.WithConn(ctx, conn), func() {
-		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(hashtextextended('catalog.imports', 0))`)
-		conn.Release()
+		releaseAdvisory(ctx, conn, `SELECT pg_advisory_unlock(hashtextextended('catalog.imports', 0))`)
 	}, true, nil
 }
 

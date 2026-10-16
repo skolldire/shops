@@ -5,12 +5,14 @@ package postgres_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/postgres"
+	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/database/dbtest"
 )
 
@@ -108,6 +110,23 @@ func TestImportLog(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, third, "the lock is free once released")
 		unlockAgain()
+	})
+
+	t.Run("a connection whose lock was lost is not returned to the pool", func(t *testing.T) {
+		reset(t)
+		locked, unlock, ok, err := log.LockImports(ctx)
+		require.NoError(t, err)
+		require.True(t, ok)
+		var pid int
+		require.NoError(t, database.Q(locked, f.pool).QueryRow(locked, `SELECT pg_backend_pid()`).Scan(&pid))
+		_, err = database.Q(locked, f.pool).Exec(locked, `SELECT pg_advisory_unlock_all()`)
+		require.NoError(t, err)
+
+		unlock()
+		require.Eventually(t, func() bool {
+			var alive int
+			return f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE pid = $1`, pid).Scan(&alive) == nil && alive == 0
+		}, 10*time.Second, 10*time.Millisecond, "the connection was closed instead of going back to the pool")
 	})
 
 	t.Run("an applied key is found without the lock", func(t *testing.T) {

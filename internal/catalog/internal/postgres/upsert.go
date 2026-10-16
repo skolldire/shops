@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
@@ -233,9 +234,17 @@ func (r *Repository) LockSeed(ctx context.Context) (context.Context, func(), err
 		return nil, nil, fmt.Errorf("catalog: lock the demo seed: %w", err)
 	}
 	return database.WithConn(ctx, conn), func() {
-		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(hashtextextended('catalog.seed', 0))`)
-		conn.Release()
+		releaseAdvisory(ctx, conn, `SELECT pg_advisory_unlock(hashtextextended('catalog.seed', 0))`)
 	}, nil
+}
+
+func releaseAdvisory(ctx context.Context, conn *pgxpool.Conn, unlock string) {
+	ctx = context.WithoutCancel(ctx)
+	var released bool
+	if err := conn.QueryRow(ctx, unlock).Scan(&released); err != nil || !released {
+		_ = conn.Conn().Close(ctx)
+	}
+	conn.Release()
 }
 
 func (r *Repository) HasProducts(ctx context.Context) (bool, error) {
