@@ -250,6 +250,7 @@ All errors are `application/problem+json` with a stable `code`:
 | Domain rules, with an `errors` list per field | 422 | `validation_failed` |
 | Unknown, deleted or malformed product id | 404 | `not_found` |
 | SKU already used | 409 | `sku_taken` |
+| Creating a product while an import is being applied, with `Retry-After: 5` | 409 | `import_in_progress` |
 | `If-Match` does not match the current version | 412 | `version_conflict` |
 | `stock` below the units reserved by pending purchases, on the field `stock` | 409 | `below_reserved` |
 | `If-Match` carries a weak entity tag such as `W/"3"` | 412 | `precondition_failed` |
@@ -527,7 +528,7 @@ All errors are `application/problem+json` with a stable `code`. Item details use
 | Method and path | Answer |
 |---|---|
 | `POST /api/v1/checkout` | See above |
-| `GET /api/v1/purchases` | The purchases of the user, by `created_at` and `id` descending, with `page` and `page_size` (20 by default, 100 at most) and the page format of the products |
+| `GET /api/v1/purchases` | The purchases of the user, by `created_at` and `id` descending, with `page` and `page_size` and the page format of the products. An absent or empty parameter takes the default (page 1, 20 per page); any value that is present must be a whole number, `page` from 1 to 100000 and `page_size` from 1 to 100, so `0` is `422 out_of_range`. A malformed value is `422 invalid_format` and the purchases are not read. The purchases page of the UI applies the same rules |
 | `GET /api/v1/purchases/{id}` | One purchase of the user; another user's purchase is `404`, like one that does not exist |
 
 The payment token is stored in `purchases.payment_token` because the recovery repeats the charge with it. It is a demo token, not card data: it is never logged and never returned by the API. This does not decide how a real provider's credentials would be stored.
@@ -578,6 +579,7 @@ The demo provider is a fake persisted in `payment_fake_charges`, with the refere
 | Setting | Default | Covers |
 |---|---|---|
 | `checkout.reserve_timeout` | 3s | The reservation transaction. Derived from the request context |
+| `checkout.lock_timeout` | 1s | How long the reservation waits for a product row that another transaction holds, applied with `SET LOCAL lock_timeout`. Must be less than `reserve_timeout`. A checkout that waits longer, for example behind an `add` import, answers `503 try_again` with `Retry-After: 1` and leaves no purchase, reservation, movement, charge or cart change |
 | `checkout.charge_timeout` | 6s | The charge. Starts when the reservation commits, from the request context without its cancellation, so a client that disconnects does not leave the purchase half done |
 | `checkout.finalize_timeout` | 3s | The finalization. A fresh context, also without the client's cancellation; it never reuses the charge context, which may have expired |
 | `checkout.max_pending_age` | 30m | A purchase older than this is no longer charged again: the recovery resolves it with the provider (see [Periodic recovery](#periodic-recovery)) |
@@ -674,7 +676,7 @@ The attempt counter is returned by the database (`UPDATE … RETURNING recovery_
 1. The worker stops claiming at once and does not start the next purchase of its batch.
 2. The purchase in progress finishes within its own deadline, while the HTTP servers drain the requests in flight.
 3. Once the servers are drained, the closers run in reverse order: the worker is awaited, then the pool and the telemetry are closed.
-4. `http.shutdown_timeout` is the single budget for all of it. It must be at least the longer of a checkout request (`reserve + charge + finalize + 2s`, 14s) and a recovered purchase (19s), plus 2s for the pool and the telemetry, so 21s. The default is 25s, and `stop_grace_period` in `compose.yaml` is 30s, so the container is not killed before the budget ends.
+4. `http.shutdown_timeout` is the single budget for all of it. It must be at least the longer of a checkout request (`reserve + charge + finalize + 2s`, 14s) and a recovered purchase (19s), plus 2s for the pool and the telemetry, so 21s, and greater than `recovery.lease` (30s). The default is 35s, and `stop_grace_period` in `compose.yaml` is 40s, so the container is not killed before the budget ends. An import request in flight is drained like any other request; releasing its imports lock has its own 5s deadline, and a release that fails or runs out of time closes the connection instead of returning it to the pool.
 5. If the budget runs out, the pool is not closed under a worker that still holds a connection. Its close is abandoned, and the app exits with an error that says the pool did not close in time. A purchase that did not finish stays `PENDING` and its lease expires.
 
 **Runbook, only for the open case (the provider does not answer).** Find the purchases with `checkout_recovery_stuck` and `checkout_recovery_stuck_reserved_units`, or with `SELECT id, recovery_attempts, last_recovery_error FROM purchases WHERE status = 'PENDING' ORDER BY created_at`. Check the provider by reference (the purchase id) and wait for the recovery to resolve them once it answers. **Never finalize a purchase with direct SQL**: it would skip the stock and cart rules and could contradict what the provider charged.
@@ -807,7 +809,7 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 | Make the second import wait for the first (`pg_advisory_lock`) | No error, but the HTTP request of the second one stays open for as long as the first file takes, beyond the write timeout for a large file |
 | One import at a time, the others answered at once with `409 import_in_progress` | The administrator sends the file again a few seconds later; imports are rare administrative operations |
 
-**Decision.** One import at a time, with `pg_try_advisory_lock` and `409 import_in_progress` with `Retry-After: 5`, in the API and in the UI. A finished key is answered before the lock. The rows of each file are still sorted by SKU before the batches, so the inserts keep one global order even if the serialization is removed one day. The lock per import id that a resumed `replace` used is gone: the single lock already prevents two replicas from applying the same import.
+**Decision.** One import at a time, with `pg_try_advisory_lock` and `409 import_in_progress` with `Retry-After: 5`, in the API and in the UI. A finished key is answered before the lock. Creating a product, in the API and in the UI, takes the same lock in shared mode for its transaction (`pg_try_advisory_xact_lock_shared`), so a creation and an import never run at the same time: whichever comes second answers `409 import_in_progress`. Editing and deleting a product do not take it. The rows of each file are still sorted by SKU before the batches, so the inserts keep one global order even if the serialization is removed one day. The lock per import id that a resumed `replace` used is gone: the single lock already prevents two replicas from applying the same import.
 
 **Example.** An `add` of 10,000 rows is being applied. A second administrator uploads a count: they see "Another import is being applied" and nothing changes; ten seconds later the same upload is applied.
 
@@ -823,8 +825,8 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 - **There is no review before an import is applied.** The report shows afterwards what changed; a wrong file is fixed with another import. An `add` sent by mistake is undone with a `replace` of the right values.
 - **An interrupted `replace` stays `APPLYING` until someone sends the same file again with the same key.** In the UI that means sending the same form again; a new form has a new key, and the interrupted import then remains `APPLYING` as a record. The stock is not wrong for it: the batches applied hold the values of the file.
 - **A large `add` holds the locks of all its products until it finishes**, so checkouts of those products wait for it.
-- **A deadlock is still possible in rare cases, and it is handled.** An import and a checkout lock products in the same order, and imports run one at a time. A product created by the API while an import is running, and reserved before the import reaches it, is still locked by the import in SKU order, so a cycle needs that creation, that reservation and the import at the same moment. PostgreSQL then aborts one of them: a reservation answers `503 try_again` (`40P01` and `55P03`), a finalization leaves the purchase `PENDING`, an `add` is rolled back entirely and a `replace` retries that batch row by row.
-- **An `add` holds its products until the file is applied.** A checkout of one of them waits for the import within `checkout.reserve_timeout`. If the import takes longer, the checkout fails without reserving anything, and the client can send it again with the same key.
+- **Creating a product waits for imports.** No product can be created while an import is applied, and no import starts while a creation is in its transaction; the second one answers `409 import_in_progress` with `Retry-After: 5`. That removes the last cycle between an import and a checkout. A deadlock or a lock timeout from any other contention is still handled: a reservation answers `503 try_again` (`40P01` and `55P03`), a finalization leaves the purchase `PENDING`, an `add` is rolled back entirely and a `replace` retries that batch row by row.
+- **An `add` holds its products until the file is applied.** A checkout of one of them waits at most `checkout.lock_timeout` and then answers `503 try_again` without reserving anything; the client sends it again with the same key.
 - **The lease reduces double charge requests but cannot remove them.** A worker frozen after renewing a lease and before charging, for longer than the lease, can charge at the same time as the replica that took the purchase over. The purchase deadline narrows this window, because no step starts once the deadline has passed, but it cannot close it: the process can pause with a request already on its way, or resume and send one before its timers fire. Only the provider can close this, by rejecting the second request: that is why idempotency by reference is a non-negotiable requirement of any gateway. The database stays right either way (`Finish … WHERE status = 'PENDING'`), and the demo fake already rejects it with its primary key.
 - **A long outage of the provider keeps purchases open.** While `Lookup` and `Void` do not answer, a stuck purchase stays `PENDING` and its units stay reserved; `checkout_recovery_stuck_reserved_units` shows how many. See the runbook in [Periodic recovery](#periodic-recovery).
 - **A gateway that does not meet the payment contract can charge twice.** The contract test is the acceptance criterion for any provider.
@@ -875,12 +877,13 @@ Keys without an environment variable:
 | `demo.users` | `[alice, bob, carol]`. The first one is used when the UI has no `demo_user` cookie |
 | `import.max_bytes`, `import.max_rows` | `10485760` (10 MB) and `10000`. See [The file](#the-file) |
 | `checkout.reserve_timeout`, `checkout.charge_timeout`, `checkout.finalize_timeout` | `3s`, `6s` and `3s`. See [Time budgets](#time-budgets) |
+| `checkout.lock_timeout` | `1s`. Must be less than `checkout.reserve_timeout` |
 | `checkout.max_pending_age` | `30m`. Must be greater than `recovery.min_age` and `recovery.lease`. See [Periodic recovery](#periodic-recovery) |
 | `recovery.interval`, `recovery.batch_size` | `10s` and `20` |
 | `recovery.min_age` | `30s`. Must be greater than `reserve + charge + finalize + 2s`, so the recovery never takes a checkout in progress |
 | `recovery.lease` | `30s`. Must be greater than `2 × db_timeout + 2 × charge + finalize + 2s`, the deadline of one purchase plus the margin |
 | `recovery.db_timeout` | `2s`. The deadline of each recovery statement. See [Periodic recovery](#periodic-recovery) |
-| `http.shutdown_timeout` | `25s`. Must be at least the longer of a checkout request and a recovered purchase, plus 2s |
+| `http.shutdown_timeout` | `35s`. Must be at least the longer of a checkout request and a recovered purchase, plus 2s, and greater than `recovery.lease` |
 | `recovery.base_backoff`, `recovery.max_backoff` | `5s` and `5m`; the base cannot exceed the ceiling |
 | `recovery.stuck_after_attempts` | `10` |
 | `http.public_origins` | `[]`. See [Same-origin check for forms](#same-origin-check-for-forms) |
