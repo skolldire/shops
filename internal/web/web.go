@@ -54,6 +54,7 @@ type Deps struct {
 	Users              []string
 	Log                logger.Service
 	MaxImportBodyBytes int64
+	PublicOrigins      []string
 }
 
 type UI struct {
@@ -62,6 +63,7 @@ type UI struct {
 	users              []string
 	log                logger.Service
 	maxImportBodyBytes int64
+	publicOrigins      []origin
 	views              *renderer
 	static             http.Handler
 }
@@ -82,6 +84,14 @@ func New(d Deps) (*UI, error) {
 	if d.MaxImportBodyBytes <= 0 {
 		return nil, errors.New("web: import body limit is required")
 	}
+	public := make([]origin, len(d.PublicOrigins))
+	for i, raw := range d.PublicOrigins {
+		o, ok := parseOrigin(raw)
+		if !ok {
+			return nil, errors.New("web: every public origin must be scheme://host[:port]")
+		}
+		public[i] = o
+	}
 	views, err := newRenderer()
 	if err != nil {
 		return nil, err
@@ -92,7 +102,7 @@ func New(d Deps) (*UI, error) {
 	}
 	return &UI{
 		catalog: d.Catalog, orders: d.Ordering, users: append([]string(nil), d.Users...), log: d.Log,
-		maxImportBodyBytes: d.MaxImportBodyBytes, views: views, static: static,
+		maxImportBodyBytes: d.MaxImportBodyBytes, publicOrigins: public, views: views, static: static,
 	}, nil
 }
 

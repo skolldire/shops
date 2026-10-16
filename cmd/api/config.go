@@ -12,6 +12,7 @@ import (
 	"github.com/skolldire/shops/internal/platform/health"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
+	"github.com/skolldire/shops/internal/web"
 )
 
 type AppConfig struct {
@@ -34,6 +35,7 @@ type HTTPConfig struct {
 	WriteTimeout      time.Duration `mapstructure:"write_timeout"`
 	IdleTimeout       time.Duration `mapstructure:"idle_timeout"`
 	ShutdownTimeout   time.Duration `mapstructure:"shutdown_timeout"`
+	PublicOrigins     []string      `mapstructure:"public_origins"`
 }
 
 type MetricsConfig struct {
@@ -83,6 +85,9 @@ func (c AppConfig) Validate() error {
 	check(validAddr(c.HTTP.Addr), "http.addr must be host:port")
 	check(validAddr(c.Metrics.Addr), "metrics.addr must be host:port")
 	check(c.HTTP.Addr != c.Metrics.Addr, "metrics.addr must differ from http.addr")
+	for i, raw := range c.HTTP.PublicOrigins {
+		check(web.ValidPublicOrigin(raw), "http.public_origins[%d] must be scheme://host[:port] with http or https and nothing else", i)
+	}
 	for name, d := range map[string]time.Duration{
 		"http.read_header_timeout":  c.HTTP.ReadHeaderTimeout,
 		"http.read_timeout":         c.HTTP.ReadTimeout,

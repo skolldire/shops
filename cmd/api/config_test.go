@@ -190,3 +190,13 @@ func TestValidateRecovery(t *testing.T) {
 	cfg.Recovery.MinAge, cfg.Recovery.Lease = 15*time.Second, 12*time.Second
 	require.NoError(t, cfg.Validate(), "just above 3s + 6s + 3s + 2s and 6s + 3s + 2s")
 }
+
+func TestValidatePublicOrigins(t *testing.T) {
+	cfg := shippedConfig(t)
+	cfg.HTTP.PublicOrigins = []string{"https://shop.example", "http://localhost:8081"}
+	require.NoError(t, cfg.Validate())
+	cfg.HTTP.PublicOrigins = []string{"https://shop.example", "https://shop.example/secret-path"}
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "http.public_origins[1] must be")
+	require.NotContains(t, err.Error(), "secret-path", "the configured value is never reported")
+}

@@ -94,3 +94,33 @@ func TestCrossOriginFormsAreRejected(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	require.NotEqual(t, http.StatusForbidden, rec.Code)
 }
+
+func TestPublicOriginsAreAcceptedBehindAProxy(t *testing.T) {
+	public, ok := parseOrigin("https://shop.example")
+	require.True(t, ok)
+	post := func(origin string) bool {
+		req := httptest.NewRequest(http.MethodPost, "/cart/items", nil)
+		req.Host = "app:8080"
+		req.Header.Set("Origin", origin)
+		return sameOrigin(req, public)
+	}
+	require.True(t, post("https://shop.example"), "the proxy rewrote the host, the public origin is configured")
+	require.True(t, post("https://shop.example:443"))
+	require.True(t, post("http://app:8080"), "the request's own origin is still accepted")
+	require.False(t, post("http://shop.example"), "another scheme is another origin")
+	require.False(t, post("https://evil.example"))
+}
+
+func TestPublicOriginsMustBeBareOrigins(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"https://shop.example": true, "http://localhost:8081": true,
+		"https://shop.example/": false, "https://shop.example/path": false, "ftp://shop.example": false,
+		"shop.example": false, "https://user@shop.example": false, "": false,
+	} {
+		require.Equal(t, want, ValidPublicOrigin(raw), raw)
+	}
+	cat := &fakeCatalog{}
+	log, _ := newTestLogger(t)
+	_, err := New(Deps{Catalog: cat, Ordering: &fakeOrdering{}, Users: testUsers, Log: log, MaxImportBodyBytes: 1, PublicOrigins: []string{"shop.example"}})
+	require.Error(t, err)
+}

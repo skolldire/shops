@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -20,7 +21,7 @@ func (ui *UI) checkOrigin(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !sameOrigin(r) {
+		if !sameOrigin(r, ui.publicOrigins...) {
 			ui.errorPage(w, r, http.StatusForbidden, errorPage{
 				Title: "Request blocked", Status: http.StatusForbidden,
 				Message: "This form was not sent from this site, so it was not processed. Go back to the page and try again.",
@@ -31,24 +32,30 @@ func (ui *UI) checkOrigin(next http.Handler) http.Handler {
 	})
 }
 
-func sameOrigin(r *http.Request) bool {
+func ValidPublicOrigin(raw string) bool {
+	_, ok := parseOrigin(raw)
+	return ok
+}
+
+func sameOrigin(r *http.Request, public ...origin) bool {
 	self, ok := requestOrigin(r)
 	if !ok {
 		return false
 	}
+	accepted := func(got origin) bool { return got == self || slices.Contains(public, got) }
 	if values, sent := r.Header["Origin"]; sent {
 		if len(values) != 1 {
 			return false
 		}
 		got, ok := parseOrigin(values[0])
-		return ok && got == self
+		return ok && accepted(got)
 	}
 	if values, sent := r.Header["Referer"]; sent {
 		if len(values) != 1 {
 			return false
 		}
 		got, ok := parseReferer(values[0])
-		return ok && got == self
+		return ok && accepted(got)
 	}
 	return false
 }
