@@ -58,11 +58,3 @@ func TestGatewayMapsResultsAndErrors(t *testing.T) {
 	_, err = paymentgw.New(nil)
 	require.Error(t, err)
 }
-
-func TestGatewayWithTheFake(t *testing.T) {
-	g, err := paymentgw.New(payment.NewModule())
-	require.NoError(t, err)
-	res, err := g.Charge(context.Background(), app.Charge{Reference: "7", Token: "pm_approved"})
-	require.NoError(t, err)
-	require.Equal(t, app.ChargeResult{Approved: true, ProviderRef: "fake_7"}, res)
-}

@@ -46,8 +46,12 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	if err != nil {
 		return nil, err
 	}
+	payments, err := payment.NewModule(pool)
+	if err != nil {
+		return nil, err
+	}
 	orders, err := ordering.NewModule(ordering.Deps{
-		Pool: pool, Catalog: products, Payments: payment.NewModule(), Log: log, Metrics: tel, Users: cfg.Demo.Users,
+		Pool: pool, Catalog: products, Payments: payments, Log: log, Metrics: tel, Users: cfg.Demo.Users,
 		Budgets: ordering.Budgets{
 			Reserve: cfg.Checkout.ReserveTimeout, Charge: cfg.Checkout.ChargeTimeout,
 			Finalize: cfg.Checkout.FinalizeTimeout, Recovery: cfg.Checkout.RecoveryTimeout,

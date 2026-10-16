@@ -96,7 +96,7 @@ func TestStartRecoversPendingPurchasesBeforeServing(t *testing.T) {
 		require.NoError(t, c.pool.QueryRow(context.Background(),
 			`SELECT status, payment_ref FROM purchases WHERE id = $1::uuid`, purchase.ID).Scan(&status, &ref))
 		require.Equal(t, "CONFIRMED", status)
-		require.Equal(t, "fake_"+purchase.ID, ref)
+		require.True(t, strings.HasPrefix(ref, "fake_"), "every charge has its own provider reference")
 		require.Equal(t, 3, c.stockOf(id), "the reservation made before the interruption becomes the sale")
 		require.Zero(t, c.scalar(`SELECT reserved FROM products WHERE id = $1::uuid`, id))
 
