@@ -22,6 +22,8 @@ const (
 	hashSchemaVersion = "checkout-v1"
 )
 
+var itemsRange = "must have between 1 and " + strconv.Itoa(MaxItems) + " items"
+
 var (
 	ErrInvalidIdempotencyKey = errors.New("ordering: the idempotency key must be a UUID")
 	ErrUserRequired          = errors.New("ordering: a user is required")
@@ -70,9 +72,9 @@ func NewCheckoutRequest(userID string, in CheckoutInput) (CheckoutRequest, error
 	var errs validation.Errors
 	switch n := len(in.Items); {
 	case n == 0:
-		errs.Add("items", validation.CodeRequired, "must have between 1 and 50 items")
+		errs.Add("items", validation.CodeRequired, itemsRange)
 	case n > MaxItems:
-		errs.Add("items", validation.CodeOutOfRange, "must have between 1 and 50 items")
+		errs.Add("items", validation.CodeOutOfRange, itemsRange)
 	}
 	seen := make(map[ID]int, len(in.Items))
 	valid := true

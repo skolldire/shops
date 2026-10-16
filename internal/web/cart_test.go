@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -299,4 +300,8 @@ func TestPurchasePagingDelegatesRangeAndDefaultsToOrdering(t *testing.T) {
 	}
 	require.Equal(t, []int{0, 100001, -1}, orders.listed)
 	require.Equal(t, []int{0, 101, 0}, orders.sizes)
+}
+
+func TestTheCartFullMessageUsesTheOrderingLimit(t *testing.T) {
+	require.Equal(t, fmt.Sprintf("Your cart already has %d different products. Remove one before adding another.", ordering.MaxCartLines), cartFullMessage)
 }

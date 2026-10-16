@@ -104,3 +104,27 @@ func TestCartCheckoutInputUsesThePricesSeen(t *testing.T) {
 	require.Equal(t, "pm_declined", in.PaymentToken)
 	require.Equal(t, []domain.CheckoutItemInput{{ProductID: idA, Quantity: 2, ExpectedUnitPrice: price("25.00")}}, in.Items)
 }
+
+func TestAFullCartIsAValidCheckoutAndOneMoreLineIsNot(t *testing.T) {
+	c, f := newCart(t)
+	ctx := context.Background()
+	for i := range domain.MaxCartLines {
+		id := domain.ID("44444444-4444-4444-8444-" + pad(i))
+		f.w.product(string(id), "X", "1.00", 1)
+		require.NoError(t, c.Add(ctx, "alice", string(id), 1))
+	}
+	in, err := c.CheckoutInput(ctx, "alice", key, "pm_approved")
+	require.NoError(t, err)
+	require.Len(t, in.Items, domain.MaxItems, "the cart holds exactly as many lines as a checkout accepts")
+	_, err = domain.NewCheckoutRequest("alice", in)
+	require.NoError(t, err, "a full cart can be checked out")
+
+	in.Items = append(in.Items, domain.CheckoutItemInput{ProductID: idA, Quantity: 1, ExpectedUnitPrice: price("29.99")})
+	_, err = domain.NewCheckoutRequest("alice", in)
+	var errs validation.Errors
+	require.ErrorAs(t, err, &errs)
+	require.Equal(t, validation.CodeOutOfRange, errs[0].Code)
+	require.Equal(t, "items", errs[0].Field)
+	require.Contains(t, errs[0].Message, "between 1 and 50 items")
+	require.ErrorIs(t, c.Add(ctx, "alice", idA, 1), app.ErrCartFull, "the cart refuses the same extra line")
+}

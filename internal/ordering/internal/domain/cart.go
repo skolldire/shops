@@ -6,7 +6,7 @@ import (
 	"github.com/skolldire/shops/internal/platform/validation"
 )
 
-const MaxCartLines = 50
+const MaxCartLines = MaxItems
 
 type CartItem struct {
 	ProductID     ID

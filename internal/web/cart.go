@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,6 +36,8 @@ type cartPage struct {
 	Notice string
 	Alert  bool
 }
+
+var cartFullMessage = fmt.Sprintf("Your cart already has %d different products. Remove one before adding another.", ordering.MaxCartLines)
 
 func (ui *UI) cart(w http.ResponseWriter, r *http.Request) {
 	cart, err := ui.orders.Cart(r.Context(), ui.currentUser(r))
@@ -83,7 +86,7 @@ func (ui *UI) addToCart(w http.ResponseWriter, r *http.Request) {
 		message = fields["quantity"]
 	}
 	if errors.Is(err, ordering.ErrCartFull) {
-		message = "Your cart already has 50 different products. Remove one before adding another."
+		message = cartFullMessage
 	}
 	ui.page(w, r, http.StatusUnprocessableEntity, "product", productPage{Product: p, Error: message})
 }
