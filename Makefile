@@ -6,7 +6,7 @@ SCHEMA := db/init/001_schema.sql
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION ?= v1.8.0
 
-.PHONY: build run test test-integration coverage lint lint-comments lint-arch lint-decimals tidy-check vuln up up-debug down schema logs
+.PHONY: build run test test-integration coverage lint lint-comments lint-arch lint-decimals tidy-check vuln up up-replicas up-debug down schema logs
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/api
@@ -78,11 +78,14 @@ vuln:
 up:
 	$(COMPOSE) up --build
 
+up-replicas:
+	$(COMPOSE) --profile replicas up --build
+
 up-debug:
 	$(COMPOSE) -f compose.yaml -f compose.debug.yaml up --build
 
 down:
-	$(COMPOSE) -f compose.yaml -f compose.debug.yaml down -v --remove-orphans
+	$(COMPOSE) -f compose.yaml -f compose.debug.yaml --profile replicas down -v --remove-orphans
 
 schema:
 	psql -v ON_ERROR_STOP=1 -f $(SCHEMA)

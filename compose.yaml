@@ -46,6 +46,27 @@ services:
       db:
         condition: service_healthy
 
+  app2:
+    profiles: [replicas]
+    build: .
+    stop_grace_period: 20s
+    volumes:
+      - secrets:/run/secrets:ro
+      - ./config/config.yaml:/etc/shop/config.yaml:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  proxy:
+    profiles: [replicas]
+    image: caddy:2.10.0-alpine
+    command: ["caddy", "reverse-proxy", "--from", ":8081", "--to", "app:8080", "--to", "app2:8080"]
+    ports:
+      - "8081:8081"
+    depends_on:
+      - app
+      - app2
+
 volumes:
   secrets:
   pgdata:
