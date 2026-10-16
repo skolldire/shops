@@ -38,6 +38,7 @@ demo:
   users: [alice, bob, carol]
 checkout:
   reserve_timeout: 3s
+  lock_timeout: 1s
   charge_timeout: 6s
   finalize_timeout: 3s
   max_pending_age: 30m

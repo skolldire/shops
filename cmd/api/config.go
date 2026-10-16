@@ -56,6 +56,7 @@ type DemoConfig struct {
 
 type CheckoutConfig struct {
 	ReserveTimeout  time.Duration `mapstructure:"reserve_timeout"`
+	LockTimeout     time.Duration `mapstructure:"lock_timeout"`
 	ChargeTimeout   time.Duration `mapstructure:"charge_timeout"`
 	FinalizeTimeout time.Duration `mapstructure:"finalize_timeout"`
 	MaxPendingAge   time.Duration `mapstructure:"max_pending_age"`
@@ -102,6 +103,7 @@ func (c AppConfig) Validate() error {
 		"health.timeout":            c.Health.Timeout,
 		"database.connect_timeout":  c.Database.ConnectTimeout,
 		"checkout.reserve_timeout":  c.Checkout.ReserveTimeout,
+		"checkout.lock_timeout":     c.Checkout.LockTimeout,
 		"checkout.charge_timeout":   c.Checkout.ChargeTimeout,
 		"checkout.finalize_timeout": c.Checkout.FinalizeTimeout,
 		"checkout.max_pending_age":  c.Checkout.MaxPendingAge,
@@ -136,6 +138,7 @@ func (c AppConfig) Validate() error {
 	check(!c.Demo.Seed || c.Demo.SeedFile != "", "demo.seed_file is required when demo.seed is true")
 	errs = append(errs, validateUsers(c.Demo.Users)...)
 
+	check(c.Checkout.LockTimeout < c.Checkout.ReserveTimeout, "checkout.lock_timeout must be less than checkout.reserve_timeout")
 	request := c.Checkout.ReserveTimeout + c.Checkout.ChargeTimeout + c.Checkout.FinalizeTimeout + checkoutMargin
 	check(request <= c.HTTP.WriteTimeout, "checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s must not exceed http.write_timeout")
 

@@ -120,6 +120,7 @@ func TestShippedConfigCheckoutDefaults(t *testing.T) {
 	cfg := shippedConfig(t)
 	require.Equal(t, []string{"alice", "bob", "carol"}, cfg.Demo.Users)
 	require.Equal(t, 3*time.Second, cfg.Checkout.ReserveTimeout)
+	require.Equal(t, time.Second, cfg.Checkout.LockTimeout)
 	require.Equal(t, 6*time.Second, cfg.Checkout.ChargeTimeout)
 	require.Equal(t, 3*time.Second, cfg.Checkout.FinalizeTimeout)
 	require.Equal(t, 30*time.Minute, cfg.Checkout.MaxPendingAge)
@@ -177,6 +178,14 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 	require.ErrorContains(t, err, "http.shutdown_timeout must be greater than recovery.lease", "the budget alone is not enough")
 	require.NotContains(t, err.Error(), "must be at least")
 	cfg.HTTP.ShutdownTimeout = 23 * time.Second
+	require.NoError(t, cfg.Validate())
+
+	cfg = shippedConfig(t)
+	cfg.Checkout.LockTimeout = 0
+	require.ErrorContains(t, cfg.Validate(), "checkout.lock_timeout must be positive")
+	cfg.Checkout.LockTimeout = 3 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "checkout.lock_timeout must be less than checkout.reserve_timeout")
+	cfg.Checkout.LockTimeout = 2999 * time.Millisecond
 	require.NoError(t, cfg.Validate())
 
 	cfg = shippedConfig(t)

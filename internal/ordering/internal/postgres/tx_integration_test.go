@@ -7,6 +7,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -98,4 +99,40 @@ func TestTxTranslatesRecoverableLockErrors(t *testing.T) {
 		require.Error(t, err)
 		require.NotErrorIs(t, err, app.ErrBusy)
 	})
+}
+
+func TestTheReservationBoundsItsLockWaitAndIsBusy(t *testing.T) {
+	pool, _ := dbtest.Start(t)
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `CREATE TABLE held (id int PRIMARY KEY); INSERT INTO held VALUES (1)`)
+	require.NoError(t, err)
+	manager, err := database.NewTxManager(pool)
+	require.NoError(t, err)
+	reservation, err := postgres.NewReservationTx(manager, pool, 200*time.Millisecond)
+	require.NoError(t, err)
+
+	holder, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback(ctx) }()
+	_, err = holder.Exec(ctx, `SELECT 1 FROM held WHERE id = 1 FOR UPDATE`)
+	require.NoError(t, err)
+
+	var inside string
+	err = reservation.WithinTx(ctx, func(ctx context.Context) error {
+		q := database.Q(ctx, pool)
+		if err := q.QueryRow(ctx, `SHOW lock_timeout`).Scan(&inside); err != nil {
+			return err
+		}
+		_, err := q.Exec(ctx, `SELECT 1 FROM held WHERE id = 1 FOR UPDATE`)
+		return err
+	})
+	require.ErrorIs(t, err, app.ErrBusy, "a lock wait beyond the limit is a retryable rejection")
+	require.Equal(t, "200ms", inside)
+
+	var outside string
+	require.NoError(t, pool.QueryRow(ctx, `SHOW lock_timeout`).Scan(&outside))
+	require.Equal(t, "0", outside, "SET LOCAL ends with the transaction")
+
+	_, err = postgres.NewReservationTx(manager, pool, 0)
+	require.Error(t, err)
 }

@@ -37,7 +37,7 @@ func settlement(w *world) app.Settlement {
 }
 
 func checkoutPorts(w *world, pay app.PaymentCharger, rec app.CheckoutRecorder) app.CheckoutPorts {
-	return app.CheckoutPorts{Settlement: settlement(w), Reservations: w, Purchases: w, Lookup: w, Payments: pay, Recorder: rec}
+	return app.CheckoutPorts{Settlement: settlement(w), Reservation: w, Reservations: w, Purchases: w, Lookup: w, Payments: pay, Recorder: rec}
 }
 
 func recoveryPorts(w *world, pay app.Payments, rec app.RecoveryRecorder) app.RecoveryPorts {
@@ -385,6 +385,7 @@ func TestNewCheckoutValidatesItsDependencies(t *testing.T) {
 		"finisher":     func(p *app.CheckoutPorts) { p.Finisher = nil },
 		"settlement":   func(p *app.CheckoutPorts) { p.Stock = nil },
 		"carts":        func(p *app.CheckoutPorts) { p.Carts = nil },
+		"reservation":  func(p *app.CheckoutPorts) { p.Reservation = nil },
 		"reservations": func(p *app.CheckoutPorts) { p.Reservations = nil },
 		"purchases":    func(p *app.CheckoutPorts) { p.Purchases = nil },
 		"lookup":       func(p *app.CheckoutPorts) { p.Lookup = nil },

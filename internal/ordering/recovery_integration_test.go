@@ -197,7 +197,7 @@ func newClusterWith(t *testing.T, stuckAfter int, tune func(*ordering.RecoveryCo
 		metrics := &spy{counters: map[string]int64{}, gauges: map[string]float64{}}
 		orders, err := ordering.NewModule(ordering.Deps{
 			Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: metrics, Users: []string{"alice", "bob"},
-			Budgets:  ordering.Budgets{Reserve: 3 * time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
+			Budgets:  ordering.Budgets{Reserve: 3 * time.Second, LockTimeout: time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
 			Recovery: config,
 		})
 		require.NoError(t, err)

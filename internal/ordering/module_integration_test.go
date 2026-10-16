@@ -147,7 +147,7 @@ func setup(t *testing.T, pay *provider) fixture {
 	require.NoError(t, err)
 	orders, err := ordering.NewModule(ordering.Deps{
 		Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: telemetry.Noop(), Users: []string{"alice", "bob"},
-		Budgets:  ordering.Budgets{Reserve: 3 * time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
+		Budgets:  ordering.Budgets{Reserve: 3 * time.Second, LockTimeout: time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
 		Recovery: recoveryConfig,
 	})
 	require.NoError(t, err)
