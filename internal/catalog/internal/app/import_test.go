@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"testing"
@@ -31,6 +32,11 @@ type fakeStore struct {
 	onBatch    func(applied int)
 	calls      []string
 	locked     [][]string
+}
+
+func (f *fakeStore) Snapshot() func() {
+	existing := maps.Clone(f.existing)
+	return func() { f.existing = existing }
 }
 
 func (f *fakeStore) LockExisting(_ context.Context, skus []string) error {
@@ -727,4 +733,41 @@ func TestARepeatedKeyIsAnsweredWhileAnotherImportRuns(t *testing.T) {
 	_, err = importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "other", body))
 	require.ErrorIs(t, err, app.ErrIdempotencyConflict, "a conflict is reported before the lock too")
 	require.Len(t, store.batches, 1)
+}
+
+func TestTheTestImportsLockIsExclusiveAndNonBlocking(t *testing.T) {
+	log := apptest.NewLog()
+	_, unlock, locked, err := log.LockImports(context.Background())
+	require.NoError(t, err)
+	require.True(t, locked)
+	_, _, second, err := log.LockImports(context.Background())
+	require.NoError(t, err)
+	require.False(t, second, "a second caller is refused at once")
+	unlock()
+	_, unlockAgain, third, err := log.LockImports(context.Background())
+	require.NoError(t, err)
+	require.True(t, third, "the lock is free once released")
+	unlockAgain()
+}
+
+func TestAFailedAddLeavesTheFakeStateAsItWas(t *testing.T) {
+	store, log := &fakeStore{existing: map[string]domain.Product{}}, apptest.NewLog()
+	importer, err := app.NewImporter(store, log, apptest.Tx{Members: []apptest.Snapshotter{log, store}}, &fakeRecorder{}, &fakeFailures{})
+	require.NoError(t, err)
+	_, err = importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "h", csvHeader+"A,A-1,,A,5,1,1\n"))
+	require.NoError(t, err)
+	before := maps.Clone(store.existing)
+
+	store.failSKU = map[string]bool{"C-1": true}
+	_, err = importer.Import(context.Background(), keyed(domain.ImportAdd, otherKey, "h2", csvHeader+"B,B-1,,A,5,1,1\nC,C-1,,A,5,1,1\n"))
+	require.Error(t, err)
+	require.Equal(t, before, store.existing, "B-1 was rolled back with the failed row")
+	_, found, err := log.ByKey(context.Background(), otherKey)
+	require.NoError(t, err)
+	require.False(t, found, "the import record was rolled back too")
+	require.Len(t, log.Finished, 1)
+
+	_, _, locked, err := log.LockImports(context.Background())
+	require.NoError(t, err)
+	require.True(t, locked, "the failed import released the imports lock")
 }

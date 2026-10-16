@@ -3,6 +3,7 @@ package apptest
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 
@@ -10,14 +11,36 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 )
 
-type Tx struct{}
+type Snapshotter interface {
+	Snapshot() (restore func())
+}
 
-func (Tx) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	return fn(ctx)
+type Tx struct {
+	Members []Snapshotter
+}
+
+type txKey struct{}
+
+func (t Tx) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if ctx.Value(txKey{}) != nil {
+		return fn(ctx)
+	}
+	restores := make([]func(), len(t.Members))
+	for i, m := range t.Members {
+		restores[i] = m.Snapshot()
+	}
+	err := fn(context.WithValue(ctx, txKey{}, true))
+	if err != nil {
+		for _, restore := range slices.Backward(restores) {
+			restore()
+		}
+	}
+	return err
 }
 
 type Log struct {
 	Busy     bool
+	held     bool
 	mu       sync.Mutex
 	records  map[string]app.ImportRecord
 	order    []string
@@ -80,7 +103,31 @@ func (l *Log) Finish(_ context.Context, id string, from domain.ImportStatus, rep
 }
 
 func (l *Log) LockImports(ctx context.Context) (context.Context, func(), bool, error) {
-	return ctx, func() {}, !l.Busy, nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.Busy || l.held {
+		return ctx, func() {}, false, nil
+	}
+	l.held = true
+	var once sync.Once
+	return ctx, func() {
+		once.Do(func() {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			l.held = false
+		})
+	}, true, nil
+}
+
+func (l *Log) Snapshot() func() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	records, order, finished := maps.Clone(l.records), slices.Clone(l.order), slices.Clone(l.Finished)
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.records, l.order, l.Finished = records, order, finished
+	}
 }
 
 func (l *Log) ByKey(_ context.Context, key string) (app.ImportRecord, bool, error) {
