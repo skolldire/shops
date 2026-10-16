@@ -30,6 +30,8 @@ Open `http://localhost:8080` for the store and `http://localhost:8080/admin/prod
 
 `make down` removes containers, data and the generated password together, so the next `make up` starts clean and the schema is applied again.
 
+`make up-replicas` starts two replicas of the app behind a proxy (`caddy`) on `http://localhost:8081`, besides the first replica on `8080`. Both replicas share the database: they seed once, recover purchases without duplicating charges and answer the same idempotency keys. The proxy keeps the `Host` header, so the same-origin check needs no configuration.
+
 ### Upgrading an existing stack
 
 There are no data migrations: `db/init/001_schema.sql` only runs when the data volume is created. Every schema change requires recreating the stack, which deletes the demo data:
@@ -38,7 +40,7 @@ There are no data migrations: `db/init/001_schema.sql` only runs when the data v
 make down && make up
 ```
 
-Phase 2 added the `version` column to `products` and moved to PostgreSQL 18. Phase 4 adds `inventory_movements` with its triggers, the `payment_token` column of `purchases`, the `reserved` units of `products` and the reserved columns of `inventory_movements`. At startup the app checks that the columns it needs exist and stops with `database: the schema is out of date, recreate the volume with make down && make up` when one is missing. The message does not name the column. The app never runs DDL.
+Phase 2 added the `version` column to `products` and moved to PostgreSQL 18. Phase 4 adds `inventory_movements` with its triggers, the `payment_token` column of `purchases`, the `reserved` units of `products`, the reserved columns of `inventory_movements`, the `imports` table, the recovery columns of `purchases` (`recovery_attempts`, `next_attempt_at`, `lease_until`, `lease_owner`, `last_recovery_error`) and `payment_fake_charges`. At startup the app checks that the columns it needs exist and stops with `database: the schema is out of date, recreate the volume with make down && make up` when one is missing. The message does not name the column. The app never runs DDL.
 
 ### Debug stack
 
@@ -138,7 +140,7 @@ The ordering module follows the same layout:
 
 `payment` has no `internal/` packages because its only piece is the simulated charge; a real provider adapter would go to `payment/internal` behind the same facade. Each module owns its tables: ordering never reads `products`, it goes through the catalog facade, and catalog and payment do not know ordering.
 
-`make lint-arch` enforces this on every pull request. It fails if `domain` or `app` of catalog or ordering import anything outside their closed lists (so `domain` cannot import `app`, and neither can import an adapter), if they reach transport, persistence, logging or telemetry packages even indirectly, if ordering's `domain` or `app` reach `internal/catalog` or `internal/payment`, if catalog or payment depend on ordering, if payment depends on catalog, or if `internal/platform` imports a business module. `make lint-decimals` only allows `decimal.NewFromString` where PostgreSQL text is read back (`catalog/internal/postgres`, `ordering/internal/postgres`) and in the decimal grammar itself; everything else parses with `catalog.ParseDecimal`.
+`make lint-arch` enforces this on every pull request. It fails if `domain` or `app` of catalog or ordering import anything outside their closed lists (so `domain` cannot import `app`, and neither can import an adapter), if they reach transport, persistence, logging or telemetry packages even indirectly, if ordering's `domain` or `app` reach `internal/catalog` or `internal/payment`, if catalog or payment depend on ordering, if payment depends on catalog, or if `internal/platform` imports a business module. `make lint-decimals` only allows `decimal.NewFromString` where PostgreSQL text is read back (`catalog/internal/postgres`, `ordering/internal/postgres`, `payment/internal/fakestore`) and in the decimal grammar itself; everything else parses with `catalog.ParseDecimal`.
 
 ## Endpoints
 
@@ -369,7 +371,7 @@ None of these creates an `imports` row: a file rejected as a whole has no effect
 
 `testdata/products.csv` is the official file of the challenge, unmodified. It was downloaded on October 7, 2026 and its SHA-256 is `6fc46b84badb1ac37b8b19a2d0741aa7728d6c93a9fe949b19f676892dc8fd24`. It has 97 records: 2 empty rows, 82 valid products and 13 rejected rows, among them the repeated SKUs `RS-001` (2 rows) and `BS-021` (3 rows). The acceptance tests import it and check those numbers.
 
-The image ships that file. When `demo.seed` is `true`, the app imports `demo.seed_file` at startup, before it starts serving, and only if the `products` table has no rows at all, deleted ones included. So `make down && make up` gives a populated store, while restarting the app neither imports again nor brings back products that were deleted. The seed goes through the same import as the API, in `replace` mode, and its summary is logged at `info` level as `demo seed imported`. Rejected rows are not a failure; a seed file that is missing or cannot be read stops the startup.
+The image ships that file. When `demo.seed` is `true`, the app imports `demo.seed_file` at startup, before it starts serving, and only if the `products` table has no rows at all, deleted ones included. So `make down && make up` gives a populated store, while restarting the app neither imports again nor brings back products that were deleted. Replicas that start together take a session `pg_advisory_lock` on a dedicated connection before checking: the others wait, then find the products and skip. The seed goes through the same import as the API, in `replace` mode, and its summary is logged at `info` level as `demo seed imported`. Rejected rows are not a failure; a seed file that is missing or cannot be read stops the startup.
 
 ## Inventory audit
 
@@ -429,7 +431,7 @@ Because the UI falls back to the first demo user without a cookie, `SameSite=Lax
 - With neither header the request is rejected. Current browsers send `Origin` on form posts.
 - `X-Forwarded-*` and other proxy headers are ignored.
 
-A rejection answers `403` with the HTML error page. The compose stack serves the app directly; behind a reverse proxy the public host would have to be configured. The JSON API does not use cookies, so it does not have this check.
+A rejection answers `403` with the HTML error page. Behind a reverse proxy that keeps the `Host` header, as the `replicas` compose profile does, nothing has to be configured. A proxy that rewrites it needs `http.public_origins`: a list of origins such as `https://shop.example` that are accepted besides the request's own. Each one must be exactly `scheme://host[:port]` with `http` or `https`; anything else stops the startup, and the error names the position in the list, never the value. The JSON API does not use cookies, so it does not have this check.
 
 ### Checkout
 
@@ -441,7 +443,7 @@ curl -i localhost:8080/api/v1/checkout \
   -d '{"items":[{"product_id":"<id>","quantity":2,"expected_unit_price":"29.99"}],"payment_token":"pm_approved"}'
 ```
 
-Totals sent by the client are ignored and the currency is always `USD`. The fake payment accepts `pm_approved` and declines `pm_declined` with `card_declined`; any other token is declined with `unknown_payment_token`.
+Totals sent by the client are ignored and the currency is always `USD`. The simulated payment accepts `pm_approved`, declines `pm_declined` with `card_declined`, and charges `pm_unknown` but answers as if the response were lost, so the purchase stays `PENDING` until the recovery confirms it; any other token is declined with `unknown_payment_token`.
 
 | Rule | |
 |---|---|
@@ -464,7 +466,7 @@ A purchase is `PENDING`, `CONFIRMED` or `FAILED`, and only `PENDING → CONFIRME
 2. **Charge.** Outside any transaction and without product locks, with the purchase id as the reference.
 3. **Finalization (one transaction, shared with the recovery).** `UPDATE purchases SET status = ... WHERE id = $1 AND status = 'PENDING'`. If no row changes, another finalization already won and nothing else is applied. Otherwise, in the same transaction: approved → `CONFIRMED` with the payment reference, the sale (`stock - q` and `reserved - q`, through `catalog.CommitStock`) and the cart cleanup; declined → `FAILED` with the reason and the reservation released (`reserved - q`). Both act on deleted products too, so a product deleted while a purchase is pending still settles it. If the reserved units are fewer than the purchase needs, catalog answers `ErrStockInvariant`: the finalization rolls back, the purchase stays `PENDING` and the error is logged. It is never corrected silently.
 
-Only a definitive decline leads to `FAILED`. A technical error, an unknown outcome, an unavailable provider or a failed finalization after the charge keep the purchase `PENDING` with its units reserved; the [recovery](#recovery-at-startup) settles it. There is no atomicity between PostgreSQL and the payment; the recovery covers the interruption windows.
+Only a definitive decline leads to `FAILED`. A technical error, an unknown outcome, an unavailable provider or a failed finalization after the charge keep the purchase `PENDING` with its units reserved; the [recovery](#periodic-recovery) settles it. There is no atomicity between PostgreSQL and the payment; the recovery covers the interruption windows.
 
 **Lock order.** Every path acquires locks in this order and none inverts it:
 
@@ -475,6 +477,7 @@ Only a definitive decline leads to `FAILED`. A technical error, an unknown outco
 | Reservation | Purchase row → product rows by product id |
 | Finalization, confirmed | Purchase row → product rows by product id → cart rows by product id |
 | Finalization, declined | Purchase row → product rows by product id |
+| Recovery claim | Purchase rows, `FOR UPDATE SKIP LOCKED`, in one short statement; nothing is held during the charge |
 | Import | Product rows by SKU; an `add` keeps them locked until the whole file is applied |
 | Product edit | One product row |
 
@@ -547,11 +550,29 @@ A purchase keeps its own copy of what was sold: `purchase_items` holds the SKU, 
 
 What stays outside these guarantees: the owner of the tables or a superuser can disable the triggers (`ALTER TABLE … DISABLE TRIGGER`), and a session with `session_replication_role = replica` skips them, which is what the test helper `dbtest.Truncate` does. The application connects as the owner. A direct `INSERT` can still write a purchase whose total does not match its items, and a direct `UPDATE` of `status` is not checked against the allowed transitions. In production the tables would belong to another role, as described for the movements in [Evolution](#evolution).
 
-### Payment contract (provisional)
+### Payment contract
 
-`payment.Charge(ctx, ChargeRequest{Reference, Token, Amount, Currency})` returns `APPROVED` with a provider reference, or `DECLINED` with a reason. Errors never mean a decline. Two classifiable errors let ordering decide without knowing the provider: `ErrOutcomeUnknown` (the request may have reached the provider and it is unknown whether it charged) and `ErrUnavailable` (the provider is not available). After the reservation both keep the purchase `PENDING`.
+The `payment` port has three operations, all by the purchase id as reference:
 
-Any provider behind this contract must be idempotent by reference: the same reference with the same content does not charge twice and returns the original result; two concurrent charges with the same reference produce one charge; the same reference with other content is a conflict without a new charge. The recovery relies on it. The contract is provisional until a provider is chosen. The in-process fake keeps no state and never returns an error, so it does not prove this idempotency by itself; the tests prove the ordering side with a stateful double that tells requests from effective charges and returns unknown outcomes.
+| Operation | Answer |
+|---|---|
+| `Charge(ctx, ChargeRequest{Reference, Token, Amount, Currency})` | `APPROVED` with a provider reference, or `DECLINED` with a reason |
+| `Lookup(ctx, reference)` | `APPROVED` (with provider reference, amount and currency), `DECLINED` (with reason) or `NOT_FOUND` |
+| `Void(ctx, reference)` | `VOIDED`, after which no charge with that reference can succeed, or the real result if a charge arrived first |
+
+Errors never mean a decline. `ErrOutcomeUnknown` (the request may have reached the provider and it is unknown whether it charged) and `ErrUnavailable` (the provider does not answer) keep the purchase `PENDING`. `ErrReferenceConflict` (the reference was already used with other content) is treated as an unknown outcome and logged as an error.
+
+**Idempotency by reference is a non-negotiable requirement of any provider.** `paymenttest.Contract` is the acceptance test every implementation must pass:
+
+- two concurrent charges with the same reference produce one charge;
+- repeating a charge with the same content returns the original result;
+- repeating it with other content returns `ErrReferenceConflict` without a new charge;
+- an unknown reference is `NOT_FOUND`;
+- a voided reference is never charged, and voiding a charged reference returns the real result.
+
+The demo provider is a fake persisted in `payment_fake_charges`, with the reference as primary key: a charge and a void both `INSERT … ON CONFLICT DO NOTHING` and read the row, so exactly one wins. It stores the SHA-256 of the token, never the token, and uses the pool directly, never the transaction of ordering. Its tokens are `pm_approved`, `pm_declined` and `pm_unknown`, which records the approval and then answers `ErrOutcomeUnknown` once, like a response lost on the way back. The fake runs the contract in its integration tests.
+
+**Requirements for phase 4b (a real gateway).** `Lookup` and `Void` by reference become part of the gateway contract, and the provider chosen has to support them. Some providers only void authorizations, not captured charges; with one of those, resolving a stuck purchase goes back to being a manual procedure.
 
 ### Time budgets
 
@@ -560,9 +581,9 @@ Any provider behind this contract must be idempotent by reference: the same refe
 | `checkout.reserve_timeout` | 3s | The reservation transaction. Derived from the request context |
 | `checkout.charge_timeout` | 6s | The charge. Starts when the reservation commits, from the request context without its cancellation, so a client that disconnects does not leave the purchase half done |
 | `checkout.finalize_timeout` | 3s | The finalization. A fresh context, also without the client's cancellation; it never reuses the charge context, which may have expired |
-| `checkout.recovery_timeout` | 60s | The whole startup recovery. Each purchase uses the charge and finalize budgets inside it, so exhausting the total also stops the purchase in flight |
+| `checkout.max_pending_age` | 30m | A purchase older than this is no longer charged again: the recovery resolves it with the provider (see [Periodic recovery](#periodic-recovery)) |
 
-All of them must be positive, and `reserve + charge + finalize + 2s` must not exceed `http.write_timeout` nor `http.shutdown_timeout`, or the app does not start. A graceful shutdown waits for the requests in flight; one that does not finish in time stays `PENDING` and the next startup settles it, if the database and the payment provider are available. These budgets do not guarantee that the client receives an answer. What they guarantee is correctness: if the client gets no answer, the idempotency key and the recovery bring the purchase to its right state.
+All of them must be positive, and `reserve + charge + finalize + 2s` must not exceed `http.write_timeout` nor `http.shutdown_timeout`, or the app does not start. There is no `checkout.recovery_timeout` any more: it was the total budget of the recovery that ran before serving, which no longer exists. The periodic recovery is already bounded by the charge and finalize budgets of each purchase and by `recovery.batch_size` per cycle. A graceful shutdown waits for the requests in flight; one that does not finish in time stays `PENDING` and the recovery of any replica settles it. These budgets do not guarantee that the client receives an answer. What they guarantee is correctness: if the client gets no answer, the idempotency key and the recovery bring the purchase to its right state.
 
 ### Cart
 
@@ -574,11 +595,48 @@ The cart lives on the server and is used from the UI only; there are no cart end
 - The checkout from the cart builds the same items, with the price seen as the expected price, and calls the same use case as the API.
 - A confirmed purchase removes a cart line only if its quantity and price seen are still the ones that were bought, so a line changed in another tab during the payment stays as it was left. If the user removes a line and adds it back identical during the payment, that line is removed. A declined payment does not touch the cart.
 
-### Recovery at startup
+### Periodic recovery
 
-Before it starts serving, after the demo seed, the app takes every `PENDING` purchase, repeats the charge with the same reference, token, amount and currency, and applies the same finalization as the checkout. The contract guarantees that this does not charge twice. A purchase whose outcome is still unknown, or whose provider is unavailable, stays `PENDING`. The summary is logged at `info` (`pending purchases recovered`), every purchase that is still pending is logged at `warn` with its cause, and those purchases do not stop the startup. A database error reading the pending purchases does, like the seed.
+Every replica runs one recovery worker. It starts with the servers without delaying them, runs its first cycle at once and then one every `recovery.interval`. All the coordination between replicas goes through PostgreSQL.
 
-Decision and assumptions: the RFC proposed taking only purchases pending for more than a minute. The recovery runs before the server accepts requests and there is one instance, so there is no purchase in flight to protect. With several replicas this becomes a periodic job with a minimum age and a lock. A purchase interrupted while the app keeps running stays `PENDING` until the next start, because there is no periodic recovery yet. With the in-process fake the provider is never unavailable, so no readiness policy exists for that case; it will be defined with a real provider.
+**A cycle.**
+
+1. **Claim.** One statement takes a batch: `UPDATE purchases SET lease_until = now() + lease, lease_owner = <worker> WHERE id IN (SELECT … WHERE status = 'PENDING' AND created_at < now() - min_age AND next_attempt_at <= now() AND (lease_until IS NULL OR lease_until < now()) ORDER BY next_attempt_at LIMIT batch FOR UPDATE SKIP LOCKED)`. Each worker has its own id, generated when it starts. `min_age` is longer than a whole checkout, so the recovery never competes with a checkout in progress.
+2. **Renew, one purchase at a time.** Before charging each purchase, the worker renews its lease: `UPDATE … SET lease_until = now() + lease WHERE id = $1 AND lease_owner = <worker> AND status = 'PENDING'`. If no row changes, another replica took the purchase or it was settled: it is skipped without charging and logged at `info`.
+3. **Settle.** The purchase is charged again with the stored reference, token, amount and currency, and finalized with the same finalization as the checkout. No transaction or lock is open during the charge.
+4. **Without a definitive result** (unknown outcome, unavailable provider, reference conflict, failed finalization), one statement adds one attempt, sets `next_attempt_at` with exponential backoff, jitter and a ceiling, stores the sanitized cause and releases the lease (`lease_until` and `lease_owner` to `NULL`). A purchase never becomes `FAILED` this way.
+
+**Why the lease is renewed per purchase.** A lease set once for the whole batch runs while the batch is processed in series, so the last purchases of a batch could start after their lease expired, be claimed by another replica, and receive a second charge request. Renewing each purchase right before its charge makes `lease > charge_timeout + finalize_timeout + 2s` cover exactly one purchase, and the conditional renewal is what stops a worker from charging a purchase it no longer owns. All times are PostgreSQL's `now()`.
+
+**Stuck and overdue purchases.** When a purchase reaches `recovery.stuck_after_attempts`, or is older than `checkout.max_pending_age`, the worker stops charging it and resolves it with the provider within its renewed lease:
+
+| Provider answer | Result |
+|---|---|
+| `Lookup` → `APPROVED`, same amount and currency | `CONFIRMED` with the provider reference |
+| `Lookup` → `APPROVED`, another amount or currency | Stays `PENDING`, logged at `error`: a different charge is a defect and is never confirmed |
+| `Lookup` → `DECLINED` | `FAILED` with the reason, reservation released |
+| `Lookup` → `NOT_FOUND`, then `Void` → `VOIDED` | `FAILED` with `payment_not_completed`, reservation released |
+| `Lookup` → `NOT_FOUND`, then `Void` → a real result | The row of that result |
+| `Lookup` or `Void` does not answer | Stays `PENDING` with backoff; the only case left open |
+
+A purchase becomes `FAILED` only with a `DECLINED` or a `VOIDED` confirmed by the provider. Everything is applied with the checkout's finalization, so releasing or selling the stock and cleaning the cart follow the same rules. Two workers that reach the same purchase apply one effect: the finalization only changes a `PENDING` purchase.
+
+**Logs.** One line per attempt with `purchase_id`, attempt and outcome, never the token:
+
+| Situation | Level |
+|---|---|
+| Purchase skipped because another worker took or settled it | `info` |
+| Attempt without a definitive result, below the threshold | `info` |
+| The attempt whose reschedule returns exactly `stuck_after_attempts` | **one** `error`, with the attempts and the last sanitized cause |
+| Later attempts | `warn` |
+| A stuck purchase that gets resolved | `info`, with the total of attempts |
+| Each resolution with the provider | `info` with its result (`error` for a different amount) |
+
+The attempt counter is returned by the database (`UPDATE … RETURNING recovery_attempts`), so the `error` is written once even with several replicas. **Alerts are defined on the metric `checkout_recovery_stuck`, not on the logs**: the gauge keeps the signal while a stuck purchase exists, and a single log line can be missed.
+
+**Shutdown.** The worker stops before the pool. It claims nothing more, and the purchase in progress finishes within its charge and finalize budgets; if it cannot, it stays `PENDING` with a lease that expires.
+
+**Runbook, only for the open case (the provider does not answer).** Find the purchases with `checkout_recovery_stuck` and `checkout_recovery_stuck_reserved_units`, or with `SELECT id, recovery_attempts, last_recovery_error FROM purchases WHERE status = 'PENDING' ORDER BY created_at`. Check the provider by reference (the purchase id) and wait for the recovery to resolve them once it answers. **Never finalize a purchase with direct SQL**: it would skip the stock and cart rules and could contradict what the provider charged.
 
 ## Web UI
 
@@ -587,7 +645,7 @@ Decision and assumptions: the RFC proposed taking only purchases pending for mor
 | `/` | Store with search, category, price range, in-stock filter, sorting and pagination. Results update with htmx without reloading, and the filters stay in the URL so searches can be shared and the Back button works |
 | `/products/{id}` | Product details, with "Add to cart" and a quantity when the product has stock |
 | `/cart` | The cart: lines, warnings (unavailable, not enough stock, changed price with "Use current price"), quantity changes, removal and the estimated total |
-| `/checkout` | The order and a test payment method (`pm_approved` or `pm_declined`). The page carries a fresh idempotency key in a hidden field, so a double click or a resubmission of the same attempt reuses it; disabling the button while the request runs is only a visual aid. If the cart changed and the checkout answers `idempotency_conflict`, the page is generated again with a new key. A price change goes back to the cart with its warnings |
+| `/checkout` | The order and a test payment method (`pm_approved`, `pm_declined` or `pm_unknown`). The page carries a fresh idempotency key in a hidden field, so a double click or a resubmission of the same attempt reuses it; disabling the button while the request runs is only a visual aid. If the cart changed and the checkout answers `idempotency_conflict`, the page is generated again with a new key. A price change goes back to the cart with its warnings |
 | `/purchases` | The purchase history of the current demo user |
 | `/purchases/{id}` | One purchase: confirmed, declined with its reason and the cart kept, or pending with a link to the history |
 | `/admin/products` | Product table with search, edit and delete actions |
@@ -665,6 +723,23 @@ A stored preview was also built and discarded: upload, see a server-rendered sum
 
 **Revisit when** clients start caching product representations with `If-None-Match`: `reserved` and `available` would then need their own validator or a weak `ETag`.
 
+### D5. Several replicas coordinated through PostgreSQL
+
+**Context.** The app has to run as several replicas against one database. Every piece with shared state (the recovery, the payment fake, the seed and the metrics) has to agree without a broker or a coordinator of its own.
+
+**Alternatives for the recovery.**
+
+| Option | Consequence |
+|---|---|
+| A leader elected with an advisory lock that recovers everything | Simple, but one replica does all the work, a leader that hangs holds the lock with its session, and failover depends on that session ending |
+| A lease per purchase, claimed with `FOR UPDATE SKIP LOCKED` and renewed before each charge | Every replica works, a frozen worker only holds the purchases it claimed until their leases expire, and each purchase is protected one by one |
+
+**Decision.** Leases per purchase, with an owner per worker and a conditional renewal before every charge. The rest also goes through PostgreSQL: idempotency keys and the payment reference are unique, the seed takes an advisory lock, the import takes an advisory lock on its id, and the gauges are read from the database every cycle.
+
+**Example.** Worker A claims two purchases and stalls on the first. The lease of the second expires and worker B charges and confirms it. When A gets to the second one, its renewal changes no row, so it skips it without charging.
+
+**Revisit when** the volume of pending purchases makes a database poll per replica expensive, or a message broker is introduced (phase 5): a queue with visibility timeouts would play the role of the lease.
+
 ### D6. Schema changes without migrations
 
 **Context.** The project is not in production, and phase 4 changes the schema several times.
@@ -690,8 +765,10 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 - **An interrupted `replace` stays `APPLYING` until someone sends the same file again with the same key.** In the UI that means sending the same form again; a new form has a new key, and the interrupted import then remains `APPLYING` as a record. The stock is not wrong for it: the batches applied hold the values of the file.
 - **A large `add` holds the locks of all its products until it finishes**, so checkouts of those products wait for it.
 - **An import and a checkout can deadlock.** They lock products in different orders (SKU and product id). PostgreSQL aborts one of them; a reservation answers `503 try_again`, a finalization leaves the purchase `PENDING`.
-- **Pending purchases wait for the next start.** There is no periodic recovery and the recovery assumes a single instance.
-- **The payment is an in-process fake.** It never times out or fails, so the unknown and unavailable outcomes are exercised only by the tests.
+- **The lease reduces double charge requests but cannot remove them.** A worker frozen after renewing a lease and before charging, for longer than the lease, can charge at the same time as the replica that took the purchase over. Only the provider can close this, by rejecting the second request: that is why idempotency by reference is a non-negotiable requirement of any gateway. The database stays right either way (`Finish … WHERE status = 'PENDING'`), and the demo fake already rejects it with its primary key.
+- **A long outage of the provider keeps purchases open.** While `Lookup` and `Void` do not answer, a stuck purchase stays `PENDING` and its units stay reserved; `checkout_recovery_stuck_reserved_units` shows how many. See the runbook in [Periodic recovery](#periodic-recovery).
+- **A gateway that does not meet the payment contract can charge twice.** The contract test is the acceptance criterion for any provider.
+- **The payment is a simulated provider.** It is persisted and meets the contract, but it never times out on its own; unavailability is exercised by the tests.
 - **Movements and purchase snapshots are immutable only for the application.** The table owner or a superuser can disable their triggers, and `session_replication_role = replica` skips them.
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
 
@@ -701,11 +778,9 @@ Pieces left out of this phase, with what would justify them:
 
 | Piece | Trigger |
 |---|---|
-| Real HTTP payment provider (phase 4b: simulator, HTTP adapter, retries, circuit breaker, remote lookup by reference) | Choosing a provider, or demonstrating a timeout without a double charge. It plugs in behind the payment facade without changing ordering |
-| Periodic recovery with a minimum age and a lock | Running more than one replica, or pending purchases that cannot wait for a restart |
+| Real HTTP payment provider (phase 4b: HTTP adapter, retries, circuit breaker) | Choosing a provider. It plugs in behind the payment port without changing ordering, if it passes `paymenttest.Contract` and supports `Lookup` and `Void` by reference |
 | `inventory_movements`, `purchases` and `purchase_items` owned by a separate role, with `REVOKE UPDATE, DELETE` (column-level `UPDATE` grants for the purchase outcome) for the application role | Production, where the audit must hold even against the application's own credentials |
 | Real authentication and sessions instead of demo users | Anyone other than an evaluator using the store |
-| Configurable public host for the same-origin check | Serving the app behind a reverse proxy |
 | Outbox and message broker | Phase 5 |
 
 ## Configuration
@@ -739,11 +814,18 @@ Keys without an environment variable:
 |---|---|
 | `demo.users` | `[alice, bob, carol]`. The first one is used when the UI has no `demo_user` cookie |
 | `import.max_bytes`, `import.max_rows` | `10485760` (10 MB) and `10000`. See [The file](#the-file) |
-| `checkout.reserve_timeout`, `checkout.charge_timeout`, `checkout.finalize_timeout`, `checkout.recovery_timeout` | `3s`, `6s`, `3s` and `60s`. See [Time budgets](#time-budgets) |
+| `checkout.reserve_timeout`, `checkout.charge_timeout`, `checkout.finalize_timeout` | `3s`, `6s` and `3s`. See [Time budgets](#time-budgets) |
+| `checkout.max_pending_age` | `30m`. Must be greater than `recovery.min_age` and `recovery.lease`. See [Periodic recovery](#periodic-recovery) |
+| `recovery.interval`, `recovery.batch_size` | `10s` and `20` |
+| `recovery.min_age` | `30s`. Must be greater than `reserve + charge + finalize + 2s`, so the recovery never takes a checkout in progress |
+| `recovery.lease` | `30s`. Must be greater than `charge + finalize + 2s`, the time of one purchase |
+| `recovery.base_backoff`, `recovery.max_backoff` | `5s` and `5m`; the base cannot exceed the ceiling |
+| `recovery.stuck_after_attempts` | `10` |
+| `http.public_origins` | `[]`. See [Same-origin check for forms](#same-origin-check-for-forms) |
 
 ## Observability
 
 - **Logs:** JSON on stdout with `timestamp`, `severity` and `message`. Every request line carries `request_id`, `trace_id` and `span_id`. Sensitive fields and values (passwords, tokens, bearer credentials, card numbers) are redacted. The configuration is never logged. An import that recovers from a failed batch logs it once as a warning; a row the database finally rejects is logged once as an error.
-- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish (the image has no shell, so use `make up-debug`, which publishes it on `127.0.0.1:9100`). Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole. Every checkout that reaches the use case counts once in `checkout_total{outcome}`: `confirmed`, `declined`, `pending` (a stored purchase without a definitive payment result), `insufficient_stock`, `price_changed`, `product_unavailable`, `invalid` (field rules and the idempotency key, which the use case validates), `idempotency_conflict`, `replayed`, `in_progress`, `try_again` (only `40P01` and `55P03`) and `error` (unexpected failures); a failure counts as `try_again` or as `error`, never both. Requests rejected before the use case (unknown demo user, unreadable JSON, a body too large) are not counted there; the HTTP server metrics cover them. The startup recovery counts `checkout_recovery_total{outcome}` with `confirmed`, `declined` and `still_pending`. No label carries users, purchases, tokens or error text.
+- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish (the image has no shell, so use `make up-debug`, which publishes it on `127.0.0.1:9100`). Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole. Every checkout that reaches the use case counts once in `checkout_total{outcome}`: `confirmed`, `declined`, `pending` (a stored purchase without a definitive payment result), `insufficient_stock`, `price_changed`, `product_unavailable`, `invalid` (field rules and the idempotency key, which the use case validates), `idempotency_conflict`, `replayed`, `in_progress`, `try_again` (only `40P01` and `55P03`) and `error` (unexpected failures); a failure counts as `try_again` or as `error`, never both. Requests rejected before the use case (unknown demo user, unreadable JSON, a body too large) are not counted there; the HTTP server metrics cover them. The recovery counts every attempt in `checkout_recovery_total{outcome}` (`confirmed`, `declined`, `still_pending`, `error`, `skipped`) and every resolution with the provider in `checkout_recovery_resolutions_total{result}` (`confirmed`, `declined`, `voided`, `mismatch`, `error`); every series is recorded with 0 at startup so it exists before the first attempt. After each cycle it publishes the gauges `checkout_pending_purchases`, `checkout_oldest_pending_seconds`, `checkout_recovery_stuck` and `checkout_recovery_stuck_reserved_units`. Every replica publishes the same values from the same database, so the gauges are aggregated across replicas with `max`, never summed. No label carries users, purchases, tokens or error text.
 - **Checkout logs:** every checkout that ends with a purchase writes one line with `purchase_id`, `user_id` and `status`, at `warn` with its cause when the purchase stays `PENDING`. The payment token is never logged. An unexpected failure is logged once, by the HTTP adapter.
 - **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route. Under the request span, an import adds one `catalog.import` span for the whole operation, and every statement sent to PostgreSQL adds a `postgres <OPERATION>` child span, such as `postgres SELECT` or `postgres COMMIT`. The trace shows how long the import took, which statements ran, how long each one took and which one failed; the time not spent in PostgreSQL is reading, validating and preparing the rows. Spans carry the operation name only: never the SQL text, its arguments, a file name or a product value. The checkout adds no spans of its own; its PostgreSQL statements hang from the request span. A file rejected as a whole is an expected rejection: the caller still gets the error, but the span is not marked as failed.
