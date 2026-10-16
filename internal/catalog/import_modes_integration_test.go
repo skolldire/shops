@@ -202,6 +202,7 @@ func TestAnInterruptedReplaceIsResumedByUploadingTheFileAgain(t *testing.T) {
 	require.Equal(t, 1, r.stock(t, "N-0001"), "the first batch was applied")
 	require.Equal(t, 1, r.stock(t, "N-0550"), "the second batch was not")
 
+	r.waitFor(t, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'`, 0)
 	report, err := r.b.Import(ctx, strings.NewReader(file), replace(keyOne))
 	require.NoError(t, err)
 	require.Equal(t, []int{599, 1, 0}, []int{report.Created + report.Unchanged, report.Updated, report.Rejected})

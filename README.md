@@ -275,7 +275,7 @@ The request is `multipart/form-data` with the file in a field named `file`. The 
 | Same key, and… | Answer |
 |---|---|
 | Same file and mode, import applied | The original report, without applying anything again |
-| Same file and mode, import interrupted (`APPLYING`) | The whole file is applied again from the upload, under the lock of the import, and it finishes `APPLIED` |
+| Same file and mode, import interrupted (`APPLYING`) | The whole file is applied again from the upload, under the imports lock, and it finishes `APPLIED`. The lock of the interrupted request is released when PostgreSQL ends its connection, so a retry sent at that very moment can still get `409 import_in_progress`; the retry after `Retry-After` resumes it |
 | Another file or mode | `409 idempotency_conflict` |
 
 **One import at a time.** Before applying anything, an import takes `pg_try_advisory_lock` on a single key shared by every import, on one pinned connection, and the whole application runs on that connection. If another import holds it, the request answers at once with `409 import_in_progress` and `Retry-After: 5`: it writes no `imports` row, no product and no movement, and the same request works when it is sent again. A key that already has an applied import is answered from its stored report before trying the lock, and a key used with another file or mode answers `409 idempotency_conflict` there too, so repeating a request never meets `import_in_progress` once its import is done. Two replicas that receive the same key at the same time apply it once: one applies it and the other answers `import_in_progress`, and its retry gets the stored report. Every status change is an `UPDATE … WHERE status = <expected>`. See [D10](#d10-one-import-at-a-time).
