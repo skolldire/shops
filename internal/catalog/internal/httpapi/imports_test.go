@@ -134,6 +134,7 @@ func TestImportErrorTable(t *testing.T) {
 		"file too large":    {csvimport.ErrFileTooLarge, 413, "request_too_large", "larger than the import limit"},
 		"bad key":           {app.ErrInvalidIdempotencyKey, 400, "invalid_idempotency_key", "UUID"},
 		"key conflict":      {fmt.Errorf("add: %w", app.ErrIdempotencyConflict), 409, "idempotency_conflict", "another file or mode"},
+		"import running":    {app.ErrImportInProgress, 409, "import_in_progress", "send the file again in a few seconds"},
 		"repeated file": {&app.DuplicateFileError{Previous: domain.ImportStamp{AppliedAt: time.Date(2026, 10, 14, 9, 30, 0, 0, time.UTC)}},
 			409, "duplicate_file", "already added on 2026-10-14T09:30:00Z. Send allow_duplicate=true"},
 		"unexpected failure": {errors.New("db exploded: host=10.0.0.5"), 500, "internal_error", "unexpected"},
@@ -148,6 +149,9 @@ func TestImportErrorTable(t *testing.T) {
 			require.Equal(t, tt.code, decodeProblem(t, rec).Code)
 			require.Contains(t, rec.Body.String(), tt.detail)
 			require.NotContains(t, rec.Body.String(), "10.0.0.5")
+			if tt.code == "import_in_progress" {
+				require.Equal(t, "5", rec.Header().Get("Retry-After"))
+			}
 			if tt.status == 500 {
 				require.Contains(t, logs.String(), "db exploded")
 			} else {

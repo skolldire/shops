@@ -195,6 +195,7 @@ func TestImportWholeFileErrorsStayOnTheForm(t *testing.T) {
 		"too many rows":  {catalog.ErrTooManyRows, 400, "The file has more rows than the import limit. Nothing was imported."},
 		"too large":      {catalog.ErrFileTooLarge, 413, "The file is larger than the import limit. Nothing was imported."},
 		"key reused":     {catalog.ErrIdempotencyConflict, 409, "This form was already used for another file or mode."},
+		"import running": {catalog.ErrImportInProgress, 409, "Another import is being applied. Nothing was imported; choose the file again in a few seconds."},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

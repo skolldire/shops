@@ -5,7 +5,6 @@ package postgres_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -93,22 +92,35 @@ func TestImportLog(t *testing.T) {
 		require.False(t, found)
 	})
 
-	t.Run("a second lock on the same import waits for the first", func(t *testing.T) {
+	t.Run("only one caller holds the imports lock, and nobody waits for it", func(t *testing.T) {
 		reset(t)
-		_, unlock, err := log.Lock(ctx, importKey)
+		_, unlock, locked, err := log.LockImports(ctx)
 		require.NoError(t, err)
-		second := async(func() (func(), error) {
-			_, unlock, err := log.Lock(ctx, importKey)
-			return unlock, err
-		})
-		require.Eventually(t, func() bool {
-			var waiting int
-			err := f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting)
-			return err == nil && waiting == 1
-		}, 10*time.Second, 10*time.Millisecond)
+		require.True(t, locked)
+		_, _, second, err := log.LockImports(ctx)
+		require.NoError(t, err)
+		require.False(t, second, "the second caller is told at once")
+		var waiting int
+		require.NoError(t, f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting))
+		require.Zero(t, waiting)
 		unlock()
-		unlockSecond, err := second()
+		_, unlockAgain, third, err := log.LockImports(ctx)
 		require.NoError(t, err)
-		unlockSecond()
+		require.True(t, third, "the lock is free once released")
+		unlockAgain()
+	})
+
+	t.Run("an applied key is found without the lock", func(t *testing.T) {
+		reset(t)
+		_, found, err := log.ByKey(ctx, importKey)
+		require.NoError(t, err)
+		require.False(t, found)
+		rec, created, err := log.Create(ctx, app.ImportRecord{Key: importKey, Mode: domain.ImportAdd, Status: domain.ImportApplying, File: app.ImportFile{Name: "a.csv", SHA256: "h1"}})
+		require.NoError(t, err)
+		require.True(t, created)
+		got, found, err := log.ByKey(ctx, importKey)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, rec.ID, got.ID)
 	})
 }

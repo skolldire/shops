@@ -18,7 +18,10 @@ import (
 	"github.com/skolldire/shops/internal/platform/logger"
 )
 
-const importField = "file"
+const (
+	importField      = "file"
+	importRetryAfter = "5"
+)
 
 type Importer interface {
 	Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error)
@@ -184,6 +187,9 @@ func (h *ImportHandler) writeError(w http.ResponseWriter, r *http.Request, err e
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusBadRequest, Code: "invalid_idempotency_key", Detail: "Idempotency-Key must be a UUID, and an add import requires one."})
 	case errors.Is(err, app.ErrIdempotencyConflict):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "idempotency_conflict", Detail: "This Idempotency-Key was already used with another file or mode."})
+	case errors.Is(err, app.ErrImportInProgress):
+		w.Header().Set("Retry-After", importRetryAfter)
+		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "import_in_progress", Detail: "Another import is being applied. Nothing was imported; send the file again in a few seconds."})
 	case errors.As(err, &duplicate):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "duplicate_file", Detail: fmt.Sprintf(
 			"The same file was already added on %s. Send allow_duplicate=true to add it again.", duplicate.Previous.AppliedAt.UTC().Format(time.RFC3339))})

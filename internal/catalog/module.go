@@ -354,6 +354,8 @@ func publicImportError(err error) error {
 		return ErrIdempotencyKeyRequired
 	case errors.Is(err, app.ErrIdempotencyConflict):
 		return ErrIdempotencyConflict
+	case errors.Is(err, app.ErrImportInProgress):
+		return ErrImportInProgress
 	}
 	return err
 }

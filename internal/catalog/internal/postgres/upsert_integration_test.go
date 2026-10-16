@@ -4,6 +4,7 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -301,7 +302,7 @@ func TestImportIntoPostgres(t *testing.T) {
 		require.Equal(t, 2, f.count(t))
 	})
 
-	t.Run("two imports of the same file at once do not deadlock", func(t *testing.T) {
+	t.Run("imports of the same file at once apply it one at a time", func(t *testing.T) {
 		f.reset(t)
 		body := generated(1500)
 		reports := make([]app.ImportReport, 4)
@@ -317,6 +318,10 @@ func TestImportIntoPostgres(t *testing.T) {
 
 		created := 0
 		for i, report := range reports {
+			if errors.Is(errs[i], app.ErrImportInProgress) {
+				reports[i], errs[i] = importer.Import(ctx, strings.NewReader(body), app.ImportOptions{FileName: "generated.csv", Mode: domain.ImportReplace})
+				report = reports[i]
+			}
 			require.NoError(t, errs[i])
 			require.Empty(t, report.Errors)
 			require.Equal(t, 1500, report.Created+report.Updated+report.Unchanged)

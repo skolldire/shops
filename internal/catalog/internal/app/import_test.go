@@ -688,3 +688,43 @@ func TestTheBatchesInsertTheSKUsInOneAscendingOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestAnImportWhileAnotherRunsIsRefusedWithoutEffects(t *testing.T) {
+	for _, mode := range []domain.ImportMode{domain.ImportAdd, domain.ImportReplace} {
+		t.Run(string(mode), func(t *testing.T) {
+			store, log := &fakeStore{}, apptest.NewLog()
+			importer, err := app.NewImporter(store, log, apptest.Tx{}, &fakeRecorder{}, &fakeFailures{})
+			require.NoError(t, err)
+			log.Busy = true
+
+			_, err = importer.Import(context.Background(), keyed(mode, importKey, "h", csvHeader+"A,A-1,,A,5,1,1\n"))
+			require.ErrorIs(t, err, app.ErrImportInProgress)
+			require.Empty(t, store.calls, "nothing was locked or applied")
+			_, found, err := log.ByKey(context.Background(), importKey)
+			require.NoError(t, err)
+			require.False(t, found, "no import was recorded")
+
+			log.Busy = false
+			report, err := importer.Import(context.Background(), keyed(mode, importKey, "h", csvHeader+"A,A-1,,A,5,1,1\n"))
+			require.NoError(t, err)
+			require.Equal(t, 1, report.Created, "the retry applies the file")
+		})
+	}
+}
+
+func TestARepeatedKeyIsAnsweredWhileAnotherImportRuns(t *testing.T) {
+	store, log := &fakeStore{}, apptest.NewLog()
+	importer, err := app.NewImporter(store, log, apptest.Tx{}, &fakeRecorder{}, &fakeFailures{})
+	require.NoError(t, err)
+	body := csvHeader + "A,A-1,,A,5,1,1\n"
+	first, err := importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "h", body))
+	require.NoError(t, err)
+
+	log.Busy = true
+	again, err := importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "h", body))
+	require.NoError(t, err)
+	require.Equal(t, first, again, "a replay never waits for the lock")
+	_, err = importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "other", body))
+	require.ErrorIs(t, err, app.ErrIdempotencyConflict, "a conflict is reported before the lock too")
+	require.Len(t, store.batches, 1)
+}

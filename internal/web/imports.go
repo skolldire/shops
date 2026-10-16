@@ -123,6 +123,9 @@ func (ui *UI) importFailed(w http.ResponseWriter, r *http.Request, opts catalog.
 		ui.importProblem(w, r, http.StatusBadRequest, fmt.Sprintf("The file is not a valid UTF-8 CSV. Line %d: %s. Nothing was imported.", invalid.Line, invalid.Reason))
 	case errors.Is(err, catalog.ErrTooManyRows):
 		ui.importProblem(w, r, http.StatusBadRequest, "The file has more rows than the import limit. Nothing was imported.")
+	case errors.Is(err, catalog.ErrImportInProgress):
+		w.Header().Set("Retry-After", "5")
+		ui.importProblem(w, r, http.StatusConflict, "Another import is being applied. Nothing was imported; choose the file again in a few seconds.")
 	case errors.Is(err, catalog.ErrIdempotencyConflict):
 		ui.importProblem(w, r, http.StatusConflict, "This form was already used for another file or mode. Nothing was imported; choose the file again.")
 	case errors.Is(err, catalog.ErrInvalidImportMode), errors.Is(err, catalog.ErrInvalidIdempotencyKey), errors.Is(err, catalog.ErrIdempotencyKeyRequired):

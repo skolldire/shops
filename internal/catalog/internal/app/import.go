@@ -128,10 +128,40 @@ func (i *Importer) Import(ctx context.Context, req ImportRequest) (ImportReport,
 		return ImportReport{}, ErrInvalidIdempotencyKey
 	case req.Mode == domain.ImportAdd && req.Key == "":
 		return ImportReport{}, ErrIdempotencyKeyRequired
-	case req.Mode == domain.ImportAdd:
+	}
+	if report, done, err := i.replay(ctx, req); done || err != nil {
+		return report, err
+	}
+	ctx, unlock, locked, err := i.log.LockImports(ctx)
+	switch {
+	case err != nil:
+		report, _ := i.prepare(req)
+		i.close(ctx, &report)
+		return report, err
+	case !locked:
+		return ImportReport{}, ErrImportInProgress
+	}
+	defer unlock()
+	if req.Mode == domain.ImportAdd {
 		return i.importAdd(ctx, req)
 	}
 	return i.importReplace(ctx, req)
+}
+
+func (i *Importer) replay(ctx context.Context, req ImportRequest) (ImportReport, bool, error) {
+	if req.Key == "" {
+		return ImportReport{}, false, nil
+	}
+	rec, found, err := i.log.ByKey(ctx, strings.ToLower(req.Key))
+	switch {
+	case err != nil || !found:
+		return ImportReport{}, false, err
+	case sameImport(rec, req) != nil:
+		return ImportReport{}, true, ErrIdempotencyConflict
+	case rec.Status == domain.ImportApplied:
+		return rec.Report, true, nil
+	}
+	return ImportReport{}, false, nil
 }
 
 func (i *Importer) importReplace(ctx context.Context, req ImportRequest) (ImportReport, error) {
@@ -149,11 +179,6 @@ func (i *Importer) importReplace(ctx context.Context, req ImportRequest) (Import
 			return rec.Report, nil
 		}
 	}
-	ctx, unlock, err := i.log.Lock(ctx, rec.ID)
-	if err != nil {
-		return report, err
-	}
-	defer unlock()
 	if current, err := i.log.Get(ctx, rec.ID); err != nil || current.Status == domain.ImportApplied {
 		return current.Report, err
 	}

@@ -5,6 +5,7 @@ package catalog_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -84,9 +85,14 @@ func TestAddImportsAreIdempotentAndAskBeforeRepeatingAFile(t *testing.T) {
 		wg.Go(func() { reports[i], errs[i] = m.Import(ctx, strings.NewReader(delivery), add(keyOne, false)) })
 	}
 	wg.Wait()
+	original, err := r.a.Import(ctx, strings.NewReader(delivery), add(keyOne, false))
+	require.NoError(t, err, "once the imports are done, the key answers its report")
 	for i := range reports {
+		if errors.Is(errs[i], catalog.ErrImportInProgress) {
+			continue
+		}
 		require.NoError(t, errs[i])
-		require.Equal(t, reports[0], reports[i], "every submission answers the original report")
+		require.Equal(t, original, reports[i], "every submission that was not refused answers the original report")
 	}
 	require.Equal(t, 8, r.stock(t, "TN-1"), "a double submission adds the units once")
 	require.Equal(t, 1, r.count(t, `SELECT count(*) FROM inventory_movements WHERE reason = 'import_add'`))
@@ -220,23 +226,21 @@ func TestTwoReplicasApplyTheSameReplaceKeyOnce(t *testing.T) {
 		report catalog.ImportReport
 		err    error
 	}
-	first, second := make(chan result, 1), make(chan result, 1)
+	first := make(chan result, 1)
 	go func() {
 		report, err := r.a.Import(ctx, strings.NewReader(file), replace(keyOne))
 		first <- result{report, err}
 	}()
 	r.waitFor(t, blockedImport, 1)
-	go func() {
-		report, err := r.b.Import(ctx, strings.NewReader(file), replace(keyOne))
-		second <- result{report, err}
-	}()
-	r.waitFor(t, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`, 1)
+	_, err = r.b.Import(ctx, strings.NewReader(file), replace(keyOne))
+	require.ErrorIs(t, err, catalog.ErrImportInProgress, "the second replica answers at once instead of waiting")
 	release()
 
-	a, b := <-first, <-second
+	a := <-first
 	require.NoError(t, a.err)
-	require.NoError(t, b.err)
-	require.Equal(t, a.report, b.report, "the second replica answers the report of the first")
+	b, err := r.b.Import(ctx, strings.NewReader(file), replace(keyOne))
+	require.NoError(t, err)
+	require.Equal(t, a.report, b, "the retry answers the report of the first")
 	require.Equal(t, []int{2, 1}, []int{a.report.Created, a.report.Updated})
 	require.Equal(t, 1, r.count(t, `SELECT count(*) FROM imports WHERE idempotency_key = $1::uuid`, keyOne))
 	require.Equal(t, 3, r.count(t, `SELECT count(*) FROM inventory_movements WHERE reference = $1`, a.report.ID), "applied once")
@@ -294,4 +298,33 @@ func TestReplicasStartingTogetherSeedOnce(t *testing.T) {
 	require.NotEqual(t, first.seeded, second.seeded, "one replica seeds and the other finds the products")
 	require.Equal(t, 82, r.count(t, `SELECT count(*) FROM products`))
 	require.Equal(t, 1, r.count(t, `SELECT count(*) FROM imports WHERE mode = 'replace'`))
+}
+
+func TestAnImportWhileAnotherIsApplyingIsRefusedWithoutEffectsAndWorksOnRetry(t *testing.T) {
+	r := twoReplicas(t)
+	ctx := context.Background()
+	_, err := r.a.Import(ctx, strings.NewReader(header+"Item,N-0002,,Tests,1.00,9,1\n"), catalog.ImportOptions{FileName: "base.csv"})
+	require.NoError(t, err)
+
+	release := r.holdProduct(t, "N-0002")
+	first := make(chan error, 1)
+	go func() {
+		_, err := r.a.Import(ctx, strings.NewReader(replaceFile(3)), replace(keyOne))
+		first <- err
+	}()
+	r.waitFor(t, blockedImport, 1)
+
+	delivery := header + "Other,O-1,,Tests,2.00,4,1\n"
+	_, err = r.b.Import(ctx, strings.NewReader(delivery), add(keyTwo, false))
+	require.ErrorIs(t, err, catalog.ErrImportInProgress)
+	require.Zero(t, r.count(t, `SELECT count(*) FROM imports WHERE idempotency_key = $1::uuid`, keyTwo), "no import row")
+	require.Zero(t, r.count(t, `SELECT count(*) FROM products WHERE sku = 'O-1'`), "no product")
+	require.Zero(t, r.count(t, `SELECT count(*) FROM inventory_movements WHERE reason = 'import_add'`), "no movement")
+
+	release()
+	require.NoError(t, <-first)
+	report, err := r.b.Import(ctx, strings.NewReader(delivery), add(keyTwo, false))
+	require.NoError(t, err, "the same request works once the other import is done")
+	require.Equal(t, 1, report.Created)
+	require.Equal(t, 4, r.stock(t, "O-1"))
 }

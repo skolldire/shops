@@ -49,6 +49,37 @@ func (l *ImportLog) Create(ctx context.Context, rec app.ImportRecord) (app.Impor
 	return created, true, err
 }
 
+func (l *ImportLog) ByKey(ctx context.Context, key string) (app.ImportRecord, bool, error) {
+	rec, err := l.one(ctx, `idempotency_key = $1::uuid`, key)
+	switch {
+	case errors.Is(err, app.ErrImportNotFound):
+		return app.ImportRecord{}, false, nil
+	case err != nil:
+		return app.ImportRecord{}, false, err
+	}
+	return rec, true, nil
+}
+
+func (l *ImportLog) LockImports(ctx context.Context) (context.Context, func(), bool, error) {
+	conn, err := l.pool.Acquire(ctx)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("catalog: acquire a connection for the imports lock: %w", err)
+	}
+	var locked bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended('catalog.imports', 0))`).Scan(&locked); err != nil {
+		conn.Release()
+		return nil, nil, false, fmt.Errorf("catalog: lock the imports: %w", err)
+	}
+	if !locked {
+		conn.Release()
+		return ctx, func() {}, false, nil
+	}
+	return database.WithConn(ctx, conn), func() {
+		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(hashtextextended('catalog.imports', 0))`)
+		conn.Release()
+	}, true, nil
+}
+
 func (l *ImportLog) Get(ctx context.Context, id string) (app.ImportRecord, error) {
 	return l.one(ctx, `id = $1::uuid`, id)
 }
@@ -171,19 +202,4 @@ func (l *ImportLog) Finish(ctx context.Context, id string, from domain.ImportSta
 		return false, fmt.Errorf("catalog: finish import: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
-}
-
-func (l *ImportLog) Lock(ctx context.Context, id string) (context.Context, func(), error) {
-	conn, err := l.pool.Acquire(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("catalog: acquire a connection for the import lock: %w", err)
-	}
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('catalog.import:' || $1, 0))`, id); err != nil {
-		conn.Release()
-		return nil, nil, fmt.Errorf("catalog: lock the import: %w", err)
-	}
-	return database.WithConn(ctx, conn), func() {
-		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(hashtextextended('catalog.import:' || $1, 0))`, id)
-		conn.Release()
-	}, nil
 }

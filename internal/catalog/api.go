@@ -23,6 +23,7 @@ var (
 	ErrIdempotencyKeyRequired = errors.New("catalog: an add import requires an idempotency key")
 	ErrIdempotencyConflict    = errors.New("catalog: the idempotency key was used with another file or mode")
 	ErrDuplicateFile          = errors.New("catalog: the same file was already added")
+	ErrImportInProgress       = errors.New("catalog: another import is being applied")
 
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")

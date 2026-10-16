@@ -13,6 +13,7 @@ var (
 	ErrIdempotencyKeyRequired = errors.New("catalog: an add import requires an idempotency key")
 	ErrIdempotencyConflict    = errors.New("catalog: the idempotency key was used with another file or mode")
 	ErrDuplicateFile          = errors.New("catalog: the same file was already added")
+	ErrImportInProgress       = errors.New("catalog: another import is being applied")
 )
 
 type DuplicateFileError struct {
@@ -42,5 +43,6 @@ type ImportLog interface {
 	Get(ctx context.Context, id string) (ImportRecord, error)
 	LastAppliedAdd(ctx context.Context, hash, exceptID string) (domain.ImportStamp, bool, error)
 	Finish(ctx context.Context, id string, from domain.ImportStatus, report ImportReport) (bool, error)
-	Lock(ctx context.Context, id string) (context.Context, func(), error)
+	ByKey(ctx context.Context, key string) (ImportRecord, bool, error)
+	LockImports(ctx context.Context) (context.Context, func(), bool, error)
 }

@@ -17,6 +17,7 @@ func (Tx) WithinTx(ctx context.Context, fn func(ctx context.Context) error) erro
 }
 
 type Log struct {
+	Busy     bool
 	mu       sync.Mutex
 	records  map[string]app.ImportRecord
 	order    []string
@@ -78,8 +79,19 @@ func (l *Log) Finish(_ context.Context, id string, from domain.ImportStatus, rep
 	return ok, err
 }
 
-func (l *Log) Lock(ctx context.Context, _ string) (context.Context, func(), error) {
-	return ctx, func() {}, nil
+func (l *Log) LockImports(ctx context.Context) (context.Context, func(), bool, error) {
+	return ctx, func() {}, !l.Busy, nil
+}
+
+func (l *Log) ByKey(_ context.Context, key string) (app.ImportRecord, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, id := range l.order {
+		if rec := l.records[id]; rec.Key == key {
+			return rec, true, nil
+		}
+	}
+	return app.ImportRecord{}, false, nil
 }
 
 func (l *Log) Set(rec app.ImportRecord) {
