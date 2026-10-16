@@ -122,12 +122,17 @@ func TestShippedConfigCheckoutDefaults(t *testing.T) {
 	require.Equal(t, 3*time.Second, cfg.Checkout.ReserveTimeout)
 	require.Equal(t, 6*time.Second, cfg.Checkout.ChargeTimeout)
 	require.Equal(t, 3*time.Second, cfg.Checkout.FinalizeTimeout)
-	require.Equal(t, 60*time.Second, cfg.Checkout.RecoveryTimeout)
+	require.Equal(t, 30*time.Minute, cfg.Checkout.MaxPendingAge)
+	require.Equal(t, RecoveryConfig{
+		Interval: 10 * time.Second, BatchSize: 20, MinAge: 30 * time.Second, Lease: 30 * time.Second,
+		BaseBackoff: 5 * time.Second, MaxBackoff: 5 * time.Minute, StuckAfterAttempts: 10,
+	}, cfg.Recovery)
 
 	local, err := loadConfig(t, "../../config/config.local.yaml", map[string]string{"DB_PASSWORD": testPassword}, nil)
 	require.NoError(t, err)
 	require.Equal(t, cfg.Demo.Users, local.Demo.Users)
 	require.Equal(t, cfg.Checkout, local.Checkout)
+	require.Equal(t, cfg.Recovery, local.Recovery)
 }
 
 func TestValidateDemoUsers(t *testing.T) {
@@ -156,10 +161,6 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 	require.ErrorContains(t, cfg.Validate(), "checkout.charge_timeout must be positive")
 
 	cfg = shippedConfig(t)
-	cfg.Checkout.RecoveryTimeout = -time.Second
-	require.ErrorContains(t, cfg.Validate(), "checkout.recovery_timeout must be positive")
-
-	cfg = shippedConfig(t)
 	cfg.HTTP.ShutdownTimeout = 13 * time.Second
 	require.ErrorContains(t, cfg.Validate(), "must not exceed http.shutdown_timeout")
 	cfg.HTTP.ShutdownTimeout = 14 * time.Second
@@ -168,4 +169,24 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 	cfg = shippedConfig(t)
 	cfg.HTTP.WriteTimeout = 10 * time.Second
 	require.ErrorContains(t, cfg.Validate(), "must not exceed http.write_timeout")
+}
+
+func TestValidateRecovery(t *testing.T) {
+	for want, change := range map[string]func(c *AppConfig){
+		"recovery.interval must be positive":                             func(c *AppConfig) { c.Recovery.Interval = 0 },
+		"recovery.batch_size must be at least 1":                         func(c *AppConfig) { c.Recovery.BatchSize = 0 },
+		"recovery.stuck_after_attempts must be at least 1":               func(c *AppConfig) { c.Recovery.StuckAfterAttempts = 0 },
+		"recovery.base_backoff must not exceed":                          func(c *AppConfig) { c.Recovery.BaseBackoff = 10 * time.Minute },
+		"recovery.min_age must be greater than":                          func(c *AppConfig) { c.Recovery.MinAge = 14 * time.Second },
+		"recovery.lease must be greater than":                            func(c *AppConfig) { c.Recovery.Lease = 11 * time.Second },
+		"checkout.max_pending_age must be greater than recovery.min_age": func(c *AppConfig) { c.Checkout.MaxPendingAge = 30 * time.Second },
+		"checkout.max_pending_age must be greater than recovery.lease":   func(c *AppConfig) { c.Recovery.Lease = 40 * time.Minute },
+	} {
+		cfg := shippedConfig(t)
+		change(&cfg)
+		require.ErrorContains(t, cfg.Validate(), want)
+	}
+	cfg := shippedConfig(t)
+	cfg.Recovery.MinAge, cfg.Recovery.Lease = 15*time.Second, 12*time.Second
+	require.NoError(t, cfg.Validate(), "just above 3s + 6s + 3s + 2s and 6s + 3s + 2s")
 }

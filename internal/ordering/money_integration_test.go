@@ -112,11 +112,11 @@ func TestEveryChargeAttemptMatchesThePersistedPurchase(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ordering.StatusPending, pending.Purchase.Status)
 	f.pay.set(unavailable)
-	report, err := f.orders.RecoverPending(ctx)
+	report, err := f.recoverPending(ctx)
 	require.NoError(t, err)
 	require.Len(t, report.StillPending, 1)
 	f.pay.set(approve)
-	report, err = f.orders.RecoverPending(ctx)
+	report, err = f.recoverPending(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Confirmed)
 

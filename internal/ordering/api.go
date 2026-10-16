@@ -105,7 +105,17 @@ type Budgets struct {
 	Reserve  time.Duration
 	Charge   time.Duration
 	Finalize time.Duration
-	Recovery time.Duration
+}
+
+type RecoveryConfig struct {
+	Interval           time.Duration
+	BatchSize          int
+	MinAge             time.Duration
+	Lease              time.Duration
+	BaseBackoff        time.Duration
+	MaxBackoff         time.Duration
+	StuckAfterAttempts int
+	MaxPendingAge      time.Duration
 }
 
 type PendingPurchase struct {
@@ -116,5 +126,7 @@ type PendingPurchase struct {
 type RecoveryReport struct {
 	Confirmed    int
 	Declined     int
+	Voided       int
+	Skipped      int
 	StillPending []PendingPurchase
 }

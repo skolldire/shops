@@ -43,11 +43,49 @@ type provider struct {
 	attempts []payment.ChargeRequest
 	charges  map[string]payment.ChargeRequest
 	results  map[string]payment.ChargeResult
+	voided   map[string]bool
 	onCharge func(ctx context.Context)
+	onLookup func(ctx context.Context)
 }
 
 func newProvider(m mode) *provider {
-	return &provider{mode: m, charges: map[string]payment.ChargeRequest{}, results: map[string]payment.ChargeResult{}}
+	return &provider{mode: m, charges: map[string]payment.ChargeRequest{}, results: map[string]payment.ChargeResult{}, voided: map[string]bool{}}
+}
+
+func (p *provider) Lookup(ctx context.Context, reference string) (payment.Record, error) {
+	if p.onLookup != nil {
+		p.onLookup(ctx)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.mode == unavailable {
+		return payment.Record{}, payment.ErrUnavailable
+	}
+	return p.record(reference), nil
+}
+
+func (p *provider) Void(_ context.Context, reference string) (payment.Record, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.mode == unavailable {
+		return payment.Record{}, payment.ErrUnavailable
+	}
+	if _, charged := p.charges[reference]; !charged {
+		p.voided[reference] = true
+	}
+	return p.record(reference), nil
+}
+
+func (p *provider) record(reference string) payment.Record {
+	if p.voided[reference] {
+		return payment.Record{Status: payment.StatusVoided}
+	}
+	c, ok := p.charges[reference]
+	if !ok {
+		return payment.Record{Status: payment.StatusNotFound}
+	}
+	res := p.results[reference]
+	return payment.Record{Status: res.Status, ProviderRef: res.ProviderRef, Reason: res.Reason, Amount: c.Amount, Currency: c.Currency}
 }
 
 func (p *provider) set(m mode) {
@@ -72,6 +110,9 @@ func (p *provider) Charge(ctx context.Context, r payment.ChargeRequest) (payment
 	p.attempts = append(p.attempts, r)
 	if p.mode == unavailable {
 		return payment.ChargeResult{}, payment.ErrUnavailable
+	}
+	if p.voided[r.Reference] {
+		return payment.ChargeResult{Status: payment.StatusDeclined, Reason: payment.ReasonVoided}, nil
 	}
 	if prev, ok := p.charges[r.Reference]; ok {
 		if prev.Token != r.Token || !prev.Amount.Equal(r.Amount) || prev.Currency != r.Currency {
@@ -106,10 +147,40 @@ func setup(t *testing.T, pay *provider) fixture {
 	require.NoError(t, err)
 	orders, err := ordering.NewModule(ordering.Deps{
 		Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: telemetry.Noop(), Users: []string{"alice", "bob"},
-		Budgets: ordering.Budgets{Reserve: 3 * time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second, Recovery: 30 * time.Second},
+		Budgets:  ordering.Budgets{Reserve: 3 * time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
+		Recovery: recoveryConfig,
 	})
 	require.NoError(t, err)
 	return fixture{pool: pool, catalog: cat, orders: orders, pay: pay}
+}
+
+var recoveryConfig = ordering.RecoveryConfig{
+	Interval: time.Hour, BatchSize: 20, MinAge: 30 * time.Second, Lease: 30 * time.Second,
+	BaseBackoff: time.Second, MaxBackoff: time.Minute, StuckAfterAttempts: 10, MaxPendingAge: 30 * time.Minute,
+}
+
+func (f fixture) ageAll(ctx context.Context, by string) error {
+	tx, err := f.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE purchases
+		SET created_at = LEAST(created_at, now() - $1::interval), next_attempt_at = LEAST(next_attempt_at, now())
+		WHERE status = 'PENDING'`, by); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (f fixture) recoverPending(ctx context.Context) (ordering.RecoveryReport, error) {
+	if err := f.ageAll(ctx, "1 minute"); err != nil {
+		return ordering.RecoveryReport{}, err
+	}
+	return f.orders.RecoverOnce(ctx)
 }
 
 func (f fixture) product(t *testing.T, sku, price string, stock int64) catalog.Product {
@@ -265,7 +336,7 @@ func TestConcurrentFinalizationsApplyTheirEffectsOnce(t *testing.T) {
 			reports := make([]ordering.RecoveryReport, 4)
 			for i := range reports {
 				wg.Go(func() {
-					report, err := f.orders.RecoverPending(ctx)
+					report, err := f.recoverPending(ctx)
 					require.NoError(t, err)
 					reports[i] = report
 				})
@@ -383,14 +454,14 @@ func TestRecoveryWithAnUnavailableProviderKeepsPendingAndConfirmsLater(t *testin
 	require.Equal(t, []int{5, 1}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)})
 
 	f.pay.set(unavailable)
-	report, err := f.orders.RecoverPending(ctx)
+	report, err := f.recoverPending(ctx)
 	require.NoError(t, err)
 	require.Len(t, report.StillPending, 1)
 	require.Equal(t, res.Purchase.ID, report.StillPending[0].ID)
 	require.Equal(t, []int{5, 1}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)})
 
 	f.pay.set(approve)
-	report, err = f.orders.RecoverPending(ctx)
+	report, err = f.recoverPending(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Confirmed)
 	require.Equal(t, 1, f.pay.effective())
@@ -400,7 +471,7 @@ func TestRecoveryWithAnUnavailableProviderKeepsPendingAndConfirmsLater(t *testin
 	require.Equal(t, "sim_"+p.ID, p.PaymentRef)
 	require.Equal(t, []int{4, 0}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)})
 
-	report, err = f.orders.RecoverPending(ctx)
+	report, err = f.recoverPending(ctx)
 	require.NoError(t, err)
 	require.Equal(t, ordering.RecoveryReport{}, report)
 }
@@ -458,7 +529,7 @@ func TestAC07UnknownOutcomeIsRecoveredWithoutASecondCharge(t *testing.T) {
 	charged := f.pay.charges[res.Purchase.ID]
 
 	f.pay.set(approve)
-	report, err := f.orders.RecoverPending(ctx)
+	report, err := f.recoverPending(ctx)
 	require.NoError(t, err)
 	require.Equal(t, ordering.RecoveryReport{Confirmed: 1}, report)
 	require.Equal(t, 1, f.pay.effective(), "no second charge")
@@ -470,7 +541,7 @@ func TestAC07UnknownOutcomeIsRecoveredWithoutASecondCharge(t *testing.T) {
 	require.Equal(t, []int{3, 0}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)})
 	require.Empty(t, f.cartQuantities(t, "alice"))
 
-	report, err = f.orders.RecoverPending(ctx)
+	report, err = f.recoverPending(ctx)
 	require.NoError(t, err)
 	require.Equal(t, ordering.RecoveryReport{}, report, "running it again changes nothing")
 	require.Equal(t, 2, f.pay.received)

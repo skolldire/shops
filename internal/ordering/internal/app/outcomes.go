@@ -17,4 +17,14 @@ const (
 	RecoveryConfirmed    = "confirmed"
 	RecoveryDeclined     = "declined"
 	RecoveryStillPending = "still_pending"
+	RecoveryError        = "error"
+	RecoverySkipped      = "skipped"
+
+	ResolutionConfirmed = "confirmed"
+	ResolutionDeclined  = "declined"
+	ResolutionVoided    = "voided"
+	ResolutionMismatch  = "mismatch"
+	ResolutionError     = "error"
+
+	ReasonPaymentNotCompleted = "payment_not_completed"
 )

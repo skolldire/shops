@@ -36,84 +36,68 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func TestStartRecoversPendingPurchasesBeforeServing(t *testing.T) {
+func (c client) agePending(by string) {
+	c.t.Helper()
+	ctx := context.Background()
+	tx, err := c.pool.Begin(ctx)
+	require.NoError(c.t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`)
+	require.NoError(c.t, err)
+	_, err = tx.Exec(ctx, `UPDATE purchases SET created_at = now() - $1::interval, next_attempt_at = now() WHERE status = 'PENDING'`, by)
+	require.NoError(c.t, err)
+	require.NoError(c.t, tx.Commit(ctx))
+}
+
+func TestTheWorkerRecoversALostPaymentAnswerWithoutARestart(t *testing.T) {
 	c := startApp(t)
 	cfg := c.cfg
 	cfg.HTTP.Addr = "127.0.0.1:0"
 	cfg.Metrics.Addr = "127.0.0.1:0"
 	cfg.Demo.Seed = false
+	cfg.Recovery.Interval = 20 * time.Millisecond
+
+	var logs syncBuffer
+	log, err := logger.New(logger.Config{Level: "info"}, &logs)
+	require.NoError(t, err)
+	lc, err := lifecycle.New(log)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- start(ctx, cfg, log, lc) }()
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "server listening") }, 20*time.Second, 20*time.Millisecond)
+	require.Contains(t, logs.String(), "recovery worker started", "the worker starts with the servers, without blocking them")
 
 	id := c.product("REC-1", "8.00", 5)
-	resp, body := c.checkout("alice", uuid.NewString(), checkoutBody("pm_approved", item(id, 2, "8.00")))
-	require.Equal(t, http.StatusCreated, resp.StatusCode, body)
+	resp, body := c.checkout("alice", uuid.NewString(), checkoutBody("pm_unknown", item(id, 2, "8.00")))
+	require.Equal(t, http.StatusAccepted, resp.StatusCode, body)
 	purchase := decodePurchase(t, body)
-	_, err := c.pool.Exec(context.Background(),
-		`UPDATE purchases SET status = 'PENDING', payment_ref = NULL WHERE id = $1::uuid`, purchase.ID)
-	require.NoError(t, err)
-	_, err = c.pool.Exec(context.Background(), `UPDATE products SET stock = stock + 2, reserved = reserved + 2 WHERE id = $1::uuid`, id)
-	require.NoError(t, err)
+	require.Equal(t, "PENDING", purchase.Status)
 
-	t.Run("a database error stops the startup", func(t *testing.T) {
-		_, err := c.pool.Exec(context.Background(), `ALTER TABLE purchases RENAME COLUMN payment_token TO payment_token_hidden`)
+	c.agePending("1 minute")
+	require.Eventually(t, func() bool {
+		return c.scalar(`SELECT count(*) FROM purchases WHERE id = $1::uuid AND status = 'CONFIRMED'`, purchase.ID) == 1
+	}, 20*time.Second, 20*time.Millisecond, "the running worker confirms it")
+	require.Equal(t, 3, c.stockOf(id), "the reservation became the sale")
+	require.Zero(t, c.scalar(`SELECT reserved FROM products WHERE id = $1::uuid`, id))
+	require.Equal(t, 1, c.scalar(`SELECT count(*) FROM payment_fake_charges WHERE reference = $1`, purchase.ID), "charged once")
+	require.NotContains(t, logs.String(), "pm_unknown")
+
+	cancel()
+	select {
+	case err := <-done:
 		require.NoError(t, err)
-		defer func() {
-			_, err := c.pool.Exec(context.Background(), `ALTER TABLE purchases RENAME COLUMN payment_token_hidden TO payment_token`)
-			require.NoError(t, err)
-		}()
-		var logs syncBuffer
-		log, err := logger.New(logger.Config{Level: "info"}, &logs)
-		require.NoError(t, err)
-		lc, err := lifecycle.New(log)
-		require.NoError(t, err)
-
-		err = start(t.Context(), cfg, log, lc)
-
-		require.ErrorContains(t, err, "purchase recovery: ordering: list pending purchases")
-		require.NoError(t, lc.Close(context.Background()))
-		require.NotContains(t, logs.String(), "server listening")
-	})
-
-	t.Run("pending purchases are settled before the server listens", func(t *testing.T) {
-		var logs syncBuffer
-		log, err := logger.New(logger.Config{Level: "info"}, &logs)
-		require.NoError(t, err)
-		lc, err := lifecycle.New(log)
-		require.NoError(t, err)
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan error, 1)
-		go func() { done <- start(ctx, cfg, log, lc) }()
-
-		require.Eventually(t, func() bool { return strings.Contains(logs.String(), "server listening") }, 20*time.Second, 20*time.Millisecond)
-		out := logs.String()
-		recovered := strings.Index(out, `"message":"pending purchases recovered"`)
-		require.GreaterOrEqual(t, recovered, 0)
-		require.Less(t, recovered, strings.Index(out, "server listening"))
-		require.Contains(t, out, `"confirmed":1`)
-		require.Contains(t, out, `"still_pending":0`)
-		require.NotContains(t, out, "pm_approved")
-
-		var status, ref string
-		require.NoError(t, c.pool.QueryRow(context.Background(),
-			`SELECT status, payment_ref FROM purchases WHERE id = $1::uuid`, purchase.ID).Scan(&status, &ref))
-		require.Equal(t, "CONFIRMED", status)
-		require.True(t, strings.HasPrefix(ref, "fake_"), "every charge has its own provider reference")
-		require.Equal(t, 3, c.stockOf(id), "the reservation made before the interruption becomes the sale")
-		require.Zero(t, c.scalar(`SELECT reserved FROM products WHERE id = $1::uuid`, id))
-
-		cancel()
-		select {
-		case err := <-done:
-			require.NoError(t, err)
-		case <-time.After(30 * time.Second):
-			t.Fatal("the app did not stop")
-		}
-		require.NoError(t, lc.Close(context.Background()))
-	})
+	case <-time.After(30 * time.Second):
+		t.Fatal("the app did not stop")
+	}
+	require.NoError(t, lc.Close(context.Background()))
+	out := logs.String()
+	require.Less(t, strings.Index(out, `"component":"recovery"`), strings.Index(out, `"component":"postgres"`), "the worker stops before the pool")
 }
 
 func TestCheckoutMetricsAreExposed(t *testing.T) {
 	c := startApp(t)
-	_, err := c.app.ordering.RecoverPending(t.Context())
+	_, err := c.app.ordering.RecoverOnce(t.Context())
 	require.NoError(t, err)
 	id := c.product("MET-1", "2.00", 5)
 	resp, _ := c.checkout("alice", uuid.NewString(), checkoutBody("pm_approved", item(id, 1, "2.00")))
@@ -124,7 +108,10 @@ func TestCheckoutMetricsAreExposed(t *testing.T) {
 	body := rec.Body.String()
 	require.Contains(t, body, `checkout_total{outcome="confirmed"} 1`)
 	require.Contains(t, body, `checkout_recovery_total{outcome="still_pending"} 0`)
-	require.Contains(t, body, `checkout_recovery_total{outcome="confirmed"} 0`)
+	require.Contains(t, body, `checkout_recovery_resolutions_total{result="voided"} 0`)
+	for _, gauge := range []string{"checkout_pending_purchases", "checkout_oldest_pending_seconds", "checkout_recovery_stuck", "checkout_recovery_stuck_reserved_units"} {
+		require.Contains(t, body, gauge)
+	}
 	require.NotContains(t, body, "alice")
 	require.NotContains(t, body, "pm_approved")
 }

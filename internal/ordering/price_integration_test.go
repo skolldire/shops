@@ -35,7 +35,7 @@ func TestARecoveredPurchaseChargesTheStoredAmountAfterAPriceChange(t *testing.T)
 	require.NoError(t, err)
 
 	f.pay.set(approve)
-	recovered, err := f.orders.RecoverPending(ctx)
+	recovered, err := f.recoverPending(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, recovered.Confirmed)
 

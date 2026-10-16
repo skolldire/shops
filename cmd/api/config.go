@@ -24,6 +24,7 @@ type AppConfig struct {
 	Import    ImportConfig     `mapstructure:"import"`
 	Demo      DemoConfig       `mapstructure:"demo"`
 	Checkout  CheckoutConfig   `mapstructure:"checkout"`
+	Recovery  RecoveryConfig   `mapstructure:"recovery"`
 }
 
 type HTTPConfig struct {
@@ -54,7 +55,17 @@ type CheckoutConfig struct {
 	ReserveTimeout  time.Duration `mapstructure:"reserve_timeout"`
 	ChargeTimeout   time.Duration `mapstructure:"charge_timeout"`
 	FinalizeTimeout time.Duration `mapstructure:"finalize_timeout"`
-	RecoveryTimeout time.Duration `mapstructure:"recovery_timeout"`
+	MaxPendingAge   time.Duration `mapstructure:"max_pending_age"`
+}
+
+type RecoveryConfig struct {
+	Interval           time.Duration `mapstructure:"interval"`
+	BatchSize          int           `mapstructure:"batch_size"`
+	MinAge             time.Duration `mapstructure:"min_age"`
+	Lease              time.Duration `mapstructure:"lease"`
+	BaseBackoff        time.Duration `mapstructure:"base_backoff"`
+	MaxBackoff         time.Duration `mapstructure:"max_backoff"`
+	StuckAfterAttempts int           `mapstructure:"stuck_after_attempts"`
 }
 
 const checkoutMargin = 2 * time.Second
@@ -83,7 +94,12 @@ func (c AppConfig) Validate() error {
 		"checkout.reserve_timeout":  c.Checkout.ReserveTimeout,
 		"checkout.charge_timeout":   c.Checkout.ChargeTimeout,
 		"checkout.finalize_timeout": c.Checkout.FinalizeTimeout,
-		"checkout.recovery_timeout": c.Checkout.RecoveryTimeout,
+		"checkout.max_pending_age":  c.Checkout.MaxPendingAge,
+		"recovery.interval":         c.Recovery.Interval,
+		"recovery.min_age":          c.Recovery.MinAge,
+		"recovery.lease":            c.Recovery.Lease,
+		"recovery.base_backoff":     c.Recovery.BaseBackoff,
+		"recovery.max_backoff":      c.Recovery.MaxBackoff,
 	} {
 		check(d > 0, "%s must be positive", name)
 	}
@@ -112,6 +128,16 @@ func (c AppConfig) Validate() error {
 	request := c.Checkout.ReserveTimeout + c.Checkout.ChargeTimeout + c.Checkout.FinalizeTimeout + checkoutMargin
 	check(request <= c.HTTP.WriteTimeout, "checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s must not exceed http.write_timeout")
 	check(request <= c.HTTP.ShutdownTimeout, "checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s must not exceed http.shutdown_timeout")
+
+	r := c.Recovery
+	check(r.BatchSize >= 1, "recovery.batch_size must be at least 1")
+	check(r.StuckAfterAttempts >= 1, "recovery.stuck_after_attempts must be at least 1")
+	check(r.BaseBackoff <= r.MaxBackoff, "recovery.base_backoff must not exceed recovery.max_backoff")
+	check(r.MinAge > request, "recovery.min_age must be greater than checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s")
+	settle := c.Checkout.ChargeTimeout + c.Checkout.FinalizeTimeout + checkoutMargin
+	check(r.Lease > settle, "recovery.lease must be greater than checkout.charge_timeout + finalize_timeout + 2s")
+	check(c.Checkout.MaxPendingAge > r.MinAge, "checkout.max_pending_age must be greater than recovery.min_age")
+	check(c.Checkout.MaxPendingAge > r.Lease, "checkout.max_pending_age must be greater than recovery.lease")
 
 	return errors.Join(errs...)
 }

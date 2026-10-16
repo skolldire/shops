@@ -23,6 +23,7 @@ var (
 	ErrBusy                  = errors.New("ordering: the database is busy, try again")
 	ErrPaymentOutcomeUnknown = errors.New("ordering: the outcome of the payment is unknown")
 	ErrPaymentUnavailable    = errors.New("ordering: the payment provider is unavailable")
+	ErrPaymentConflict       = errors.New("ordering: the payment reference was used with other content")
 )
 
 type UnavailableProductError struct {

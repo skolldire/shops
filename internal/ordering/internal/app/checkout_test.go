@@ -328,6 +328,14 @@ func TestChargeTimeoutLeavesPendingAndFinalizeUsesAFreshContext(t *testing.T) {
 
 type slowApproval struct{ delay time.Duration }
 
+func (s *slowApproval) Lookup(context.Context, string) (app.PaymentRecord, error) {
+	return app.PaymentRecord{Status: app.PaymentNotFound}, nil
+}
+
+func (s *slowApproval) Void(context.Context, string) (app.PaymentRecord, error) {
+	return app.PaymentRecord{Status: app.PaymentVoided}, nil
+}
+
 func (s *slowApproval) Charge(_ context.Context, c app.Charge) (app.ChargeResult, error) {
 	time.Sleep(s.delay)
 	return app.ChargeResult{Approved: true, ProviderRef: "ref_" + c.Reference}, nil

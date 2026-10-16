@@ -22,6 +22,8 @@ type state struct {
 	deleted   map[domain.ID]bool
 	carts     map[string][]domain.CartItem
 	reserved  map[domain.ID]int
+	attempts  map[domain.ID]int
+	owners    map[domain.ID]string
 	releases  int
 	reserves  int
 	commits   int
@@ -31,6 +33,7 @@ func (s state) clone() state {
 	c := state{
 		purchases: maps.Clone(s.purchases), stock: maps.Clone(s.stock), deleted: maps.Clone(s.deleted),
 		carts: map[string][]domain.CartItem{}, reserved: maps.Clone(s.reserved),
+		attempts: maps.Clone(s.attempts), owners: maps.Clone(s.owners),
 		releases: s.releases, reserves: s.reserves, commits: s.commits,
 	}
 	for k, v := range s.purchases {
@@ -53,6 +56,8 @@ type world struct {
 	reserveErr error
 	finErr     error
 	listErr    error
+	overdue    map[domain.ID]bool
+	onRenew    func(id domain.ID)
 }
 
 type txKey struct{}
@@ -62,6 +67,7 @@ func newWorld() *world {
 		state: state{
 			purchases: map[domain.ID]domain.Purchase{}, stock: map[domain.ID]app.Product{},
 			deleted: map[domain.ID]bool{}, carts: map[string][]domain.CartItem{}, reserved: map[domain.ID]int{},
+			attempts: map[domain.ID]int{}, owners: map[domain.ID]string{},
 		},
 		clock: time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC),
 	}
@@ -195,20 +201,73 @@ func (w *world) List(ctx context.Context, userID string, page domain.Page) ([]do
 	return all[from:to], len(all), nil
 }
 
-func (w *world) Pending(ctx context.Context) ([]domain.Purchase, error) {
+func (w *world) Claim(ctx context.Context, owner string, _, _ time.Duration, batch int) ([]domain.Purchase, error) {
 	if w.listErr != nil {
 		return nil, w.listErr
 	}
 	var out []domain.Purchase
 	w.locked(ctx, func() {
 		for _, p := range w.state.purchases {
-			if p.Status == domain.StatusPending {
+			if p.Status == domain.StatusPending && w.state.owners[p.ID] == "" {
 				out = append(out, p)
 			}
 		}
+		slices.SortFunc(out, func(a, b domain.Purchase) int { return strings.Compare(string(a.ID), string(b.ID)) })
+		out = out[:min(batch, len(out))]
+		for _, p := range out {
+			w.state.owners[p.ID] = owner
+		}
 	})
-	slices.SortFunc(out, func(a, b domain.Purchase) int { return strings.Compare(string(a.ID), string(b.ID)) })
 	return out, nil
+}
+
+func (w *world) Renew(ctx context.Context, id domain.ID, owner string, _, _ time.Duration) (app.RenewResult, bool, error) {
+	if w.onRenew != nil {
+		w.onRenew(id)
+	}
+	var (
+		res app.RenewResult
+		ok  bool
+	)
+	w.locked(ctx, func() {
+		ok = w.state.owners[id] == owner && w.state.purchases[id].Status == domain.StatusPending
+		res = app.RenewResult{Attempts: w.state.attempts[id], Overdue: w.overdue[id]}
+	})
+	return res, ok, nil
+}
+
+func (w *world) Reschedule(ctx context.Context, id domain.ID, owner string, _ time.Duration, _ string) (int, bool, error) {
+	var (
+		attempts int
+		ok       bool
+	)
+	w.locked(ctx, func() {
+		if ok = w.state.owners[id] == owner && w.state.purchases[id].Status == domain.StatusPending; ok {
+			w.state.attempts[id]++
+			delete(w.state.owners, id)
+			attempts = w.state.attempts[id]
+		}
+	})
+	return attempts, ok, nil
+}
+
+func (w *world) PendingStats(ctx context.Context, stuckAfter int) (app.PendingStats, error) {
+	var stats app.PendingStats
+	w.locked(ctx, func() {
+		for _, p := range w.state.purchases {
+			if p.Status != domain.StatusPending {
+				continue
+			}
+			stats.Pending++
+			if w.state.attempts[p.ID] >= stuckAfter {
+				stats.Stuck++
+				for _, it := range p.Items {
+					stats.StuckReservedUnits += it.Quantity
+				}
+			}
+		}
+	})
+	return stats, nil
 }
 
 func (w *world) Finish(ctx context.Context, id domain.ID, o domain.Outcome) (bool, error) {
@@ -382,12 +441,53 @@ type provider struct {
 	requests  []app.Charge
 	charges   map[string]app.Charge
 	results   map[string]app.ChargeResult
+	voided    map[string]bool
 	onCharge  func()
 	seenCtxOK []bool
+	lookups   int
+	voids     int
 }
 
 func newProvider(m mode) *provider {
-	return &provider{mode: m, charges: map[string]app.Charge{}, results: map[string]app.ChargeResult{}}
+	return &provider{mode: m, charges: map[string]app.Charge{}, results: map[string]app.ChargeResult{}, voided: map[string]bool{}}
+}
+
+func (p *provider) Lookup(_ context.Context, reference string) (app.PaymentRecord, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lookups++
+	if p.mode == unavailable {
+		return app.PaymentRecord{}, app.ErrPaymentUnavailable
+	}
+	return p.record(reference), nil
+}
+
+func (p *provider) Void(_ context.Context, reference string) (app.PaymentRecord, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.voids++
+	if p.mode == unavailable {
+		return app.PaymentRecord{}, app.ErrPaymentUnavailable
+	}
+	if _, charged := p.charges[reference]; !charged {
+		p.voided[reference] = true
+	}
+	return p.record(reference), nil
+}
+
+func (p *provider) record(reference string) app.PaymentRecord {
+	if p.voided[reference] {
+		return app.PaymentRecord{Status: app.PaymentVoided}
+	}
+	c, ok := p.charges[reference]
+	if !ok {
+		return app.PaymentRecord{Status: app.PaymentNotFound}
+	}
+	res := p.results[reference]
+	if res.Approved {
+		return app.PaymentRecord{Status: app.PaymentApproved, ProviderRef: res.ProviderRef, Amount: c.Amount, Currency: c.Currency}
+	}
+	return app.PaymentRecord{Status: app.PaymentDeclined, Reason: res.Reason, Amount: c.Amount, Currency: c.Currency}
 }
 
 var errContentConflict = errors.New("provider: the reference was charged with other content")
@@ -412,6 +512,9 @@ func (p *provider) Charge(ctx context.Context, c app.Charge) (app.ChargeResult, 
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.voided[c.Reference] {
+		return app.ChargeResult{Reason: "payment_voided"}, nil
+	}
 	if prev, ok := p.charges[c.Reference]; ok {
 		if prev.Token != c.Token || !prev.Amount.Equal(c.Amount) || prev.Currency != c.Currency {
 			return app.ChargeResult{}, errContentConflict
@@ -454,9 +557,11 @@ type event struct {
 }
 
 type recorder struct {
-	mu       sync.Mutex
-	events   []event
-	recovery map[string]int
+	mu          sync.Mutex
+	events      []event
+	attempts    []app.RecoveryAttempt
+	resolutions []app.RecoveryResolution
+	gauges      []app.PendingStats
 }
 
 func (r *recorder) Checkout(_ context.Context, outcome string, p *domain.Purchase, cause error) {
@@ -470,13 +575,42 @@ func (r *recorder) Checkout(_ context.Context, outcome string, p *domain.Purchas
 	r.events = append(r.events, event{outcome: outcome, purchase: copied, cause: cause})
 }
 
-func (r *recorder) Recovery(_ context.Context, outcome string, n int) {
+func (r *recorder) RecoveryAttempt(_ context.Context, a app.RecoveryAttempt) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.recovery == nil {
-		r.recovery = map[string]int{}
+	r.attempts = append(r.attempts, a)
+}
+
+func (r *recorder) RecoveryResolution(_ context.Context, res app.RecoveryResolution) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolutions = append(r.resolutions, res)
+}
+
+func (r *recorder) RecoveryGauges(_ context.Context, s app.PendingStats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gauges = append(r.gauges, s)
+}
+
+func (r *recorder) attemptOutcomes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.attempts))
+	for i, a := range r.attempts {
+		out[i] = a.Outcome
 	}
-	r.recovery[outcome] += n
+	return out
+}
+
+func (r *recorder) resolutionResults() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.resolutions))
+	for i, res := range r.resolutions {
+		out[i] = res.Result
+	}
+	return out
 }
 
 func (r *recorder) outcomes() []string {

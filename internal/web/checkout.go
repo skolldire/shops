@@ -16,6 +16,7 @@ type tokenOption struct {
 var paymentTokens = []tokenOption{
 	{"pm_approved", "Test card that is approved (pm_approved)"},
 	{"pm_declined", "Test card that is declined (pm_declined)"},
+	{"pm_unknown", "Test card whose answer is lost, so the purchase stays pending until the recovery confirms it (pm_unknown)"},
 }
 
 type checkoutPage struct {

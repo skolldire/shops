@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skolldire/shops/internal/ordering/internal/app"
@@ -27,11 +28,13 @@ type Deps struct {
 	Metrics  telemetry.Metrics
 	Users    []string
 	Budgets  Budgets
+	Recovery RecoveryConfig
 }
 
 type Module struct {
 	checkout *app.Checkout
 	recovery *app.Recovery
+	worker   *RecoveryWorker
 	queries  *app.Queries
 	cart     *app.Cart
 	http     *httpapi.Handler
@@ -87,7 +90,15 @@ func newModule(p ports, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	recovery, err := app.NewRecovery(p.tx, stock, payments, p.purchases, p.carts, rec, budgets, d.Budgets.Recovery)
+	recovery, err := app.NewRecovery(p.tx, stock, payments, p.purchases, p.carts, rec, budgets, app.RecoveryPolicy{
+		Owner: uuid.NewString(), MinAge: d.Recovery.MinAge, Lease: d.Recovery.Lease, MaxPendingAge: d.Recovery.MaxPendingAge,
+		Batch: d.Recovery.BatchSize, StuckAfter: d.Recovery.StuckAfterAttempts,
+		Backoff: backoff(d.Recovery.BaseBackoff, d.Recovery.MaxBackoff),
+	})
+	if err != nil {
+		return nil, err
+	}
+	worker, err := newRecoveryWorker(recovery, d.Recovery.Interval, d.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +114,7 @@ func newModule(p ports, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Module{checkout: checkout, recovery: recovery, queries: queries, cart: cart, http: h}, nil
+	return &Module{checkout: checkout, recovery: recovery, worker: worker, queries: queries, cart: cart, http: h}, nil
 }
 
 func (m *Module) RegisterRoutes(r chi.Router) {
@@ -179,12 +190,16 @@ func (m *Module) AcceptCurrentPrice(ctx context.Context, userID, productID strin
 	return publicError(m.cart.AcceptCurrentPrice(ctx, userID, productID))
 }
 
-func (m *Module) RecoverPending(ctx context.Context) (RecoveryReport, error) {
-	report, err := m.recovery.RecoverPending(ctx)
+func (m *Module) RecoveryWorker() *RecoveryWorker {
+	return m.worker
+}
+
+func (m *Module) RecoverOnce(ctx context.Context) (RecoveryReport, error) {
+	report, err := m.recovery.RunCycle(ctx)
 	if err != nil {
 		return RecoveryReport{}, err
 	}
-	out := RecoveryReport{Confirmed: report.Confirmed, Declined: report.Declined}
+	out := RecoveryReport{Confirmed: report.Confirmed, Declined: report.Declined, Voided: report.Voided, Skipped: report.Skipped}
 	for _, p := range report.StillPending {
 		out.StillPending = append(out.StillPending, PendingPurchase{ID: string(p.PurchaseID), Cause: p.Cause})
 	}

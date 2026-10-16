@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -84,8 +85,83 @@ func (r *Purchases) List(ctx context.Context, userID string, p domain.Page) ([]d
 	return items, total, nil
 }
 
-func (r *Purchases) Pending(ctx context.Context) ([]domain.Purchase, error) {
-	return r.many(ctx, `WHERE status = 'PENDING' ORDER BY created_at, id`)
+func (r *Purchases) Claim(ctx context.Context, owner string, minAge, lease time.Duration, batch int) ([]domain.Purchase, error) {
+	rows, err := database.Q(ctx, r.pool).Query(ctx,
+		`UPDATE purchases
+		 SET lease_until = now() + $2 * interval '1 microsecond', lease_owner = $1::uuid
+		 WHERE id IN (
+		     SELECT id FROM purchases
+		     WHERE status = 'PENDING'
+		       AND created_at < now() - $3 * interval '1 microsecond'
+		       AND next_attempt_at <= now()
+		       AND (lease_until IS NULL OR lease_until < now())
+		     ORDER BY next_attempt_at, id
+		     LIMIT $4
+		     FOR UPDATE SKIP LOCKED)
+		 RETURNING id::text`,
+		owner, lease.Microseconds(), minAge.Microseconds(), batch)
+	if err != nil {
+		return nil, fmt.Errorf("ordering: claim pending purchases: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("ordering: claim pending purchases: %w", err)
+	}
+	if len(ids) == 0 {
+		return []domain.Purchase{}, nil
+	}
+	return r.many(ctx, `WHERE id = ANY($1::uuid[]) ORDER BY next_attempt_at, id`, ids)
+}
+
+func (r *Purchases) Renew(ctx context.Context, id domain.ID, owner string, lease, maxPendingAge time.Duration) (app.RenewResult, bool, error) {
+	var renewed app.RenewResult
+	err := database.Q(ctx, r.pool).QueryRow(ctx,
+		`UPDATE purchases SET lease_until = now() + $3 * interval '1 microsecond'
+		 WHERE id = $1::uuid AND lease_owner = $2::uuid AND status = 'PENDING'
+		 RETURNING recovery_attempts, created_at < now() - $4 * interval '1 microsecond'`,
+		string(id), owner, lease.Microseconds(), maxPendingAge.Microseconds()).Scan(&renewed.Attempts, &renewed.Overdue)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return app.RenewResult{}, false, nil
+	case err != nil:
+		return app.RenewResult{}, false, fmt.Errorf("ordering: renew the recovery lease: %w", err)
+	}
+	return renewed, true, nil
+}
+
+func (r *Purchases) Reschedule(ctx context.Context, id domain.ID, owner string, backoff time.Duration, cause string) (int, bool, error) {
+	var attempts int
+	err := database.Q(ctx, r.pool).QueryRow(ctx,
+		`UPDATE purchases
+		 SET recovery_attempts = recovery_attempts + 1,
+		     next_attempt_at = now() + $3 * interval '1 microsecond',
+		     lease_until = NULL, lease_owner = NULL, last_recovery_error = $4
+		 WHERE id = $1::uuid AND lease_owner = $2::uuid AND status = 'PENDING'
+		 RETURNING recovery_attempts`,
+		string(id), owner, backoff.Microseconds(), cause).Scan(&attempts)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("ordering: reschedule the recovery: %w", err)
+	}
+	return attempts, true, nil
+}
+
+func (r *Purchases) PendingStats(ctx context.Context, stuckAfter int) (app.PendingStats, error) {
+	var stats app.PendingStats
+	err := database.Q(ctx, r.pool).QueryRow(ctx,
+		`SELECT count(*),
+		        COALESCE(EXTRACT(EPOCH FROM now() - min(created_at)), 0)::float8,
+		        count(*) FILTER (WHERE recovery_attempts >= $1),
+		        COALESCE((SELECT sum(i.quantity) FROM purchase_items i JOIN purchases s ON s.id = i.purchase_id
+		                  WHERE s.status = 'PENDING' AND s.recovery_attempts >= $1), 0)
+		 FROM purchases WHERE status = 'PENDING'`, stuckAfter).
+		Scan(&stats.Pending, &stats.OldestSeconds, &stats.Stuck, &stats.StuckReservedUnits)
+	if err != nil {
+		return app.PendingStats{}, fmt.Errorf("ordering: read the pending purchases: %w", err)
+	}
+	return stats, nil
 }
 
 func (r *Purchases) Finish(ctx context.Context, id domain.ID, o domain.Outcome) (bool, error) {

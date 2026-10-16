@@ -54,7 +54,12 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 		Pool: pool, Catalog: products, Payments: payments, Log: log, Metrics: tel, Users: cfg.Demo.Users,
 		Budgets: ordering.Budgets{
 			Reserve: cfg.Checkout.ReserveTimeout, Charge: cfg.Checkout.ChargeTimeout,
-			Finalize: cfg.Checkout.FinalizeTimeout, Recovery: cfg.Checkout.RecoveryTimeout,
+			Finalize: cfg.Checkout.FinalizeTimeout,
+		},
+		Recovery: ordering.RecoveryConfig{
+			Interval: cfg.Recovery.Interval, BatchSize: cfg.Recovery.BatchSize, MinAge: cfg.Recovery.MinAge,
+			Lease: cfg.Recovery.Lease, BaseBackoff: cfg.Recovery.BaseBackoff, MaxBackoff: cfg.Recovery.MaxBackoff,
+			StuckAfterAttempts: cfg.Recovery.StuckAfterAttempts, MaxPendingAge: cfg.Checkout.MaxPendingAge,
 		},
 	})
 	if err != nil {

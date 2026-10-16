@@ -55,7 +55,7 @@ func TestAReplaceImportDuringAReservationKeepsTheFileStock(t *testing.T) {
 			require.Equal(t, []int{10, 1}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)}, "replace sets the physical units and keeps the reservation")
 
 			f.pay.set(approve)
-			recovered, err := f.orders.RecoverPending(ctx)
+			recovered, err := f.recoverPending(ctx)
 			require.NoError(t, err)
 			require.Equal(t, tc.recovered, recovered)
 			require.Equal(t, []int{tc.stock, 0}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)},
@@ -93,7 +93,7 @@ func TestAnAddImportDuringAReservationAddsToThePhysicalStock(t *testing.T) {
 			require.Equal(t, []int{15, 1}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)}, "add sums the delivery to the physical units and keeps the reservation")
 
 			f.pay.set(approve)
-			recovered, err := f.orders.RecoverPending(ctx)
+			recovered, err := f.recoverPending(ctx)
 			require.NoError(t, err)
 			require.Equal(t, tc.recovered, recovered)
 			require.Equal(t, []int{tc.stock, 0}, []int{f.stock(t, a.ID), f.reserved(t, a.ID)},
@@ -124,7 +124,7 @@ func TestAReservationDoesNotInvalidateAnOpenEdit(t *testing.T) {
 	require.Equal(t, []int{5, 2, 3}, []int{updated.Stock, updated.Reserved, updated.Available})
 
 	f.pay.set(approve)
-	_, err = f.orders.RecoverPending(ctx)
+	_, err = f.recoverPending(ctx)
 	require.NoError(t, err)
 	_, err = f.catalog.Update(ctx, a.ID, catalog.UpdateInput{Version: updated.Version, Name: &name})
 	require.ErrorIs(t, err, catalog.ErrVersionConflict, "a sale changes the physical stock, so it does change the version")
@@ -170,7 +170,7 @@ func TestRetriesDoNotRepeatReleasesSalesOrMovements(t *testing.T) {
 			require.NoError(t, err)
 			f.pay.set(approve)
 			for range 3 {
-				_, err := f.orders.RecoverPending(ctx)
+				_, err := f.recoverPending(ctx)
 				require.NoError(t, err)
 			}
 			require.NoError(t, f.orders.AddToCart(ctx, "alice", a.ID, 2))

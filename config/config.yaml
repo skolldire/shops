@@ -39,4 +39,12 @@ checkout:
   reserve_timeout: 3s
   charge_timeout: 6s
   finalize_timeout: 3s
-  recovery_timeout: 60s
+  max_pending_age: 30m
+recovery:
+  interval: 10s
+  batch_size: 20
+  min_age: 30s
+  lease: 30s
+  base_backoff: 5s
+  max_backoff: 5m
+  stuck_after_attempts: 10
