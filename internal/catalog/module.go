@@ -33,6 +33,7 @@ type Deps struct {
 const seedFileName = "seed.csv"
 
 type seedGuard interface {
+	LockSeed(ctx context.Context) (context.Context, func(), error)
 	HasProducts(ctx context.Context) (bool, error)
 }
 
@@ -143,6 +144,11 @@ func (m *Module) Import(ctx context.Context, r io.Reader, opts ImportOptions) (I
 }
 
 func (m *Module) Seed(ctx context.Context, file io.Reader) (ImportReport, bool, error) {
+	ctx, unlock, err := m.seed.LockSeed(ctx)
+	if err != nil {
+		return ImportReport{}, false, err
+	}
+	defer unlock()
 	has, err := m.seed.HasProducts(ctx)
 	if err != nil {
 		return ImportReport{}, false, err

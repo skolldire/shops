@@ -204,6 +204,21 @@ func markBelowReserved(ctx context.Context, q database.Querier, skus []string, s
 	return nil
 }
 
+func (r *Repository) LockSeed(ctx context.Context) (context.Context, func(), error) {
+	conn, err := r.pool.Acquire(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("catalog: acquire a connection for the seed lock: %w", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('catalog.seed', 0))`); err != nil {
+		conn.Release()
+		return nil, nil, fmt.Errorf("catalog: lock the demo seed: %w", err)
+	}
+	return database.WithConn(ctx, conn), func() {
+		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(hashtextextended('catalog.seed', 0))`)
+		conn.Release()
+	}, nil
+}
+
 func (r *Repository) HasProducts(ctx context.Context) (bool, error) {
 	var exists bool
 	if err := database.Q(ctx, r.pool).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM products)`).Scan(&exists); err != nil {

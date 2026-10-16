@@ -3,9 +3,11 @@
 package catalog_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -258,4 +260,38 @@ func TestTheReportShowsStockAndPriceBeforeAndAfter(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, report.Changes[0].SKU, again.Changes[0].SKU)
 	require.True(t, report.Changes[1].PriceBefore.Equal(again.Changes[1].PriceBefore), "a repetition answers the stored report, changes included")
+}
+
+func TestReplicasStartingTogetherSeedOnce(t *testing.T) {
+	r := twoReplicas(t)
+	ctx := context.Background()
+	official, err := os.ReadFile("../../testdata/products.csv")
+	require.NoError(t, err)
+
+	holder, err := r.pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer holder.Release()
+	_, err = holder.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('catalog.seed', 0))`)
+	require.NoError(t, err)
+	type result struct {
+		seeded bool
+		err    error
+	}
+	results := make(chan result, 2)
+	for _, m := range []*catalog.Module{r.a, r.b} {
+		go func() {
+			_, seeded, err := m.Seed(ctx, bytes.NewReader(official))
+			results <- result{seeded, err}
+		}()
+	}
+	r.waitFor(t, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`, 2)
+	_, err = holder.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended('catalog.seed', 0))`)
+	require.NoError(t, err)
+
+	first, second := <-results, <-results
+	require.NoError(t, first.err)
+	require.NoError(t, second.err)
+	require.NotEqual(t, first.seeded, second.seeded, "one replica seeds and the other finds the products")
+	require.Equal(t, 82, r.count(t, `SELECT count(*) FROM products`))
+	require.Equal(t, 1, r.count(t, `SELECT count(*) FROM imports WHERE mode = 'replace'`))
 }

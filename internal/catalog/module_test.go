@@ -29,6 +29,7 @@ type memoryRepo struct {
 	search    domain.Search
 	reserved  []domain.StockRequest
 	settled   []domain.StockRequest
+	seedLocks int
 	reference string
 	movements []domain.Movement
 }
@@ -151,6 +152,11 @@ func (m *memoryRepo) Upsert(ctx context.Context, _ domain.ImportMode, products [
 		m.products[p.ID] = p
 	}
 	return app.UpsertResult{Outcomes: out}, nil
+}
+
+func (m *memoryRepo) LockSeed(ctx context.Context) (context.Context, func(), error) {
+	m.seedLocks++
+	return ctx, func() {}, nil
 }
 
 func (m *memoryRepo) HasProducts(context.Context) (bool, error) {

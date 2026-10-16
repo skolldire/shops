@@ -103,6 +103,7 @@ func TestModuleSeed(t *testing.T) {
 		require.Equal(t, 1, report.Created)
 		require.Equal(t, 1, report.Rejected, "rejected rows are not a failure")
 		require.Len(t, repo.products, 1)
+		require.Equal(t, 1, repo.seedLocks, "the seed runs under its lock")
 	})
 
 	t.Run("does nothing when there are products already", func(t *testing.T) {
