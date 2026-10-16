@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -78,4 +79,23 @@ func TestImportFromTheUIEndToEnd(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	require.Contains(t, body, "Choose whether to add to or replace the inventory before the file.")
 	require.Equal(t, 70, c.stockOf(c.idOf("TENT-1")))
+}
+
+func TestAnOverlongImportFieldChangesNothing(t *testing.T) {
+	c := startApp(t)
+	c.product("TENT-1", "29.99", 50)
+	movements := c.scalar(`SELECT count(*) FROM inventory_movements`)
+	resp, page := c.do(http.MethodGet, "/admin/imports", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	key := importKey.FindStringSubmatch(page)[1]
+
+	padded := "true" + strings.Repeat(" ", 64) + "x"
+	resp, body := c.submitImport([][2]string{{"idempotency_key", key}, {"mode", "add"}, {"allow_duplicate", padded}, {"file", ""}},
+		importHeader+"Tent,TENT-1,,Camping,39.99,10,3\nLamp,LAMP-1,,Camping,9.00,2,1\n")
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
+	require.Contains(t, body, "The form could not be read. Nothing was imported")
+	require.Equal(t, 50, c.stockOf(c.idOf("TENT-1")), "the stock is unchanged")
+	require.Zero(t, c.scalar(`SELECT count(*) FROM products WHERE sku = 'LAMP-1'`), "no product was created")
+	require.Zero(t, c.scalar(`SELECT count(*) FROM imports`), "no import was recorded")
+	require.Equal(t, movements, c.scalar(`SELECT count(*) FROM inventory_movements`), "no movement")
 }

@@ -299,3 +299,28 @@ func TestImportAcceptsOnlyTrueOrFalseToAddAFileAgain(t *testing.T) {
 		require.Equal(t, want, cat.importOpts.AllowDuplicate)
 	}
 }
+
+func TestImportRejectsControlFieldsLongerThanTheLimit(t *testing.T) {
+	padded := "true" + strings.Repeat(" ", maxImportFieldBytes) + "x"
+	for name, parts := range map[string][]part{
+		"a confirmation that only starts with true": {{"idempotency_key", formKey}, {"mode", "add"}, {"allow_duplicate", padded}, {"file", "name\n"}},
+		"an overlong mode":                          {{"idempotency_key", formKey}, {"mode", "add" + strings.Repeat(" ", maxImportFieldBytes)}, {"file", "name\n"}},
+		"an overlong key":                           {{"idempotency_key", strings.Repeat("a", maxImportFieldBytes+1)}, {"mode", "add"}, {"file", "name\n"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cat := &fakeCatalog{report: report()}
+			h, _ := newTestUI(t, cat)
+			rec := uploadParts(t, h, parts...)
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.Contains(t, rec.Body.String(), "The form could not be read. Nothing was imported")
+			require.Zero(t, cat.imports, "a truncated value is never used")
+		})
+	}
+
+	cat := &fakeCatalog{report: report()}
+	h, _ := newTestUI(t, cat)
+	atLimit := "true" + strings.Repeat(" ", maxImportFieldBytes-len("true"))
+	rec := uploadParts(t, h, part{"idempotency_key", formKey}, part{"mode", "add"}, part{"allow_duplicate", atLimit}, part{"file", "name\n"})
+	require.Equal(t, http.StatusOK, rec.Code, "a value within the limit is trimmed and accepted")
+	require.True(t, cat.importOpts.AllowDuplicate)
+}

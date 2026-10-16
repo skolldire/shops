@@ -13,7 +13,10 @@ import (
 	"github.com/skolldire/shops/internal/catalog"
 )
 
-var errInvalidAllowDuplicate = errors.New("web: allow_duplicate must be true or false")
+var (
+	errInvalidAllowDuplicate = errors.New("web: allow_duplicate must be true or false")
+	errImportFieldTooLong    = errors.New("web: an import form field is longer than allowed")
+)
 
 const (
 	adminImports         = "/admin/imports"
@@ -80,9 +83,12 @@ func (ui *UI) importFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func readImportField(name string, r io.Reader, opts *catalog.ImportOptions) error {
-	value, err := io.ReadAll(io.LimitReader(r, maxImportFieldBytes))
+	value, err := io.ReadAll(io.LimitReader(r, maxImportFieldBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(value) > maxImportFieldBytes {
+		return errImportFieldTooLong
 	}
 	text := strings.TrimSpace(string(value))
 	switch name {
@@ -138,7 +144,7 @@ func (ui *UI) importFailed(w http.ResponseWriter, r *http.Request, opts catalog.
 	case errors.Is(err, catalog.ErrIdempotencyConflict):
 		ui.importProblem(w, r, http.StatusConflict, "This form was already used for another file or mode. Nothing was imported; choose the file again.")
 	case errors.Is(err, catalog.ErrInvalidImportMode), errors.Is(err, catalog.ErrInvalidIdempotencyKey), errors.Is(err, catalog.ErrIdempotencyKeyRequired),
-		errors.Is(err, errInvalidAllowDuplicate):
+		errors.Is(err, errInvalidAllowDuplicate), errors.Is(err, errImportFieldTooLong):
 		ui.importProblem(w, r, http.StatusBadRequest, "The form could not be read. Nothing was imported; choose the file again.")
 	default:
 		ui.serverError(w, r, err)
