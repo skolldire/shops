@@ -419,3 +419,42 @@ func TestOtherKeysCreateOtherPurchases(t *testing.T) {
 	require.Equal(t, app.Created, res.Kind)
 	require.Equal(t, 2, f.w.stockOf(f.a))
 }
+
+func TestANewPurchaseKeepsItsItemsToSettleAndCleanTheCart(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mode     mode
+		status   domain.Status
+		stockA   int
+		stockB   int
+		cartLeft int
+		commits  int
+		releases int
+	}{
+		"approved sells exactly the reserved units and cleans the cart":   {approve, domain.StatusConfirmed, 3, 9, 0, 1, 0},
+		"declined releases exactly the reserved units and keeps the cart": {decline, domain.StatusFailed, 5, 10, 2, 0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := setup(t, tc.mode)
+			f.w.state.carts["alice"] = []domain.CartItem{
+				{ProductID: f.a, Quantity: 2, UnitPriceSeen: *price("29.99")},
+				{ProductID: f.b, Quantity: 1, UnitPriceSeen: *price("5.00")},
+			}
+			res, err := f.run(t, f.standard())
+			require.NoError(t, err)
+			p := res.Purchase
+			require.Equal(t, tc.status, p.Status)
+			require.Equal(t, []domain.Quantity{{ProductID: f.a, Quantity: 2}, {ProductID: f.b, Quantity: 1}}, p.Quantities(),
+				"the purchase returned from the reservation carries its items")
+			stored, err := f.w.Get(context.Background(), "alice", p.ID)
+			require.NoError(t, err)
+			require.Equal(t, p.Items, stored.Items)
+			require.Zero(t, f.w.state.reserved[f.a], "every reserved unit was settled")
+			require.Zero(t, f.w.state.reserved[f.b])
+			require.Equal(t, tc.commits, f.w.state.commits)
+			require.Equal(t, tc.releases, f.w.state.releases)
+			require.Equal(t, tc.stockA, f.w.stockOf(f.a))
+			require.Equal(t, tc.stockB, f.w.stockOf(f.b))
+			require.Len(t, f.w.state.carts["alice"], tc.cartLeft)
+		})
+	}
+}

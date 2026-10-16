@@ -116,8 +116,8 @@ func (c *Checkout) reserve(ctx context.Context, req domain.CheckoutRequest) (dom
 		if err := c.purchases.AddItems(ctx, p.ID, items); err != nil {
 			return err
 		}
-		p.Items = items
 		created = p
+		created.Items = items
 		return nil
 	})
 	if errors.Is(err, errKeyExists) {
