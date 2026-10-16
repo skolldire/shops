@@ -278,7 +278,7 @@ The request is `multipart/form-data` with the file in a field named `file`. The 
 | Same file and mode, import interrupted (`APPLYING`) | The whole file is applied again from the upload, under the lock of the import, and it finishes `APPLIED` |
 | Another file or mode | `409 idempotency_conflict` |
 
-Two replicas that receive the same key at the same time apply it once: an `add` waits on the unique index of the key and then reads the stored report; a `replace` takes `pg_advisory_lock` on the import id, and every status change is an `UPDATE … WHERE status = <expected>`. The whole application runs on the one connection that holds that lock.
+**One import at a time.** Before applying anything, an import takes `pg_try_advisory_lock` on a single key shared by every import, on one pinned connection, and the whole application runs on that connection. If another import holds it, the request answers at once with `409 import_in_progress` and `Retry-After: 5`: it writes no `imports` row, no product and no movement, and the same request works when it is sent again. A key that already has an applied import is answered from its stored report before trying the lock, and a key used with another file or mode answers `409 idempotency_conflict` there too, so repeating a request never meets `import_in_progress` once its import is done. Two replicas that receive the same key at the same time apply it once: one applies it and the other answers `import_in_progress`, and its retry gets the stored report. Every status change is an `UPDATE … WHERE status = <expected>`. See [D10](#d10-one-import-at-a-time).
 
 **Repeated file.** If a file with the same hash was already applied with `add`, a new `add` of it is not applied and answers `409 duplicate_file` with the date of the earlier import, unless the request sends `allow_duplicate=true`. Adding the same delivery twice is almost always a mistake, but sometimes it is a real second delivery. A `replace` with the same file is harmless and needs no confirmation.
 
@@ -364,6 +364,7 @@ When the whole file is rejected, the answer is `application/problem+json`:
 | `allow_duplicate` other than `true` or `false` | 400 | `invalid_request` |
 | Same key with another file or mode | 409 | `idempotency_conflict` |
 | `add` of a file already added, without `allow_duplicate=true`; the date is in `detail` | 409 | `duplicate_file` |
+| Another import is being applied, with `Retry-After: 5` | 409 | `import_in_progress` |
 
 None of these creates an `imports` row: a file rejected as a whole has no effects to trace.
 
@@ -476,10 +477,10 @@ Only a definitive decline leads to `FAILED`. A technical error, an unknown outco
 | Finalization, confirmed | Purchase row → product rows by product id → cart rows by product id |
 | Finalization, declined | Purchase row → product rows by product id |
 | Recovery claim | Purchase rows, `FOR UPDATE SKIP LOCKED`, in one short statement; nothing is held during the charge |
-| Import | Product rows by SKU; an `add` keeps them locked until the whole file is applied |
+| Import | Advisory lock of the imports → existing product rows by product id (`SELECT … WHERE sku = ANY($1) ORDER BY id FOR UPDATE`) → the upsert, which inserts new products by SKU. An `add` locks every existing product of the file before its first batch and keeps them until the whole file is applied; a `replace` locks the existing products of each batch at the start of its transaction |
 | Product edit | One product row |
 
-The confirmed finalization now locks the products too, because the sale lowers their stock. The cart never takes a lock and then one of a purchase or a product, so it forms no cycle with the checkout. This does not remove every deadlock: the import locks by SKU and the checkout by product id, so an import running at the same time as a checkout or a finalization can end in `deadlock_detected`, and PostgreSQL aborts one of them. There are no SQL retries. A reservation that fails with `40P01` or `55P03`, with its rollback confirmed, answers `503 try_again` with `Retry-After: 1`, and the client can retry with the same key. A finalization that fails that way leaves the purchase `PENDING` and answers `202`.
+The confirmed finalization now locks the products too, because the sale lowers their stock. The cart never takes a lock and then one of a purchase or a product, so it forms no cycle with the checkout. The import locks the products it updates in the same order as the checkout, by product id, before it changes any of them, so an import and a checkout wait for each other instead of forming a cycle: while the import waits for a product that a reservation holds, it holds no product. New products are inserted afterwards in SKU order, and no checkout can hold a product that does not exist yet. A test that runs the old order, by SKU, against a reservation gets `40P01`; the same scenario with the import now finishes without it. There are no SQL retries. A reservation that fails with `40P01` or `55P03`, with its rollback confirmed, answers `503 try_again` with `Retry-After: 1`, and the client can retry with the same key. A finalization that fails that way leaves the purchase `PENDING` and answers `202`.
 
 ### Idempotency
 
@@ -774,7 +775,7 @@ A stored preview was also built and discarded: upload, see a server-rendered sum
 | A leader elected with an advisory lock that recovers everything | Simple, but one replica does all the work, a leader that hangs holds the lock with its session, and failover depends on that session ending |
 | A lease per purchase, claimed with `FOR UPDATE SKIP LOCKED` and renewed before each charge | Every replica works, a frozen worker only holds the purchases it claimed until their leases expire, and each purchase is protected one by one |
 
-**Decision.** Leases per purchase, with an owner per worker and a conditional renewal before every charge. The rest also goes through PostgreSQL: idempotency keys and the payment reference are unique, the seed takes an advisory lock, the import takes an advisory lock on its id, and the gauges are read from the database every cycle.
+**Decision.** Leases per purchase, with an owner per worker and a conditional renewal before every charge. The rest also goes through PostgreSQL: idempotency keys and the payment reference are unique, the seed takes an advisory lock, one advisory lock lets a single import run at a time, and the gauges are read from the database every cycle.
 
 **Example.** Worker A claims two purchases and stalls on the first. The lease of the second expires and worker B charges and confirms it. When A gets to the second one, its renewal changes no row, so it skips it without charging.
 
@@ -794,6 +795,24 @@ A stored preview was also built and discarded: upload, see a server-rendered sum
 
 See [Monetary invariants](#monetary-invariants). Alternatives were reading prices from `products` when showing or charging a purchase (a later import or edit would change what was paid and what is charged again by the recovery), and a copy guarded by triggers. The copy is in `purchase_items` and `purchases.total`; triggers reject changes to it. Revisit when purchases can be amended (partial refunds, returns): that needs new rows that refer to the original, not changes to it.
 
+### D10. One import at a time
+
+**Context.** An import locks the existing products by id before it changes them, the same order as the checkout. Two imports could still wait on each other: a product created by one transaction after another import took its locks is locked later, by SKU, during the upsert. That needs a third transaction committing in the middle, and an `add` holds its transaction for the whole file, so the window grows with the file.
+
+**Alternatives.**
+
+| Option | Consequence |
+|---|---|
+| Let imports run in parallel and rely on `40P01` | A failed `add` is rolled back entirely and has to be sent again; a `replace` retries the batch row by row, which hides the cause |
+| Make the second import wait for the first (`pg_advisory_lock`) | No error, but the HTTP request of the second one stays open for as long as the first file takes, beyond the write timeout for a large file |
+| One import at a time, the others answered at once with `409 import_in_progress` | The administrator sends the file again a few seconds later; imports are rare administrative operations |
+
+**Decision.** One import at a time, with `pg_try_advisory_lock` and `409 import_in_progress` with `Retry-After: 5`, in the API and in the UI. A finished key is answered before the lock. The rows of each file are still sorted by SKU before the batches, so the inserts keep one global order even if the serialization is removed one day. The lock per import id that a resumed `replace` used is gone: the single lock already prevents two replicas from applying the same import.
+
+**Example.** An `add` of 10,000 rows is being applied. A second administrator uploads a count: they see "Another import is being applied" and nothing changes; ten seconds later the same upload is applied.
+
+**Revisit when** imports become frequent or automated, for example a supplier feed every few minutes: then a queue of imports applied by a worker is better than asking clients to retry.
+
 ## Known limitations
 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
@@ -804,7 +823,8 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 - **There is no review before an import is applied.** The report shows afterwards what changed; a wrong file is fixed with another import. An `add` sent by mistake is undone with a `replace` of the right values.
 - **An interrupted `replace` stays `APPLYING` until someone sends the same file again with the same key.** In the UI that means sending the same form again; a new form has a new key, and the interrupted import then remains `APPLYING` as a record. The stock is not wrong for it: the batches applied hold the values of the file.
 - **A large `add` holds the locks of all its products until it finishes**, so checkouts of those products wait for it.
-- **An import and a checkout can deadlock.** They lock products in different orders (SKU and product id). PostgreSQL aborts one of them; a reservation answers `503 try_again`, a finalization leaves the purchase `PENDING`.
+- **A deadlock is still possible in rare cases, and it is handled.** An import and a checkout lock products in the same order, and imports run one at a time. A product created by the API while an import is running, and reserved before the import reaches it, is still locked by the import in SKU order, so a cycle needs that creation, that reservation and the import at the same moment. PostgreSQL then aborts one of them: a reservation answers `503 try_again` (`40P01` and `55P03`), a finalization leaves the purchase `PENDING`, an `add` is rolled back entirely and a `replace` retries that batch row by row.
+- **An `add` holds its products until the file is applied.** A checkout of one of them waits for the import within `checkout.reserve_timeout`. If the import takes longer, the checkout fails without reserving anything, and the client can send it again with the same key.
 - **The lease reduces double charge requests but cannot remove them.** A worker frozen after renewing a lease and before charging, for longer than the lease, can charge at the same time as the replica that took the purchase over. The purchase deadline narrows this window, because no step starts once the deadline has passed, but it cannot close it: the process can pause with a request already on its way, or resume and send one before its timers fire. Only the provider can close this, by rejecting the second request: that is why idempotency by reference is a non-negotiable requirement of any gateway. The database stays right either way (`Finish … WHERE status = 'PENDING'`), and the demo fake already rejects it with its primary key.
 - **A long outage of the provider keeps purchases open.** While `Lookup` and `Void` do not answer, a stuck purchase stays `PENDING` and its units stay reserved; `checkout_recovery_stuck_reserved_units` shows how many. See the runbook in [Periodic recovery](#periodic-recovery).
 - **A gateway that does not meet the payment contract can charge twice.** The contract test is the acceptance criterion for any provider.
