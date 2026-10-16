@@ -58,7 +58,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 		},
 		Recovery: ordering.RecoveryConfig{
 			Interval: cfg.Recovery.Interval, BatchSize: cfg.Recovery.BatchSize, MinAge: cfg.Recovery.MinAge,
-			Lease: cfg.Recovery.Lease, BaseBackoff: cfg.Recovery.BaseBackoff, MaxBackoff: cfg.Recovery.MaxBackoff,
+			Lease: cfg.Recovery.Lease, DBTimeout: cfg.Recovery.DBTimeout, BaseBackoff: cfg.Recovery.BaseBackoff, MaxBackoff: cfg.Recovery.MaxBackoff,
 			StuckAfterAttempts: cfg.Recovery.StuckAfterAttempts, MaxPendingAge: cfg.Checkout.MaxPendingAge,
 		},
 	})

@@ -65,6 +65,7 @@ type RecoveryConfig struct {
 	BatchSize          int           `mapstructure:"batch_size"`
 	MinAge             time.Duration `mapstructure:"min_age"`
 	Lease              time.Duration `mapstructure:"lease"`
+	DBTimeout          time.Duration `mapstructure:"db_timeout"`
 	BaseBackoff        time.Duration `mapstructure:"base_backoff"`
 	MaxBackoff         time.Duration `mapstructure:"max_backoff"`
 	StuckAfterAttempts int           `mapstructure:"stuck_after_attempts"`
@@ -103,6 +104,7 @@ func (c AppConfig) Validate() error {
 		"recovery.interval":         c.Recovery.Interval,
 		"recovery.min_age":          c.Recovery.MinAge,
 		"recovery.lease":            c.Recovery.Lease,
+		"recovery.db_timeout":       c.Recovery.DBTimeout,
 		"recovery.base_backoff":     c.Recovery.BaseBackoff,
 		"recovery.max_backoff":      c.Recovery.MaxBackoff,
 	} {

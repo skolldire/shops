@@ -17,7 +17,7 @@ const stuckAfter = 3
 
 func policy(owner string) app.RecoveryPolicy {
 	return app.RecoveryPolicy{
-		Owner: owner, MinAge: time.Minute, Lease: time.Minute, MaxPendingAge: time.Hour, Batch: 10, StuckAfter: stuckAfter,
+		Owner: owner, MinAge: time.Minute, Lease: time.Minute, MaxPendingAge: time.Hour, DBTimeout: time.Second, Batch: 10, StuckAfter: stuckAfter,
 		Backoff: func(int) time.Duration { return time.Second },
 	}
 }
@@ -253,6 +253,7 @@ func TestNewRecoveryValidatesItsDependencies(t *testing.T) {
 		"owner":   func(p *app.RecoveryPolicy) { p.Owner = "" },
 		"backoff": func(p *app.RecoveryPolicy) { p.Backoff = nil },
 		"lease":   func(p *app.RecoveryPolicy) { p.Lease = 0 },
+		"db":      func(p *app.RecoveryPolicy) { p.DBTimeout = 0 },
 		"batch":   func(p *app.RecoveryPolicy) { p.Batch = 0 },
 		"stuck":   func(p *app.RecoveryPolicy) { p.StuckAfter = 0 },
 	} {

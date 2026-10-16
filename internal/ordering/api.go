@@ -112,6 +112,7 @@ type RecoveryConfig struct {
 	BatchSize          int
 	MinAge             time.Duration
 	Lease              time.Duration
+	DBTimeout          time.Duration
 	BaseBackoff        time.Duration
 	MaxBackoff         time.Duration
 	StuckAfterAttempts int

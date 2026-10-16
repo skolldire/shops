@@ -18,6 +18,7 @@ type RecoveryPolicy struct {
 	MinAge        time.Duration
 	Lease         time.Duration
 	MaxPendingAge time.Duration
+	DBTimeout     time.Duration
 	Batch         int
 	StuckAfter    int
 	Backoff       func(attempts int) time.Duration
@@ -52,8 +53,8 @@ func NewRecovery(tx Tx, stock Stock, payments Payments, purchases Purchases, car
 		return nil, errors.New("ordering: recovery time budgets must be positive")
 	case policy.Owner == "", policy.Backoff == nil:
 		return nil, errors.New("ordering: recovery requires an owner and a backoff")
-	case policy.MinAge <= 0, policy.Lease <= 0, policy.MaxPendingAge <= 0, policy.Batch < 1, policy.StuckAfter < 1:
-		return nil, errors.New("ordering: recovery requires a positive minimum age, lease, maximum pending age, batch and threshold")
+	case policy.MinAge <= 0, policy.Lease <= 0, policy.MaxPendingAge <= 0, policy.DBTimeout <= 0, policy.Batch < 1, policy.StuckAfter < 1:
+		return nil, errors.New("ordering: recovery requires a positive minimum age, lease, maximum pending age, database timeout, batch and threshold")
 	}
 	return &Recovery{
 		finalizer: finalizer{tx: tx, purchases: purchases, stock: stock, carts: carts},
@@ -62,7 +63,9 @@ func NewRecovery(tx Tx, stock Stock, payments Payments, purchases Purchases, car
 }
 
 func (r *Recovery) RunCycle(ctx context.Context) (RecoveryReport, error) {
-	claimed, err := r.purchases.Claim(ctx, r.policy.Owner, r.policy.MinAge, r.policy.Lease, r.policy.Batch)
+	claimCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
+	claimed, err := r.purchases.Claim(claimCtx, r.policy.Owner, r.policy.MinAge, r.policy.Lease, r.policy.Batch)
+	cancel()
 	if err != nil {
 		return RecoveryReport{}, fmt.Errorf("ordering: claim pending purchases: %w", err)
 	}
@@ -73,9 +76,14 @@ func (r *Recovery) RunCycle(ctx context.Context) (RecoveryReport, error) {
 		}
 		r.recover(ctx, p, &report)
 	}
-	stats, err := r.purchases.PendingStats(context.WithoutCancel(ctx), r.policy.StuckAfter)
+	if ctx.Err() != nil {
+		return report, nil
+	}
+	statsCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
+	defer cancel()
+	stats, err := r.purchases.PendingStats(statsCtx, r.policy.StuckAfter)
 	if err != nil {
-		return report, fmt.Errorf("ordering: read the pending purchases: %w", err)
+		return report, fmt.Errorf("ordering: the pending purchase gauges were not updated: %w", err)
 	}
 	r.rec.RecoveryGauges(ctx, stats)
 	return report, nil
@@ -83,8 +91,12 @@ func (r *Recovery) RunCycle(ctx context.Context) (RecoveryReport, error) {
 
 func (r *Recovery) recover(ctx context.Context, p domain.Purchase, report *RecoveryReport) {
 	work := context.WithoutCancel(ctx)
-	renewed, owned, err := r.purchases.Renew(work, p.ID, r.policy.Owner, r.policy.Lease, r.policy.MaxPendingAge)
+	renewCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
+	renewed, owned, err := r.purchases.Renew(renewCtx, p.ID, r.policy.Owner, r.policy.Lease, r.policy.MaxPendingAge)
+	cancel()
 	switch {
+	case err != nil && ctx.Err() != nil:
+		return
 	case err != nil:
 		report.StillPending = append(report.StillPending, StillPending{PurchaseID: p.ID, Cause: err})
 		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Outcome: RecoveryError, Cause: err, StuckAfter: r.policy.StuckAfter})
@@ -141,7 +153,9 @@ func (r *Recovery) settle(ctx context.Context, p domain.Purchase, attempts int, 
 func (r *Recovery) reschedule(ctx context.Context, p domain.Purchase, attempts int, cause error, report *RecoveryReport) {
 	report.StillPending = append(report.StillPending, StillPending{PurchaseID: p.ID, Cause: cause})
 	outcome := attemptOutcome(cause)
-	total, owned, err := r.purchases.Reschedule(ctx, p.ID, r.policy.Owner, r.policy.Backoff(attempts), sanitize(cause))
+	rescheduleCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
+	total, owned, err := r.purchases.Reschedule(rescheduleCtx, p.ID, r.policy.Owner, r.policy.Backoff(attempts), sanitize(cause))
+	cancel()
 	switch {
 	case err != nil:
 		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Attempts: attempts, Outcome: RecoveryError, Cause: errors.Join(cause, err), StuckAfter: r.policy.StuckAfter})

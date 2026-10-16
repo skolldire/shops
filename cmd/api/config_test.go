@@ -124,7 +124,7 @@ func TestShippedConfigCheckoutDefaults(t *testing.T) {
 	require.Equal(t, 3*time.Second, cfg.Checkout.FinalizeTimeout)
 	require.Equal(t, 30*time.Minute, cfg.Checkout.MaxPendingAge)
 	require.Equal(t, RecoveryConfig{
-		Interval: 10 * time.Second, BatchSize: 20, MinAge: 30 * time.Second, Lease: 30 * time.Second,
+		Interval: 10 * time.Second, BatchSize: 20, MinAge: 30 * time.Second, Lease: 30 * time.Second, DBTimeout: 2 * time.Second,
 		BaseBackoff: 5 * time.Second, MaxBackoff: 5 * time.Minute, StuckAfterAttempts: 10,
 	}, cfg.Recovery)
 
@@ -174,6 +174,7 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 func TestValidateRecovery(t *testing.T) {
 	for want, change := range map[string]func(c *AppConfig){
 		"recovery.interval must be positive":                             func(c *AppConfig) { c.Recovery.Interval = 0 },
+		"recovery.db_timeout must be positive":                           func(c *AppConfig) { c.Recovery.DBTimeout = 0 },
 		"recovery.batch_size must be at least 1":                         func(c *AppConfig) { c.Recovery.BatchSize = 0 },
 		"recovery.stuck_after_attempts must be at least 1":               func(c *AppConfig) { c.Recovery.StuckAfterAttempts = 0 },
 		"recovery.base_backoff must not exceed":                          func(c *AppConfig) { c.Recovery.BaseBackoff = 10 * time.Minute },

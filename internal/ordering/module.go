@@ -92,7 +92,7 @@ func newModule(p ports, d Deps) (*Module, error) {
 	}
 	recovery, err := app.NewRecovery(p.tx, stock, payments, p.purchases, p.carts, rec, budgets, app.RecoveryPolicy{
 		Owner: uuid.NewString(), MinAge: d.Recovery.MinAge, Lease: d.Recovery.Lease, MaxPendingAge: d.Recovery.MaxPendingAge,
-		Batch: d.Recovery.BatchSize, StuckAfter: d.Recovery.StuckAfterAttempts,
+		DBTimeout: d.Recovery.DBTimeout, Batch: d.Recovery.BatchSize, StuckAfter: d.Recovery.StuckAfterAttempts,
 		Backoff: backoff(d.Recovery.BaseBackoff, d.Recovery.MaxBackoff),
 	})
 	if err != nil {

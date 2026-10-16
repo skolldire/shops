@@ -58,6 +58,7 @@ type world struct {
 	listErr    error
 	overdue    map[domain.ID]bool
 	onRenew    func(id domain.ID)
+	control    func(ctx context.Context, op string, id domain.ID) error
 }
 
 type txKey struct{}
@@ -201,7 +202,17 @@ func (w *world) List(ctx context.Context, userID string, page domain.Page) ([]do
 	return all[from:to], len(all), nil
 }
 
+func (w *world) controlled(ctx context.Context, op string, id domain.ID) error {
+	if w.control == nil {
+		return nil
+	}
+	return w.control(ctx, op, id)
+}
+
 func (w *world) Claim(ctx context.Context, owner string, _, _ time.Duration, batch int) ([]domain.Purchase, error) {
+	if err := w.controlled(ctx, "claim", ""); err != nil {
+		return nil, err
+	}
 	if w.listErr != nil {
 		return nil, w.listErr
 	}
@@ -225,6 +236,9 @@ func (w *world) Renew(ctx context.Context, id domain.ID, owner string, _, _ time
 	if w.onRenew != nil {
 		w.onRenew(id)
 	}
+	if err := w.controlled(ctx, "renew", id); err != nil {
+		return app.RenewResult{}, false, err
+	}
 	var (
 		res app.RenewResult
 		ok  bool
@@ -237,6 +251,9 @@ func (w *world) Renew(ctx context.Context, id domain.ID, owner string, _, _ time
 }
 
 func (w *world) Reschedule(ctx context.Context, id domain.ID, owner string, _ time.Duration, _ string) (int, bool, error) {
+	if err := w.controlled(ctx, "reschedule", id); err != nil {
+		return 0, false, err
+	}
 	var (
 		attempts int
 		ok       bool
@@ -252,6 +269,9 @@ func (w *world) Reschedule(ctx context.Context, id domain.ID, owner string, _ ti
 }
 
 func (w *world) PendingStats(ctx context.Context, stuckAfter int) (app.PendingStats, error) {
+	if err := w.controlled(ctx, "stats", ""); err != nil {
+		return app.PendingStats{}, err
+	}
 	var stats app.PendingStats
 	w.locked(ctx, func() {
 		for _, p := range w.state.purchases {

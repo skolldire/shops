@@ -155,7 +155,7 @@ func setup(t *testing.T, pay *provider) fixture {
 }
 
 var recoveryConfig = ordering.RecoveryConfig{
-	Interval: time.Hour, BatchSize: 20, MinAge: 30 * time.Second, Lease: 30 * time.Second,
+	Interval: time.Hour, BatchSize: 20, MinAge: 30 * time.Second, Lease: 30 * time.Second, DBTimeout: 2 * time.Second,
 	BaseBackoff: time.Second, MaxBackoff: time.Minute, StuckAfterAttempts: 10, MaxPendingAge: 30 * time.Minute,
 }
 
