@@ -54,10 +54,10 @@ func TestStartRecoversPendingPurchasesBeforeServing(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("a database error stops the startup", func(t *testing.T) {
-		_, err := c.pool.Exec(context.Background(), `ALTER TABLE purchases RENAME TO purchases_hidden`)
+		_, err := c.pool.Exec(context.Background(), `ALTER TABLE purchases RENAME COLUMN payment_token TO payment_token_hidden`)
 		require.NoError(t, err)
 		defer func() {
-			_, err := c.pool.Exec(context.Background(), `ALTER TABLE purchases_hidden RENAME TO purchases`)
+			_, err := c.pool.Exec(context.Background(), `ALTER TABLE purchases RENAME COLUMN payment_token_hidden TO payment_token`)
 			require.NoError(t, err)
 		}()
 		var logs syncBuffer

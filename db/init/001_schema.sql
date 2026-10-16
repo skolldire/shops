@@ -89,22 +89,29 @@ BEFORE TRUNCATE ON inventory_movements
 FOR EACH STATEMENT EXECUTE FUNCTION reject_inventory_movement_change();
 
 CREATE TABLE purchases (
-    id              uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id         text          NOT NULL,
-    idempotency_key uuid          NOT NULL,
-    request_hash    text          NOT NULL,
-    status          text          NOT NULL CHECK (status IN ('PENDING', 'CONFIRMED', 'FAILED')),
-    currency        char(3)       NOT NULL DEFAULT 'USD',
-    total           numeric(12,2) NOT NULL CHECK (total >= 0),
-    payment_token   text          NOT NULL,
-    payment_ref     text          NULL,
-    failure_reason  text          NULL,
-    created_at      timestamptz   NOT NULL DEFAULT now(),
-    updated_at      timestamptz   NOT NULL DEFAULT now(),
-    UNIQUE (user_id, idempotency_key)
+    id                  uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             text          NOT NULL,
+    idempotency_key     uuid          NOT NULL,
+    request_hash        text          NOT NULL,
+    status              text          NOT NULL CHECK (status IN ('PENDING', 'CONFIRMED', 'FAILED')),
+    currency            char(3)       NOT NULL DEFAULT 'USD',
+    total               numeric(12,2) NOT NULL CHECK (total >= 0),
+    payment_token       text          NOT NULL,
+    payment_ref         text          NULL,
+    failure_reason      text          NULL,
+    created_at          timestamptz   NOT NULL DEFAULT now(),
+    updated_at          timestamptz   NOT NULL DEFAULT now(),
+    recovery_attempts   integer       NOT NULL DEFAULT 0 CHECK (recovery_attempts >= 0),
+    next_attempt_at     timestamptz   NOT NULL DEFAULT now(),
+    lease_until         timestamptz   NULL,
+    lease_owner         uuid          NULL,
+    last_recovery_error text          NULL,
+    UNIQUE (user_id, idempotency_key),
+    CONSTRAINT purchases_lease_check CHECK ((lease_until IS NULL) = (lease_owner IS NULL))
 );
 
 CREATE INDEX purchases_status_created_at_idx ON purchases (status, created_at);
+CREATE INDEX purchases_recovery_idx ON purchases (next_attempt_at) WHERE status = 'PENDING';
 CREATE INDEX purchases_user_id_created_at_idx ON purchases (user_id, created_at DESC);
 
 CREATE TABLE purchase_items (
@@ -184,5 +191,18 @@ CREATE TABLE imports (
 );
 
 CREATE INDEX imports_applied_add_hash_idx ON imports (file_hash) WHERE mode = 'add' AND status = 'APPLIED';
+
+CREATE TABLE payment_fake_charges (
+    reference    text          PRIMARY KEY,
+    status       text          NOT NULL CHECK (status IN ('APPROVED', 'DECLINED', 'VOIDED')),
+    amount       numeric(12,2) NULL,
+    currency     char(3)       NULL,
+    token_hash   text          NULL,
+    provider_ref text          NULL,
+    reason       text          NULL,
+    created_at   timestamptz   NOT NULL DEFAULT now(),
+    CONSTRAINT payment_fake_charges_charge_check
+        CHECK (status = 'VOIDED' OR (amount IS NOT NULL AND currency IS NOT NULL AND token_hash IS NOT NULL))
+);
 
 COMMIT;
