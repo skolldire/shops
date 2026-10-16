@@ -13,6 +13,8 @@ import (
 	"github.com/skolldire/shops/internal/catalog"
 )
 
+var errInvalidAllowDuplicate = errors.New("web: allow_duplicate must be true or false")
+
 const (
 	adminImports         = "/admin/imports"
 	importField          = "file"
@@ -89,7 +91,14 @@ func readImportField(name string, r io.Reader, opts *catalog.ImportOptions) erro
 	case "idempotency_key":
 		opts.IdempotencyKey = text
 	case "allow_duplicate":
-		opts.AllowDuplicate = text == "true"
+		switch text {
+		case "true":
+			opts.AllowDuplicate = true
+		case "false":
+			opts.AllowDuplicate = false
+		default:
+			return errInvalidAllowDuplicate
+		}
 	}
 	return nil
 }
@@ -128,7 +137,8 @@ func (ui *UI) importFailed(w http.ResponseWriter, r *http.Request, opts catalog.
 		ui.importProblem(w, r, http.StatusConflict, "Another import is being applied. Nothing was imported; choose the file again in a few seconds.")
 	case errors.Is(err, catalog.ErrIdempotencyConflict):
 		ui.importProblem(w, r, http.StatusConflict, "This form was already used for another file or mode. Nothing was imported; choose the file again.")
-	case errors.Is(err, catalog.ErrInvalidImportMode), errors.Is(err, catalog.ErrInvalidIdempotencyKey), errors.Is(err, catalog.ErrIdempotencyKeyRequired):
+	case errors.Is(err, catalog.ErrInvalidImportMode), errors.Is(err, catalog.ErrInvalidIdempotencyKey), errors.Is(err, catalog.ErrIdempotencyKeyRequired),
+		errors.Is(err, errInvalidAllowDuplicate):
 		ui.importProblem(w, r, http.StatusBadRequest, "The form could not be read. Nothing was imported; choose the file again.")
 	default:
 		ui.serverError(w, r, err)

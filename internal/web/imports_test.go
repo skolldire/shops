@@ -279,3 +279,23 @@ func TestImportUnexpectedFailureIsAnErrorPage(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), "10.0.0.5")
 	require.Contains(t, logs.String(), "db exploded")
 }
+
+func TestImportAcceptsOnlyTrueOrFalseToAddAFileAgain(t *testing.T) {
+	for _, value := range []string{"yes", "1", "TRUE", "on", ""} {
+		t.Run(value, func(t *testing.T) {
+			cat := &fakeCatalog{report: report()}
+			h, _ := newTestUI(t, cat)
+			rec := uploadParts(t, h, part{"idempotency_key", formKey}, part{"mode", "add"}, part{"allow_duplicate", value}, part{"file", "name\n"})
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.Contains(t, rec.Body.String(), "The form could not be read. Nothing was imported")
+			require.Zero(t, cat.imports, "the importer is not called with a malformed confirmation")
+		})
+	}
+	for value, want := range map[string]bool{"true": true, "false": false} {
+		cat := &fakeCatalog{report: report()}
+		h, _ := newTestUI(t, cat)
+		rec := uploadParts(t, h, part{"idempotency_key", formKey}, part{"mode", "add"}, part{"allow_duplicate", value}, part{"file", "name\n"})
+		require.Equal(t, http.StatusOK, rec.Code, value)
+		require.Equal(t, want, cat.importOpts.AllowDuplicate)
+	}
+}
