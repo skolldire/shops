@@ -41,11 +41,14 @@ func TestAddToCart(t *testing.T) {
 	require.Equal(t, []cartCall{{op: "add", user: "bob", product: "p1", quantity: 2}}, orders.calls)
 
 	for _, qty := range []string{"0", "100", "x", "1.5"} {
+		orders.writeErr = validation.Errors{{Field: "quantity", Code: "out_of_range", Message: "must be between 1 and 99"}}
 		rec = submit(h, "/cart/items", url.Values{"product_id": {"p1"}, "quantity": {qty}})
 		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, qty)
 		require.Contains(t, rec.Body.String(), "between 1 and 99")
 	}
-	require.Len(t, orders.calls, 1)
+	require.Len(t, orders.calls, 3)
+	require.Equal(t, 0, orders.calls[1].quantity)
+	require.Equal(t, 100, orders.calls[2].quantity)
 
 	orders.writeErr = ordering.ErrCartFull
 	rec = submit(h, "/cart/items", url.Values{"product_id": {"p1"}, "quantity": {"1"}})
@@ -67,14 +70,17 @@ func TestCartChanges(t *testing.T) {
 	h, _ := newOrderingUI(t, orders, nil)
 	rec := submit(h, "/cart/items/p1/quantity", url.Values{"quantity": {"4"}}, as("carol")...)
 	require.Equal(t, "/cart?notice=updated", rec.Header().Get("Location"))
+	orders.writeErr = validation.Errors{{Field: "quantity", Code: "out_of_range", Message: "must be between 1 and 99"}}
 	rec = submit(h, "/cart/items/p1/quantity", url.Values{"quantity": {"0"}})
 	require.Equal(t, "/cart?notice=quantity", rec.Header().Get("Location"))
+	orders.writeErr = nil
 	rec = submit(h, "/cart/items/p1/remove", nil)
 	require.Equal(t, "/cart?notice=removed", rec.Header().Get("Location"))
 	rec = submit(h, "/cart/items/p1/accept-price", nil)
 	require.Equal(t, "/cart?notice=price_accepted", rec.Header().Get("Location"))
 	require.Equal(t, []cartCall{
 		{op: "quantity", user: "carol", product: "p1", quantity: 4},
+		{op: "quantity", user: "alice", product: "p1", quantity: 0},
 		{op: "remove", user: "alice", product: "p1"},
 		{op: "accept", user: "alice", product: "p1"},
 	}, orders.calls)
@@ -250,7 +256,7 @@ func TestPurchasePages(t *testing.T) {
 	require.Equal(t, http.StatusOK, get(h, "/purchases/b1", as("bob")...).Code)
 
 	body = get(h, "/purchases?page=x").Body.String()
-	require.Equal(t, []int{1}, orders.listed)
+	require.Equal(t, []int{0}, orders.listed)
 	require.Equal(t, 3, strings.Count(body, `href="/purchases/`))
 	require.Contains(t, body, "Pending")
 	require.Contains(t, body, "Declined")
@@ -261,4 +267,36 @@ func requireNoInlineCode(t *testing.T, body string) {
 	t.Helper()
 	require.False(t, inlineScript.MatchString(strings.ReplaceAll(body, `<script src="/static/htmx.min.js" defer></script>`, "")), "inline script")
 	require.False(t, inlineStyle.MatchString(body), "inline style or handler")
+}
+
+func TestQuantityRangeValidationComesFromOrdering(t *testing.T) {
+	for _, quantity := range []string{"0", "-1", "100"} {
+		t.Run(quantity, func(t *testing.T) {
+			orders := &fakeOrdering{writeErr: validation.Errors{{Field: "quantity", Code: "out_of_range", Message: "quantity rejected by ordering"}}}
+			h, _ := newOrderingUI(t, orders, &fakeCatalog{products: stockedShoes(3)})
+			rec := submit(h, "/cart/items", url.Values{"product_id": {"p1"}, "quantity": {quantity}})
+			require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+			require.Contains(t, rec.Body.String(), "quantity rejected by ordering")
+			require.Len(t, orders.calls, 1)
+			require.Equal(t, "add", orders.calls[0].op)
+		})
+	}
+}
+
+func TestPurchasePagingDelegatesRangeAndDefaultsToOrdering(t *testing.T) {
+	orders := &fakeOrdering{}
+	h, _ := newOrderingUI(t, orders, nil)
+	require.Equal(t, http.StatusOK, get(h, "/purchases").Code)
+	require.Equal(t, []int{0}, orders.listed)
+	require.Equal(t, []int{0}, orders.sizes)
+
+	orders.listErr = validation.Errors{{Field: "page", Code: "out_of_range", Message: "invalid page"}}
+	for _, path := range []string{"/purchases?page=100001&page_size=101", "/purchases?page=-1"} {
+		rec := get(h, path)
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+		require.Contains(t, rec.Body.String(), "page or page size is invalid")
+		require.NotContains(t, rec.Body.String(), "You have no purchases yet")
+	}
+	require.Equal(t, []int{0, 100001, -1}, orders.listed)
+	require.Equal(t, []int{0, 101, 0}, orders.sizes)
 }

@@ -3,7 +3,9 @@
 <div class="page-header">
 <h1>Your purchases</h1>
 </div>
-{{if .Data.Page.Items}}
+{{if .Data.Error}}
+<p role="alert">{{.Data.Error}}</p>
+{{else if .Data.Page.Items}}
 <div class="table-wrap">
 <table>
 <thead>

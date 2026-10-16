@@ -79,6 +79,9 @@ func (ui *UI) addToCart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	message := cartNotices["quantity"]
+	if fields, ok := asFieldErrors(err); ok && fields["quantity"] != "" {
+		message = fields["quantity"]
+	}
 	if errors.Is(err, ordering.ErrCartFull) {
 		message = "Your cart already has 50 different products. Remove one before adding another."
 	}
@@ -122,7 +125,7 @@ func (ui *UI) cartChange(w http.ResponseWriter, r *http.Request, notice string, 
 
 func formQuantity(raw string) (int, bool) {
 	n, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || n < 1 || n > 99 {
+	if err != nil {
 		return 0, false
 	}
 	return n, true

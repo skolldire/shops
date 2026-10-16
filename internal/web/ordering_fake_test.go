@@ -32,6 +32,8 @@ type fakeOrdering struct {
 	tokens    []string
 	purchases map[string]ordering.Purchase
 	listed    []int
+	sizes     []int
+	listErr   error
 }
 
 func (f *fakeOrdering) CartCount(_ context.Context, user string) (int, error) {
@@ -81,6 +83,10 @@ func (f *fakeOrdering) Purchase(_ context.Context, user, id string) (ordering.Pu
 
 func (f *fakeOrdering) Purchases(_ context.Context, user string, page, pageSize int) (ordering.PurchasePage, error) {
 	f.listed = append(f.listed, page)
+	f.sizes = append(f.sizes, pageSize)
+	if f.listErr != nil {
+		return ordering.PurchasePage{}, f.listErr
+	}
 	var items []ordering.Purchase
 	for k, p := range f.purchases {
 		if len(k) > len(user) && k[:len(user)+1] == user+"/" {
