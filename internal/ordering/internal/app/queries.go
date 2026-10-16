@@ -15,10 +15,10 @@ type PurchasePage struct {
 }
 
 type Queries struct {
-	purchases Purchases
+	purchases PurchaseReader
 }
 
-func NewQueries(purchases Purchases) (*Queries, error) {
+func NewQueries(purchases PurchaseReader) (*Queries, error) {
 	if purchases == nil {
 		return nil, errors.New("ordering: queries require purchases")
 	}

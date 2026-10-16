@@ -31,14 +31,16 @@ type CheckoutResult struct {
 
 type Checkout struct {
 	finalizer
-	payments Payments
-	rec      CheckoutRecorder
-	budgets  Budgets
+	stock     CheckoutStock
+	purchases CheckoutPurchases
+	payments  PaymentCharger
+	rec       CheckoutRecorder
+	budgets   Budgets
 }
 
 var errKeyExists = errors.New("ordering: the idempotency key already exists")
 
-func NewCheckout(tx Tx, stock Stock, payments Payments, purchases Purchases, carts Carts, rec CheckoutRecorder, b Budgets) (*Checkout, error) {
+func NewCheckout(tx Tx, stock CheckoutStock, payments PaymentCharger, purchases CheckoutPurchases, carts PurchasedCartRemover, rec CheckoutRecorder, b Budgets) (*Checkout, error) {
 	switch {
 	case tx == nil, stock == nil, payments == nil, purchases == nil, carts == nil, rec == nil:
 		return nil, errors.New("ordering: checkout requires a transaction manager, stock, payments, purchases, carts and a recorder")
@@ -47,7 +49,8 @@ func NewCheckout(tx Tx, stock Stock, payments Payments, purchases Purchases, car
 	}
 	return &Checkout{
 		finalizer: finalizer{tx: tx, purchases: purchases, stock: stock, carts: carts},
-		payments:  payments, rec: rec, budgets: b,
+		stock:     stock, purchases: purchases,
+		payments: payments, rec: rec, budgets: b,
 	}, nil
 }
 

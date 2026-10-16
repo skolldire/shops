@@ -10,9 +10,9 @@ import (
 
 type finalizer struct {
 	tx        Tx
-	purchases Purchases
-	stock     Stock
-	carts     Carts
+	purchases PurchaseFinisher
+	stock     StockSettlement
+	carts     PurchasedCartRemover
 }
 
 func (f finalizer) finalize(ctx context.Context, p domain.Purchase, o domain.Outcome) (bool, error) {
@@ -45,7 +45,7 @@ func (f finalizer) finalize(ctx context.Context, p domain.Purchase, o domain.Out
 	return applied, nil
 }
 
-func (f finalizer) charge(ctx context.Context, payments Payments, p domain.Purchase) (domain.Outcome, error) {
+func (f finalizer) charge(ctx context.Context, payments PaymentCharger, p domain.Purchase) (domain.Outcome, error) {
 	res, err := payments.Charge(ctx, Charge{Reference: string(p.ID), Token: p.PaymentToken, Amount: p.Total, Currency: p.Currency})
 	if err != nil {
 		return domain.Outcome{}, err

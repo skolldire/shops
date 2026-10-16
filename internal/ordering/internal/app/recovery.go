@@ -51,14 +51,15 @@ type RecoveryReport struct {
 
 type Recovery struct {
 	finalizer
-	payments Payments
-	rec      CheckoutRecorder
-	budgets  Budgets
-	policy   RecoveryPolicy
-	item     time.Duration
+	purchases RecoveryPurchases
+	payments  Payments
+	rec       CheckoutRecorder
+	budgets   Budgets
+	policy    RecoveryPolicy
+	item      time.Duration
 }
 
-func NewRecovery(tx Tx, stock Stock, payments Payments, purchases Purchases, carts Carts, rec CheckoutRecorder, b Budgets, policy RecoveryPolicy) (*Recovery, error) {
+func NewRecovery(tx Tx, stock StockSettlement, payments Payments, purchases RecoveryPurchases, carts PurchasedCartRemover, rec CheckoutRecorder, b Budgets, policy RecoveryPolicy) (*Recovery, error) {
 	switch {
 	case tx == nil, stock == nil, payments == nil, purchases == nil, carts == nil, rec == nil:
 		return nil, errors.New("ordering: recovery requires a transaction manager, stock, payments, purchases, carts and a recorder")
@@ -73,6 +74,7 @@ func NewRecovery(tx Tx, stock Stock, payments Payments, purchases Purchases, car
 	}
 	return &Recovery{
 		finalizer: finalizer{tx: tx, purchases: purchases, stock: stock, carts: carts},
+		purchases: purchases,
 		payments:  payments, rec: rec, budgets: b, policy: policy, item: ItemBudget(b, policy.DBTimeout),
 	}, nil
 }

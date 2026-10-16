@@ -32,11 +32,11 @@ func (v CartView) HasWarnings() bool {
 }
 
 type Cart struct {
-	carts Carts
-	stock Stock
+	carts CartEditor
+	stock ProductReader
 }
 
-func NewCart(carts Carts, stock Stock) (*Cart, error) {
+func NewCart(carts CartEditor, stock ProductReader) (*Cart, error) {
 	if carts == nil || stock == nil {
 		return nil, errors.New("ordering: cart requires carts and stock")
 	}
