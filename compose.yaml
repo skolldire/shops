@@ -38,7 +38,7 @@ services:
     build: .
     ports:
       - "8080:8080"
-    stop_grace_period: 30s
+    stop_grace_period: 40s
     volumes:
       - secrets:/run/secrets:ro
       - ./config/config.yaml:/etc/shop/config.yaml:ro
@@ -49,7 +49,7 @@ services:
   app2:
     profiles: [replicas]
     build: .
-    stop_grace_period: 30s
+    stop_grace_period: 40s
     volumes:
       - secrets:/run/secrets:ro
       - ./config/config.yaml:/etc/shop/config.yaml:ro

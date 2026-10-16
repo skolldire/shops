@@ -149,6 +149,7 @@ func (c AppConfig) Validate() error {
 	}, r.DBTimeout)
 	check(r.Lease > item+ordering.RecoveryLeaseMargin, "recovery.lease must be greater than 2 × recovery.db_timeout + 2 × checkout.charge_timeout + checkout.finalize_timeout + 2s: the renewal, a lookup and a void at checkout.charge_timeout each, the finalization, the reschedule and the margin")
 	check(c.HTTP.ShutdownTimeout >= max(request, item)+shutdownMargin, "http.shutdown_timeout must be at least the longer of a checkout request (checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s) and a recovered purchase (2 × recovery.db_timeout + 2 × checkout.charge_timeout + checkout.finalize_timeout), plus 2s to close the pool and telemetry")
+	check(c.HTTP.ShutdownTimeout > r.Lease, "http.shutdown_timeout must be greater than recovery.lease")
 	check(c.Checkout.MaxPendingAge > r.MinAge, "checkout.max_pending_age must be greater than recovery.min_age")
 	check(c.Checkout.MaxPendingAge > r.Lease, "checkout.max_pending_age must be greater than recovery.lease")
 

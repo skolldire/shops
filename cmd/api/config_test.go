@@ -40,7 +40,7 @@ func TestShippedConfigDefaults(t *testing.T) {
 
 	require.Equal(t, ":8080", cfg.HTTP.Addr)
 	require.Equal(t, ":9100", cfg.Metrics.Addr)
-	require.Equal(t, 25*time.Second, cfg.HTTP.ShutdownTimeout)
+	require.Equal(t, 35*time.Second, cfg.HTTP.ShutdownTimeout)
 	require.Equal(t, "db", cfg.Database.Host)
 	require.Equal(t, 5432, cfg.Database.Port)
 	require.Equal(t, testPassword, cfg.Database.Password.Reveal())
@@ -163,12 +163,20 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 	cfg = shippedConfig(t)
 	cfg.HTTP.ShutdownTimeout = 20 * time.Second
 	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least the longer of a checkout request")
+	cfg.HTTP.ShutdownTimeout = 30 * time.Second
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "http.shutdown_timeout must be greater than recovery.lease", "30s covers the 19s purchase but equals the lease")
+	require.NotContains(t, err.Error(), "must be at least")
+	cfg.HTTP.ShutdownTimeout = 31 * time.Second
+	require.NoError(t, cfg.Validate(), "above the lease and above a recovered purchase of 19s plus 2s")
+
+	cfg = shippedConfig(t)
+	cfg.Recovery.Lease = 22 * time.Second
 	cfg.HTTP.ShutdownTimeout = 21 * time.Second
-	require.NoError(t, cfg.Validate(), "a recovered purchase of 19s plus 2s fits exactly")
-	cfg.Recovery.DBTimeout = time.Millisecond
-	cfg.HTTP.ShutdownTimeout = 15 * time.Second
-	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least", "a recovered purchase of 15.002s plus 2s")
-	cfg.HTTP.ShutdownTimeout = 18 * time.Second
+	err = cfg.Validate()
+	require.ErrorContains(t, err, "http.shutdown_timeout must be greater than recovery.lease", "the budget alone is not enough")
+	require.NotContains(t, err.Error(), "must be at least")
+	cfg.HTTP.ShutdownTimeout = 23 * time.Second
 	require.NoError(t, cfg.Validate())
 
 	cfg = shippedConfig(t)
