@@ -4,7 +4,7 @@ http:
   read_timeout: 15s
   write_timeout: 30s
   idle_timeout: 60s
-  shutdown_timeout: 15s
+  shutdown_timeout: 25s
   public_origins: []
 metrics:
   addr: ${METRICS_ADDR:-:9100}

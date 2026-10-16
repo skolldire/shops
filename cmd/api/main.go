@@ -101,7 +101,7 @@ func start(ctx context.Context, cfg AppConfig, log logger.Service, lc *lifecycle
 	if err != nil {
 		return err
 	}
-	if err := lc.OnClose("postgres", func(context.Context) error { pool.Close(); return nil }); err != nil {
+	if err := lc.OnClose("postgres", func(ctx context.Context) error { return database.ClosePool(ctx, pool) }); err != nil {
 		pool.Close()
 		return err
 	}

@@ -42,6 +42,20 @@ func Open(ctx context.Context, cfg Config, opts ...Option) (*pgxpool.Pool, error
 	return pool, nil
 }
 
+func ClosePool(ctx context.Context, pool *pgxpool.Pool) error {
+	closed := make(chan struct{})
+	go func() {
+		pool.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		return nil
+	case <-ctx.Done():
+		return errors.New("database: the pool did not close in time because connections are still in use")
+	}
+}
+
 func poolConfig(cfg Config, opts ...Option) (*pgxpool.Config, error) {
 	switch {
 	case cfg.Host == "":

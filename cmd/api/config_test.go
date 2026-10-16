@@ -40,7 +40,7 @@ func TestShippedConfigDefaults(t *testing.T) {
 
 	require.Equal(t, ":8080", cfg.HTTP.Addr)
 	require.Equal(t, ":9100", cfg.Metrics.Addr)
-	require.Equal(t, 15*time.Second, cfg.HTTP.ShutdownTimeout)
+	require.Equal(t, 25*time.Second, cfg.HTTP.ShutdownTimeout)
 	require.Equal(t, "db", cfg.Database.Host)
 	require.Equal(t, 5432, cfg.Database.Port)
 	require.Equal(t, testPassword, cfg.Database.Password.Reveal())
@@ -161,10 +161,15 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 	require.ErrorContains(t, cfg.Validate(), "checkout.charge_timeout must be positive")
 
 	cfg = shippedConfig(t)
-	cfg.HTTP.ShutdownTimeout = 13 * time.Second
-	require.ErrorContains(t, cfg.Validate(), "must not exceed http.shutdown_timeout")
-	cfg.HTTP.ShutdownTimeout = 14 * time.Second
-	require.NoError(t, cfg.Validate(), "3s + 6s + 3s + 2s fits exactly")
+	cfg.HTTP.ShutdownTimeout = 20 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least the longer of a checkout request")
+	cfg.HTTP.ShutdownTimeout = 21 * time.Second
+	require.NoError(t, cfg.Validate(), "a recovered purchase of 19s plus 2s fits exactly")
+	cfg.Recovery.DBTimeout = time.Millisecond
+	cfg.HTTP.ShutdownTimeout = 15 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least", "a recovered purchase of 15.002s plus 2s")
+	cfg.HTTP.ShutdownTimeout = 18 * time.Second
+	require.NoError(t, cfg.Validate())
 
 	cfg = shippedConfig(t)
 	cfg.HTTP.WriteTimeout = 10 * time.Second

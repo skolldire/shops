@@ -165,3 +165,21 @@ func TestDatabase(t *testing.T) {
 		require.Equal(t, "23514", pgErr.Code)
 	})
 }
+
+func TestClosePoolWaitsForConnectionsWithinItsDeadline(t *testing.T) {
+	_, cfg := dbtest.Start(t)
+	ctx := context.Background()
+	pool, err := database.Open(ctx, cfg)
+	require.NoError(t, err)
+	conn, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+
+	expired, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorContains(t, database.ClosePool(expired, pool), "connections are still in use")
+	require.NoError(t, conn.Ping(ctx), "a connection in use is not closed under its holder")
+
+	conn.Release()
+	require.NoError(t, database.ClosePool(ctx, pool))
+	require.Error(t, pool.Ping(ctx))
+}
