@@ -10,7 +10,10 @@ import (
 )
 
 func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) {
-	var fieldErrs validation.Errors
+	var (
+		fieldErrs validation.Errors
+		below     *app.BelowReservedError
+	)
 	switch {
 	case errors.As(err, &fieldErrs):
 		httpx.WriteError(w, r, httpx.ErrorResponse{
@@ -31,6 +34,13 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusNotFound, Code: "not_found", Detail: "The product does not exist."})
 	case errors.Is(err, app.ErrSKUTaken):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusConflict, Code: "sku_taken", Detail: "Another product already uses this SKU."})
+	case errors.As(err, &below):
+		httpx.WriteError(w, r, httpx.ErrorResponse{
+			Status: http.StatusConflict,
+			Code:   app.CodeBelowReserved,
+			Detail: "The stock cannot go below the units reserved by pending purchases.",
+			Errors: validation.Errors{{Field: "stock", Code: app.CodeBelowReserved, Message: below.Message()}},
+		})
 	case errors.Is(err, app.ErrVersionConflict):
 		httpx.WriteError(w, r, httpx.ErrorResponse{Status: http.StatusPreconditionFailed, Code: "version_conflict", Detail: "The product changed since it was read. Fetch it again and retry."})
 	default:

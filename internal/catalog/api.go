@@ -13,6 +13,18 @@ var (
 	ErrSKUTaken        = errors.New("catalog: sku already taken")
 	ErrVersionConflict = errors.New("catalog: version conflict")
 
+	ErrProductUnavailable  = errors.New("catalog: product unavailable")
+	ErrInvalidStockRequest = errors.New("catalog: invalid stock request")
+	ErrStockInvariant      = errors.New("catalog: the reservation does not match the stock")
+	ErrBelowReserved       = errors.New("catalog: the stock cannot go below the reserved units")
+
+	ErrInvalidImportMode      = errors.New("catalog: the import mode must be add or replace")
+	ErrInvalidIdempotencyKey  = errors.New("catalog: the idempotency key must be a UUID")
+	ErrIdempotencyKeyRequired = errors.New("catalog: an add import requires an idempotency key")
+	ErrIdempotencyConflict    = errors.New("catalog: the idempotency key was used with another file or mode")
+	ErrDuplicateFile          = errors.New("catalog: the same file was already added")
+	ErrImportInProgress       = errors.New("catalog: another import is being applied")
+
 	ErrInvalidHeader = errors.New("catalog: the csv header must be exactly name,sku,description,category,price,stock,weight_kg")
 	ErrInvalidCSV    = errors.New("catalog: invalid csv")
 	ErrTooManyRows   = errors.New("catalog: the csv has too many rows")
@@ -32,13 +44,116 @@ func (e *InvalidCSVError) Is(target error) bool {
 	return target == ErrInvalidCSV
 }
 
+type InsufficientStockError struct {
+	ProductID string
+	Available int
+}
+
+func (e *InsufficientStockError) Error() string {
+	return fmt.Sprintf("catalog: insufficient stock for product %s: %d available", e.ProductID, e.Available)
+}
+
+type BelowReservedError struct {
+	Reserved int
+	Message  string
+}
+
+func (e *BelowReservedError) Error() string {
+	return fmt.Sprintf("catalog: the stock cannot go below the %d reserved units", e.Reserved)
+}
+
+func (e *BelowReservedError) Is(target error) bool {
+	return target == ErrBelowReserved
+}
+
+type ProductUnavailableError struct {
+	ProductID string
+}
+
+func (e *ProductUnavailableError) Error() string {
+	return fmt.Sprintf("catalog: product %s is unavailable", e.ProductID)
+}
+
+func (e *ProductUnavailableError) Is(target error) bool {
+	return target == ErrProductUnavailable
+}
+
+type StockRequest struct {
+	ProductID string
+	Quantity  int
+}
+
+type StockLine struct {
+	ProductID string
+	SKU       string
+	Name      string
+	Price     decimal.Decimal
+	Quantity  int
+}
+
+type Paging struct {
+	Page     int
+	PageSize int
+}
+
+type Movement struct {
+	ID            int64
+	ProductID     string
+	Delta         int
+	StockAfter    int
+	ReservedDelta int
+	ReservedAfter int
+	Reason        string
+	Reference     string
+	DBUser        string
+	TxID          string
+	CreatedAt     time.Time
+}
+
+type MovementPage struct {
+	Items    []Movement
+	Page     int
+	PageSize int
+	Total    int
+}
+
 type ImportLimits struct {
 	MaxBytes int64
 	MaxRows  int
 }
 
+type ImportMode string
+
+const (
+	ImportAdd     ImportMode = "add"
+	ImportReplace ImportMode = "replace"
+)
+
 type ImportOptions struct {
-	FileName string
+	FileName       string
+	Mode           ImportMode
+	IdempotencyKey string
+	AllowDuplicate bool
+}
+
+type ImportChange struct {
+	SKU         string
+	StockBefore int
+	StockAfter  int
+	PriceBefore decimal.Decimal
+	PriceAfter  decimal.Decimal
+}
+
+type DuplicateFileError struct {
+	AppliedAt time.Time
+}
+
+func (e *DuplicateFileError) Error() string {
+	return "catalog: the same file was already added to the stock on " + e.AppliedAt.UTC().Format(time.RFC3339)
+}
+
+func (e *DuplicateFileError) Is(target error) bool {
+	return target == ErrDuplicateFile
 }
 
 type ImportFile struct {
@@ -56,6 +171,8 @@ type RowError struct {
 }
 
 type ImportReport struct {
+	ID        string
+	Mode      ImportMode
 	File      ImportFile
 	Records   int
 	Skipped   int
@@ -64,6 +181,7 @@ type ImportReport struct {
 	Unchanged int
 	Rejected  int
 	Errors    []RowError
+	Changes   []ImportChange
 }
 
 type Product struct {
@@ -74,6 +192,8 @@ type Product struct {
 	Category    string
 	Price       decimal.Decimal
 	Stock       int
+	Reserved    int
+	Available   int
 	WeightKg    decimal.Decimal
 	Version     int
 	CreatedAt   time.Time

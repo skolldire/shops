@@ -1,0 +1,1 @@
+{{define "status"}}{{if eq (printf "%s" .) "CONFIRMED"}}Confirmed{{else if eq (printf "%s" .) "FAILED"}}Declined{{else}}Pending{{end}}{{end}}

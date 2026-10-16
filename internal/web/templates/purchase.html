@@ -1,0 +1,31 @@
+{{define "title"}}Purchase{{end}}
+{{define "content"}}
+<p><a href="/purchases">← Back to your purchases</a></p>
+<h1>Purchase</h1>
+{{if eq .Data.Status "CONFIRMED"}}
+<p class="notice" role="status">Payment approved. Your purchase is confirmed.</p>
+{{else if eq .Data.Status "FAILED"}}
+<p class="notice error" role="alert">The payment was declined ({{.Data.FailureReason}}). Nothing was charged and your cart was kept. <a href="/cart">Back to the cart</a></p>
+{{else}}
+<p class="notice warning" role="status">The payment result is still pending. This purchase is not confirmed yet. Check it later in <a href="/purchases">your purchases</a>.</p>
+{{end}}
+<dl>
+<dt>Reference</dt><dd>{{.Data.ID}}</dd>
+<dt>Status</dt><dd>{{template "status" .Data.Status}}</dd>
+<dt>Date</dt><dd>{{.Data.CreatedAt.UTC.Format "2006-01-02 15:04:05"}} UTC</dd>
+{{with .Data.PaymentRef}}<dt>Payment</dt><dd>{{.}}</dd>{{end}}
+</dl>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>Product</th><th>SKU</th><th class="numeric">Unit price</th><th class="numeric">Quantity</th><th class="numeric">Line total</th></tr>
+</thead>
+<tbody>
+{{range .Data.Items}}
+<tr><td>{{.Name}}</td><td>{{.SKU}}</td><td class="numeric">${{money .UnitPrice}}</td><td class="numeric">{{.Quantity}}</td><td class="numeric">${{money .LineTotal}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+<p class="total">Total: <strong>${{money .Data.Total}}</strong> {{.Data.Currency}}</p>
+{{end}}

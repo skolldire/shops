@@ -21,7 +21,7 @@ import (
 const maxFileNameLength = 255
 
 type RowImporter interface {
-	Import(ctx context.Context, file app.ImportFile, rows []app.ImportRow) (app.ImportReport, error)
+	Import(ctx context.Context, req app.ImportRequest) (app.ImportReport, error)
 }
 
 type Limits struct {
@@ -44,7 +44,7 @@ func NewImporter(rows RowImporter, limits Limits) (*Importer, error) {
 	return &Importer{rows: rows, limits: limits}, nil
 }
 
-func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error) {
+func (i *Importer) Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error) {
 	metered := &meteredReader{r: r, hash: sha256.New(), max: i.limits.MaxBytes}
 	read, err := Read(metered, i.limits.MaxRows)
 	if err != nil {
@@ -55,11 +55,13 @@ func (i *Importer) Import(ctx context.Context, r io.Reader, fileName string) (ap
 		rows[index] = importRow(row)
 	}
 	file := app.ImportFile{
-		Name:   cleanFileName(fileName),
+		Name:   cleanFileName(opts.FileName),
 		Bytes:  metered.n,
 		SHA256: hex.EncodeToString(metered.hash.Sum(nil)),
 	}
-	return i.rows.Import(ctx, file, rows)
+	return i.rows.Import(ctx, app.ImportRequest{
+		File: file, Rows: rows, Mode: opts.Mode, Key: opts.Key, AllowDuplicate: opts.AllowDuplicate,
+	})
 }
 
 func importRow(row Row) app.ImportRow {

@@ -1,0 +1,31 @@
+{{define "title"}}Checkout{{end}}
+{{define "content"}}
+<p><a href="/cart">← Back to the cart</a></p>
+<h1>Checkout</h1>
+{{with .Data.Notice}}<p class="notice warning" role="alert">{{.}}</p>{{end}}
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>Product</th><th class="numeric">Price</th><th class="numeric">Quantity</th></tr>
+</thead>
+<tbody>
+{{range .Data.Cart.Lines}}
+<tr><td>{{.Name}}</td><td class="numeric">${{money .UnitPriceSeen}}</td><td class="numeric">{{.Quantity}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+<p class="total">Total: <strong>${{money .Data.Cart.EstimatedTotal}}</strong> USD</p>
+<form class="form-card" action="/checkout" method="post" hx-boost="true" hx-push-url="true" hx-disabled-elt="find button">
+<input type="hidden" name="idempotency_key" value="{{.Data.Key}}">
+<div class="field">
+<label for="payment_token">Payment method</label>
+<select id="payment_token" name="payment_token">
+{{range .Data.Tokens}}<option value="{{.Value}}"{{if eq .Value $.Data.Token}} selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+</div>
+<div class="actions">
+<button type="submit">Pay ${{money .Data.Cart.EstimatedTotal}}</button>
+</div>
+</form>
+{{end}}

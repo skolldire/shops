@@ -20,14 +20,15 @@ import (
 type fakeRows struct {
 	calls  int
 	file   app.ImportFile
+	req    app.ImportRequest
 	rows   []app.ImportRow
 	report app.ImportReport
 	err    error
 }
 
-func (f *fakeRows) Import(_ context.Context, file app.ImportFile, rows []app.ImportRow) (app.ImportReport, error) {
+func (f *fakeRows) Import(_ context.Context, req app.ImportRequest) (app.ImportReport, error) {
 	f.calls++
-	f.file, f.rows = file, rows
+	f.file, f.rows, f.req = req.File, req.Rows, req
 	return f.report, f.err
 }
 
@@ -46,7 +47,7 @@ func TestImporterHandsTheRowsAndTheFileToTheUseCase(t *testing.T) {
 	want := app.ImportReport{Records: 5, Created: 1}
 	rows := &fakeRows{report: want}
 
-	report, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(body), "products.csv")
+	report, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(body), app.ImportOptions{FileName: "products.csv"})
 
 	require.NoError(t, err)
 	require.Equal(t, want, report, "the report of the use case is returned as it is")
@@ -99,7 +100,7 @@ func TestImporterReadsNumbersAndReportsTheOnesItCannotRead(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rows := &fakeRows{}
 
-			_, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(header+tt.row+"\n"), "products.csv")
+			_, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(header+tt.row+"\n"), app.ImportOptions{FileName: "products.csv"})
 
 			require.NoError(t, err)
 			require.Len(t, rows.rows, 1)
@@ -137,7 +138,7 @@ func TestImporterReturnsTheUseCaseErrorWithItsPartialReport(t *testing.T) {
 	partial := app.ImportReport{Records: 1200, Created: 500, Errors: []app.RowError{}}
 	rows := &fakeRows{report: partial, err: context.Canceled}
 
-	report, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(header), "products.csv")
+	report, err := newImporter(t, rows, roomy).Import(context.Background(), strings.NewReader(header), app.ImportOptions{FileName: "products.csv"})
 
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, partial, report)
@@ -162,7 +163,7 @@ func TestImporterRejectsTheWholeFile(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rows := &fakeRows{}
 
-			report, err := newImporter(t, rows, limits).Import(context.Background(), strings.NewReader(tt.body), "products.csv")
+			report, err := newImporter(t, rows, limits).Import(context.Background(), strings.NewReader(tt.body), app.ImportOptions{FileName: "products.csv"})
 
 			require.ErrorIs(t, err, tt.target)
 			require.Equal(t, app.ImportReport{}, report)
@@ -172,7 +173,7 @@ func TestImporterRejectsTheWholeFile(t *testing.T) {
 }
 
 func TestImporterReportsTheLineOfAMalformedFile(t *testing.T) {
-	_, err := newImporter(t, &fakeRows{}, roomy).Import(context.Background(), strings.NewReader(header+"A,A-1,,A,5,1,1\nB,\"B-1,,A,5,1,1\n"), "products.csv")
+	_, err := newImporter(t, &fakeRows{}, roomy).Import(context.Background(), strings.NewReader(header+"A,A-1,,A,5,1,1\nB,\"B-1,,A,5,1,1\n"), app.ImportOptions{FileName: "products.csv"})
 
 	var invalid *csvimport.FormatError
 	require.ErrorAs(t, err, &invalid)
@@ -184,7 +185,7 @@ func TestImporterAcceptsAFileOfExactlyTheLimits(t *testing.T) {
 	body := header + "A,A-1,,A,5,1,1\nB,B-1,,A,5,1,1\n"
 	rows := &fakeRows{}
 
-	_, err := newImporter(t, rows, csvimport.Limits{MaxBytes: int64(len(body)), MaxRows: 2}).Import(context.Background(), strings.NewReader(body), "products.csv")
+	_, err := newImporter(t, rows, csvimport.Limits{MaxBytes: int64(len(body)), MaxRows: 2}).Import(context.Background(), strings.NewReader(body), app.ImportOptions{FileName: "products.csv"})
 
 	require.NoError(t, err)
 	require.Len(t, rows.rows, 2)
@@ -198,7 +199,7 @@ func (brokenReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 func TestImporterReturnsReadFailures(t *testing.T) {
 	rows := &fakeRows{}
 
-	_, err := newImporter(t, rows, roomy).Import(context.Background(), brokenReader{}, "products.csv")
+	_, err := newImporter(t, rows, roomy).Import(context.Background(), brokenReader{}, app.ImportOptions{FileName: "products.csv"})
 
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	require.ErrorContains(t, err, "catalog: read import file")
@@ -209,15 +210,15 @@ func TestImporterCleansTheFileName(t *testing.T) {
 	rows := &fakeRows{}
 	importer := newImporter(t, rows, roomy)
 
-	_, err := importer.Import(context.Background(), strings.NewReader(header), "pro\tducts\x00.csv")
+	_, err := importer.Import(context.Background(), strings.NewReader(header), app.ImportOptions{FileName: "pro\tducts\x00.csv"})
 	require.NoError(t, err)
 	require.Equal(t, "products.csv", rows.file.Name)
 
-	_, err = importer.Import(context.Background(), strings.NewReader(header), strings.Repeat("ñ", 400)+".csv")
+	_, err = importer.Import(context.Background(), strings.NewReader(header), app.ImportOptions{FileName: strings.Repeat("ñ", 400) + ".csv"})
 	require.NoError(t, err)
 	require.Len(t, []rune(rows.file.Name), 255)
 
-	_, err = importer.Import(context.Background(), strings.NewReader(header), "bad\xff.csv")
+	_, err = importer.Import(context.Background(), strings.NewReader(header), app.ImportOptions{FileName: "bad\xff.csv"})
 	require.NoError(t, err)
 	require.Equal(t, "bad.csv", rows.file.Name)
 }

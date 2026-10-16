@@ -44,6 +44,34 @@ func TestDatabase(t *testing.T) {
 		require.Equal(t, 4, n)
 	})
 
+	t.Run("the schema check accepts present columns and rejects missing ones without naming them", func(t *testing.T) {
+		require.NoError(t, database.RequireColumns(ctx, pool, []database.Column{{Table: "products", Name: "reserved"}, {Table: "purchases", Name: "total"}}))
+		require.NoError(t, database.RequireColumns(ctx, pool, nil))
+		for _, missing := range []database.Column{{Table: "products", Name: "secret_column"}, {Table: "secret_table", Name: "id"}} {
+			err := database.RequireColumns(ctx, pool, []database.Column{{Table: "products", Name: "stock"}, missing})
+			require.ErrorIs(t, err, database.ErrSchemaOutdated)
+			require.NotContains(t, err.Error(), "secret")
+		}
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		require.EqualError(t, database.RequireColumns(canceled, pool, []database.Column{{Table: "products", Name: "stock"}}), "database: check schema: canceled")
+	})
+
+	t.Run("a connection pinned to the context runs every query and transaction", func(t *testing.T) {
+		conn, err := pool.Acquire(ctx)
+		require.NoError(t, err)
+		defer conn.Release()
+		pinned := database.WithConn(ctx, conn)
+		var pid, inTx int
+		require.NoError(t, conn.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid))
+		require.NoError(t, database.Q(pinned, pool).QueryRow(pinned, `SELECT pg_backend_pid()`).Scan(&inTx))
+		require.Equal(t, pid, inTx)
+		require.NoError(t, tm.WithinTx(pinned, func(ctx context.Context) error {
+			return database.Q(ctx, pool).QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&inTx)
+		}))
+		require.Equal(t, pid, inTx, "the transaction begins on the pinned connection")
+	})
+
 	t.Run("wrong password hides connection details", func(t *testing.T) {
 		wrong := cfg
 		wrong.Password = secret.New("wrong-password")
@@ -136,4 +164,22 @@ func TestDatabase(t *testing.T) {
 		require.ErrorAs(t, err, &pgErr)
 		require.Equal(t, "23514", pgErr.Code)
 	})
+}
+
+func TestClosePoolWaitsForConnectionsWithinItsDeadline(t *testing.T) {
+	_, cfg := dbtest.Start(t)
+	ctx := context.Background()
+	pool, err := database.Open(ctx, cfg)
+	require.NoError(t, err)
+	conn, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+
+	expired, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorContains(t, database.ClosePool(expired, pool), "connections are still in use")
+	require.NoError(t, conn.Ping(ctx), "a connection in use is not closed under its holder")
+
+	conn.Release()
+	require.NoError(t, database.ClosePool(ctx, pool))
+	require.ErrorContains(t, pool.Ping(ctx), "closed pool", "the pool itself is closed, not merely unreachable")
 }

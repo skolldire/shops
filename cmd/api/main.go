@@ -101,11 +101,14 @@ func start(ctx context.Context, cfg AppConfig, log logger.Service, lc *lifecycle
 	if err != nil {
 		return err
 	}
-	if err := lc.OnClose("postgres", func(context.Context) error { pool.Close(); return nil }); err != nil {
+	if err := lc.OnClose("postgres", func(ctx context.Context) error { return database.ClosePool(ctx, pool) }); err != nil {
 		pool.Close()
 		return err
 	}
 	log.Info(ctx, "database connected", nil)
+	if err := database.RequireColumns(ctx, pool, requiredColumns); err != nil {
+		return err
+	}
 
 	a, err := buildApp(cfg, log, pool, tel)
 	if err != nil {
@@ -116,6 +119,11 @@ func start(ctx context.Context, cfg AppConfig, log logger.Service, lc *lifecycle
 			return err
 		}
 	}
+	worker := a.ordering.RecoveryWorker()
+	if err := lc.OnClose("recovery", worker.Stop); err != nil {
+		return err
+	}
+	worker.Start(ctx)
 
 	apiServer := &http.Server{
 		Addr:              cfg.HTTP.Addr,

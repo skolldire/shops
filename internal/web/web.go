@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skolldire/shops/internal/catalog"
+	"github.com/skolldire/shops/internal/ordering"
 	"github.com/skolldire/shops/internal/platform/httpx"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
@@ -31,19 +32,38 @@ type Catalog interface {
 	Update(ctx context.Context, id string, in catalog.UpdateInput) (catalog.Product, error)
 	Delete(ctx context.Context, id string, version int) error
 	Categories(ctx context.Context) ([]string, error)
+	Movements(ctx context.Context, productID string, p catalog.Paging) (catalog.MovementPage, error)
 	Import(ctx context.Context, r io.Reader, opts catalog.ImportOptions) (catalog.ImportReport, error)
+}
+
+type Ordering interface {
+	CartCount(ctx context.Context, userID string) (int, error)
+	Cart(ctx context.Context, userID string) (ordering.Cart, error)
+	AddToCart(ctx context.Context, userID, productID string, quantity int) error
+	SetQuantity(ctx context.Context, userID, productID string, quantity int) error
+	RemoveFromCart(ctx context.Context, userID, productID string) error
+	AcceptCurrentPrice(ctx context.Context, userID, productID string) error
+	CheckoutCart(ctx context.Context, userID, idempotencyKey, paymentToken string) (ordering.CheckoutResult, error)
+	Purchase(ctx context.Context, userID, id string) (ordering.Purchase, error)
+	Purchases(ctx context.Context, userID string, page, pageSize int) (ordering.PurchasePage, error)
 }
 
 type Deps struct {
 	Catalog            Catalog
+	Ordering           Ordering
+	Users              []string
 	Log                logger.Service
 	MaxImportBodyBytes int64
+	PublicOrigins      []string
 }
 
 type UI struct {
 	catalog            Catalog
+	orders             Ordering
+	users              []string
 	log                logger.Service
 	maxImportBodyBytes int64
+	publicOrigins      []origin
 	views              *renderer
 	static             http.Handler
 }
@@ -52,11 +72,25 @@ func New(d Deps) (*UI, error) {
 	if d.Catalog == nil {
 		return nil, errors.New("web: catalog is required")
 	}
+	if d.Ordering == nil {
+		return nil, errors.New("web: ordering is required")
+	}
+	if len(d.Users) == 0 {
+		return nil, errors.New("web: demo users are required")
+	}
 	if d.Log == nil {
 		return nil, errors.New("web: logger is required")
 	}
 	if d.MaxImportBodyBytes <= 0 {
 		return nil, errors.New("web: import body limit is required")
+	}
+	public := make([]origin, len(d.PublicOrigins))
+	for i, raw := range d.PublicOrigins {
+		o, ok := parseOrigin(raw)
+		if !ok {
+			return nil, errors.New("web: every public origin must be scheme://host[:port]")
+		}
+		public[i] = o
 	}
 	views, err := newRenderer()
 	if err != nil {
@@ -66,12 +100,15 @@ func New(d Deps) (*UI, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &UI{catalog: d.Catalog, log: d.Log, maxImportBodyBytes: d.MaxImportBodyBytes, views: views, static: static}, nil
+	return &UI{
+		catalog: d.Catalog, orders: d.Ordering, users: append([]string(nil), d.Users...), log: d.Log,
+		maxImportBodyBytes: d.MaxImportBodyBytes, publicOrigins: public, views: views, static: static,
+	}, nil
 }
 
 func (ui *UI) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Use(securityHeaders, ui.recoverHTML)
+	r.Use(securityHeaders, ui.recoverHTML, ui.checkOrigin)
 	r.NotFound(ui.notFound)
 	r.MethodNotAllowed(ui.notFound)
 	r.Group(func(r chi.Router) {
@@ -79,12 +116,23 @@ func (ui *UI) Routes() http.Handler {
 		r.Handle("/static/*", ui.static)
 		r.Get("/", ui.store)
 		r.Get("/products/{id}", ui.product)
+		r.Post("/demo-user", ui.selectUser)
+		r.Get("/cart", ui.cart)
+		r.Post("/cart/items", ui.addToCart)
+		r.Post("/cart/items/{id}/quantity", ui.setQuantity)
+		r.Post("/cart/items/{id}/remove", ui.removeFromCart)
+		r.Post("/cart/items/{id}/accept-price", ui.acceptPrice)
+		r.Get("/checkout", ui.checkoutForm)
+		r.Post("/checkout", ui.checkout)
+		r.Get("/purchases", ui.purchases)
+		r.Get("/purchases/{id}", ui.purchase)
 		r.Route(adminProducts, func(r chi.Router) {
 			r.Get("/", ui.adminList)
 			r.Post("/", ui.createProduct)
 			r.Get("/new", ui.newProduct)
 			r.Get("/{id}/edit", ui.editProduct)
 			r.Post("/{id}", ui.updateProduct)
+			r.Get("/{id}/movements", ui.movements)
 			r.Get("/{id}/delete", ui.confirmDelete)
 			r.Post("/{id}/delete", ui.deleteProduct)
 		})
@@ -103,8 +151,21 @@ type errorPage struct {
 	Message string
 }
 
+type header struct {
+	Users     []string
+	User      string
+	Next      string
+	CartCount int
+	HasCount  bool
+}
+
+type view struct {
+	Header header
+	Data   any
+}
+
 func (ui *UI) notFound(w http.ResponseWriter, r *http.Request) {
-	ui.page(w, r, http.StatusNotFound, "error", errorPage{
+	ui.errorPage(w, r, http.StatusNotFound, errorPage{
 		Title: "Not found", Status: http.StatusNotFound,
 		Message: "The page or product you are looking for does not exist.",
 	})
@@ -112,17 +173,42 @@ func (ui *UI) notFound(w http.ResponseWriter, r *http.Request) {
 
 func (ui *UI) serverError(w http.ResponseWriter, r *http.Request, err error) {
 	ui.log.Error(r.Context(), err, map[string]any{"component": "web"})
-	ui.page(w, r, http.StatusInternalServerError, "error", errorPage{
+	ui.errorPage(w, r, http.StatusInternalServerError, errorPage{
 		Title: "Something went wrong", Status: http.StatusInternalServerError,
 		Message: "An unexpected error occurred. Please try again.",
 	})
 }
 
 func (ui *UI) page(w http.ResponseWriter, r *http.Request, status int, page string, data any) {
-	if err := ui.views.render(w, status, page, "layout", data); err != nil {
+	ui.render(w, r, status, page, view{Header: ui.header(r, true), Data: data})
+}
+
+func (ui *UI) errorPage(w http.ResponseWriter, r *http.Request, status int, data errorPage) {
+	ui.render(w, r, status, "error", view{Header: ui.header(r, false), Data: data})
+}
+
+func (ui *UI) render(w http.ResponseWriter, r *http.Request, status int, page string, v view) {
+	if err := ui.views.render(w, status, page, "layout", v); err != nil {
 		ui.log.Error(r.Context(), err, map[string]any{"component": "web"})
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
+}
+
+func (ui *UI) header(r *http.Request, withCount bool) header {
+	h := header{Users: ui.users, User: ui.currentUser(r), Next: "/"}
+	if r.Method == http.MethodGet {
+		h.Next = localPath(r.URL.RequestURI())
+	}
+	if !withCount {
+		return h
+	}
+	count, err := ui.orders.CartCount(r.Context(), h.User)
+	if err != nil {
+		ui.log.Error(r.Context(), fmt.Errorf("web: count the cart for the header: %w", err), map[string]any{"component": "web"})
+		return h
+	}
+	h.CartCount, h.HasCount = count, true
+	return h
 }
 
 func (ui *UI) recoverHTML(next http.Handler) http.Handler {
@@ -139,7 +225,7 @@ func (ui *UI) recoverHTML(next http.Handler) http.Handler {
 				"component": "web",
 				"stack":     strings.Split(strings.TrimSpace(string(debug.Stack())), "\n"),
 			})
-			ui.page(w, r, http.StatusInternalServerError, "error", errorPage{
+			ui.errorPage(w, r, http.StatusInternalServerError, errorPage{
 				Title: "Something went wrong", Status: http.StatusInternalServerError,
 				Message: "An unexpected error occurred. Please try again.",
 			})

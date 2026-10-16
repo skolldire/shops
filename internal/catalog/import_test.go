@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/skolldire/shops/internal/catalog/internal/app/apptest"
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
@@ -102,6 +103,7 @@ func TestModuleSeed(t *testing.T) {
 		require.Equal(t, 1, report.Created)
 		require.Equal(t, 1, report.Rejected, "rejected rows are not a failure")
 		require.Len(t, repo.products, 1)
+		require.Equal(t, 1, repo.seedLocks, "the seed runs under its lock")
 	})
 
 	t.Run("does nothing when there are products already", func(t *testing.T) {
@@ -219,7 +221,7 @@ func TestModuleImportIsTracedAsOneSpan(t *testing.T) {
 	spans := &spanRecorder{}
 	deps := testDeps(log)
 	deps.Tracer = spans
-	m, err := newModule(&memoryRepo{products: map[string]domain.Product{}}, deps)
+	m, err := newModule(&memoryRepo{products: map[string]domain.Product{}}, apptest.NewLog(), apptest.Tx{}, deps)
 	require.NoError(t, err)
 
 	_, err = m.Import(context.Background(), strings.NewReader(importHeader+"Shoes,RS-1,,Sports,9.99,1,0.3\n"), ImportOptions{FileName: "products.csv"})
@@ -271,7 +273,7 @@ func TestModuleImportRecordsItsDurationOnEveryAttempt(t *testing.T) {
 			metrics := &meter{histograms: map[string]int{}, counters: map[string]int64{}}
 			deps := testDeps(log)
 			deps.Metrics = metrics
-			m, err := newModule(&memoryRepo{products: map[string]domain.Product{}}, deps)
+			m, err := newModule(&memoryRepo{products: map[string]domain.Product{}}, apptest.NewLog(), apptest.Tx{}, deps)
 			require.NoError(t, err)
 
 			report, err := m.Import(tt.ctx, strings.NewReader(tt.body), ImportOptions{FileName: "products.csv"})

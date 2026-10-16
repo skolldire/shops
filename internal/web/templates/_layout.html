@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"historyCacheSize":0}'>
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"historyCacheSize":0,"responseHandling":[{"code":"204","swap":false},{"code":"[2345]..","swap":true,"error":false},{"code":"...","swap":false}]}'>
 <title>{{block "title" .}}Shops{{end}} · Shops</title>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/htmx.min.js" defer></script>
@@ -13,8 +13,18 @@
 <a class="brand" href="/">Shops</a>
 <nav>
 <a href="/">Store</a>
+<a href="/purchases">Purchases</a>
+<a href="/cart">Cart{{if .Header.HasCount}} ({{.Header.CartCount}}){{end}}</a>
 <a href="/admin/products">Admin</a>
 </nav>
+<form class="user-switch" action="/demo-user" method="post">
+<label for="demo-user">Demo user</label>
+<select id="demo-user" name="user">
+{{range .Header.Users}}<option value="{{.}}"{{if eq . $.Header.User}} selected{{end}}>{{.}}</option>{{end}}
+</select>
+<input type="hidden" name="next" value="{{.Header.Next}}">
+<button type="submit" class="secondary">Switch</button>
+</form>
 </header>
 <main class="container">
 {{block "content" .}}{{end}}

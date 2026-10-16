@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/skolldire/shops/internal/ordering"
 	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/health"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
+	"github.com/skolldire/shops/internal/web"
 )
 
 type AppConfig struct {
@@ -22,6 +25,8 @@ type AppConfig struct {
 	Telemetry telemetry.Config `mapstructure:"telemetry"`
 	Import    ImportConfig     `mapstructure:"import"`
 	Demo      DemoConfig       `mapstructure:"demo"`
+	Checkout  CheckoutConfig   `mapstructure:"checkout"`
+	Recovery  RecoveryConfig   `mapstructure:"recovery"`
 }
 
 type HTTPConfig struct {
@@ -31,6 +36,7 @@ type HTTPConfig struct {
 	WriteTimeout      time.Duration `mapstructure:"write_timeout"`
 	IdleTimeout       time.Duration `mapstructure:"idle_timeout"`
 	ShutdownTimeout   time.Duration `mapstructure:"shutdown_timeout"`
+	PublicOrigins     []string      `mapstructure:"public_origins"`
 }
 
 type MetricsConfig struct {
@@ -43,9 +49,33 @@ type ImportConfig struct {
 }
 
 type DemoConfig struct {
-	Seed     bool   `mapstructure:"seed"`
-	SeedFile string `mapstructure:"seed_file"`
+	Seed     bool     `mapstructure:"seed"`
+	SeedFile string   `mapstructure:"seed_file"`
+	Users    []string `mapstructure:"users"`
 }
+
+type CheckoutConfig struct {
+	ReserveTimeout  time.Duration `mapstructure:"reserve_timeout"`
+	ChargeTimeout   time.Duration `mapstructure:"charge_timeout"`
+	FinalizeTimeout time.Duration `mapstructure:"finalize_timeout"`
+	MaxPendingAge   time.Duration `mapstructure:"max_pending_age"`
+}
+
+type RecoveryConfig struct {
+	Interval           time.Duration `mapstructure:"interval"`
+	BatchSize          int           `mapstructure:"batch_size"`
+	MinAge             time.Duration `mapstructure:"min_age"`
+	Lease              time.Duration `mapstructure:"lease"`
+	DBTimeout          time.Duration `mapstructure:"db_timeout"`
+	BaseBackoff        time.Duration `mapstructure:"base_backoff"`
+	MaxBackoff         time.Duration `mapstructure:"max_backoff"`
+	StuckAfterAttempts int           `mapstructure:"stuck_after_attempts"`
+}
+
+const (
+	checkoutMargin = 2 * time.Second
+	shutdownMargin = 2 * time.Second
+)
 
 var logLevels = []string{"debug", "info", "warn", "error"}
 
@@ -60,14 +90,27 @@ func (c AppConfig) Validate() error {
 	check(validAddr(c.HTTP.Addr), "http.addr must be host:port")
 	check(validAddr(c.Metrics.Addr), "metrics.addr must be host:port")
 	check(c.HTTP.Addr != c.Metrics.Addr, "metrics.addr must differ from http.addr")
+	for i, raw := range c.HTTP.PublicOrigins {
+		check(web.ValidPublicOrigin(raw), "http.public_origins[%d] must be scheme://host[:port] with http or https and nothing else", i)
+	}
 	for name, d := range map[string]time.Duration{
-		"http.read_header_timeout": c.HTTP.ReadHeaderTimeout,
-		"http.read_timeout":        c.HTTP.ReadTimeout,
-		"http.write_timeout":       c.HTTP.WriteTimeout,
-		"http.idle_timeout":        c.HTTP.IdleTimeout,
-		"http.shutdown_timeout":    c.HTTP.ShutdownTimeout,
-		"health.timeout":           c.Health.Timeout,
-		"database.connect_timeout": c.Database.ConnectTimeout,
+		"http.read_header_timeout":  c.HTTP.ReadHeaderTimeout,
+		"http.read_timeout":         c.HTTP.ReadTimeout,
+		"http.write_timeout":        c.HTTP.WriteTimeout,
+		"http.idle_timeout":         c.HTTP.IdleTimeout,
+		"http.shutdown_timeout":     c.HTTP.ShutdownTimeout,
+		"health.timeout":            c.Health.Timeout,
+		"database.connect_timeout":  c.Database.ConnectTimeout,
+		"checkout.reserve_timeout":  c.Checkout.ReserveTimeout,
+		"checkout.charge_timeout":   c.Checkout.ChargeTimeout,
+		"checkout.finalize_timeout": c.Checkout.FinalizeTimeout,
+		"checkout.max_pending_age":  c.Checkout.MaxPendingAge,
+		"recovery.interval":         c.Recovery.Interval,
+		"recovery.min_age":          c.Recovery.MinAge,
+		"recovery.lease":            c.Recovery.Lease,
+		"recovery.db_timeout":       c.Recovery.DBTimeout,
+		"recovery.base_backoff":     c.Recovery.BaseBackoff,
+		"recovery.max_backoff":      c.Recovery.MaxBackoff,
 	} {
 		check(d > 0, "%s must be positive", name)
 	}
@@ -91,8 +134,45 @@ func (c AppConfig) Validate() error {
 	check(c.Import.MaxRows > 0, "import.max_rows must be greater than 0")
 
 	check(!c.Demo.Seed || c.Demo.SeedFile != "", "demo.seed_file is required when demo.seed is true")
+	errs = append(errs, validateUsers(c.Demo.Users)...)
+
+	request := c.Checkout.ReserveTimeout + c.Checkout.ChargeTimeout + c.Checkout.FinalizeTimeout + checkoutMargin
+	check(request <= c.HTTP.WriteTimeout, "checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s must not exceed http.write_timeout")
+
+	r := c.Recovery
+	check(r.BatchSize >= 1, "recovery.batch_size must be at least 1")
+	check(r.StuckAfterAttempts >= 1, "recovery.stuck_after_attempts must be at least 1")
+	check(r.BaseBackoff <= r.MaxBackoff, "recovery.base_backoff must not exceed recovery.max_backoff")
+	check(r.MinAge > request, "recovery.min_age must be greater than checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s")
+	item := ordering.RecoveryItemBudget(ordering.Budgets{
+		Reserve: c.Checkout.ReserveTimeout, Charge: c.Checkout.ChargeTimeout, Finalize: c.Checkout.FinalizeTimeout,
+	}, r.DBTimeout)
+	check(r.Lease > item+ordering.RecoveryLeaseMargin, "recovery.lease must be greater than 2 × recovery.db_timeout + 2 × checkout.charge_timeout + checkout.finalize_timeout + 2s: the renewal, a lookup and a void at checkout.charge_timeout each, the finalization, the reschedule and the margin")
+	check(c.HTTP.ShutdownTimeout >= max(request, item)+shutdownMargin, "http.shutdown_timeout must be at least the longer of a checkout request (checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s) and a recovered purchase (2 × recovery.db_timeout + 2 × checkout.charge_timeout + checkout.finalize_timeout), plus 2s to close the pool and telemetry")
+	check(c.Checkout.MaxPendingAge > r.MinAge, "checkout.max_pending_age must be greater than recovery.min_age")
+	check(c.Checkout.MaxPendingAge > r.Lease, "checkout.max_pending_age must be greater than recovery.lease")
 
 	return errors.Join(errs...)
+}
+
+func validateUsers(users []string) []error {
+	if len(users) == 0 {
+		return []error{errors.New("demo.users must list at least one user")}
+	}
+	var errs []error
+	seen := make(map[string]int, len(users))
+	for i, u := range users {
+		if strings.TrimSpace(u) == "" {
+			errs = append(errs, fmt.Errorf("demo.users[%d] must not be empty", i))
+			continue
+		}
+		if first, dup := seen[u]; dup {
+			errs = append(errs, fmt.Errorf("demo.users[%d] repeats demo.users[%d]", i, first))
+			continue
+		}
+		seen[u] = i
+	}
+	return errs
 }
 
 func validAddr(addr string) bool {

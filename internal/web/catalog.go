@@ -64,7 +64,7 @@ func (ui *UI) product(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		ui.serverError(w, r, err)
 	default:
-		ui.page(w, r, http.StatusOK, "product", p)
+		ui.page(w, r, http.StatusOK, "product", productPage{Product: p})
 	}
 }
 

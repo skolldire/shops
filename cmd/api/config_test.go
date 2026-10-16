@@ -40,7 +40,7 @@ func TestShippedConfigDefaults(t *testing.T) {
 
 	require.Equal(t, ":8080", cfg.HTTP.Addr)
 	require.Equal(t, ":9100", cfg.Metrics.Addr)
-	require.Equal(t, 15*time.Second, cfg.HTTP.ShutdownTimeout)
+	require.Equal(t, 25*time.Second, cfg.HTTP.ShutdownTimeout)
 	require.Equal(t, "db", cfg.Database.Host)
 	require.Equal(t, 5432, cfg.Database.Port)
 	require.Equal(t, testPassword, cfg.Database.Password.Reveal())
@@ -114,4 +114,102 @@ func TestValidate(t *testing.T) {
 	} {
 		require.ErrorContains(t, err, want)
 	}
+}
+
+func TestShippedConfigCheckoutDefaults(t *testing.T) {
+	cfg := shippedConfig(t)
+	require.Equal(t, []string{"alice", "bob", "carol"}, cfg.Demo.Users)
+	require.Equal(t, 3*time.Second, cfg.Checkout.ReserveTimeout)
+	require.Equal(t, 6*time.Second, cfg.Checkout.ChargeTimeout)
+	require.Equal(t, 3*time.Second, cfg.Checkout.FinalizeTimeout)
+	require.Equal(t, 30*time.Minute, cfg.Checkout.MaxPendingAge)
+	require.Equal(t, RecoveryConfig{
+		Interval: 10 * time.Second, BatchSize: 20, MinAge: 30 * time.Second, Lease: 30 * time.Second, DBTimeout: 2 * time.Second,
+		BaseBackoff: 5 * time.Second, MaxBackoff: 5 * time.Minute, StuckAfterAttempts: 10,
+	}, cfg.Recovery)
+
+	local, err := loadConfig(t, "../../config/config.local.yaml", map[string]string{"DB_PASSWORD": testPassword}, nil)
+	require.NoError(t, err)
+	require.Equal(t, cfg.Demo.Users, local.Demo.Users)
+	require.Equal(t, cfg.Checkout, local.Checkout)
+	require.Equal(t, cfg.Recovery, local.Recovery)
+}
+
+func TestValidateDemoUsers(t *testing.T) {
+	tests := map[string]struct {
+		users []string
+		want  string
+	}{
+		"empty list":  {nil, "demo.users must list at least one user"},
+		"empty value": {[]string{"alice", " "}, "demo.users[1] must not be empty"},
+		"repeated":    {[]string{"alice", "bob", "alice"}, "demo.users[2] repeats demo.users[0]"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := shippedConfig(t)
+			cfg.Demo.Users = tc.users
+			err := cfg.Validate()
+			require.ErrorContains(t, err, tc.want)
+			require.NotContains(t, err.Error(), "alice", "errors do not echo configured users")
+		})
+	}
+}
+
+func TestValidateCheckoutBudgets(t *testing.T) {
+	cfg := shippedConfig(t)
+	cfg.Checkout.ChargeTimeout = 0
+	require.ErrorContains(t, cfg.Validate(), "checkout.charge_timeout must be positive")
+
+	cfg = shippedConfig(t)
+	cfg.HTTP.ShutdownTimeout = 20 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least the longer of a checkout request")
+	cfg.HTTP.ShutdownTimeout = 21 * time.Second
+	require.NoError(t, cfg.Validate(), "a recovered purchase of 19s plus 2s fits exactly")
+	cfg.Recovery.DBTimeout = time.Millisecond
+	cfg.HTTP.ShutdownTimeout = 15 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least", "a recovered purchase of 15.002s plus 2s")
+	cfg.HTTP.ShutdownTimeout = 18 * time.Second
+	require.NoError(t, cfg.Validate())
+
+	cfg = shippedConfig(t)
+	cfg.HTTP.WriteTimeout = 10 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "must not exceed http.write_timeout")
+}
+
+func TestValidateRecovery(t *testing.T) {
+	for want, change := range map[string]func(c *AppConfig){
+		"recovery.interval must be positive":                             func(c *AppConfig) { c.Recovery.Interval = 0 },
+		"recovery.db_timeout must be positive":                           func(c *AppConfig) { c.Recovery.DBTimeout = 0 },
+		"recovery.batch_size must be at least 1":                         func(c *AppConfig) { c.Recovery.BatchSize = 0 },
+		"recovery.stuck_after_attempts must be at least 1":               func(c *AppConfig) { c.Recovery.StuckAfterAttempts = 0 },
+		"recovery.base_backoff must not exceed":                          func(c *AppConfig) { c.Recovery.BaseBackoff = 10 * time.Minute },
+		"recovery.min_age must be greater than":                          func(c *AppConfig) { c.Recovery.MinAge = 14 * time.Second },
+		"recovery.lease must be greater than":                            func(c *AppConfig) { c.Recovery.Lease = 11 * time.Second },
+		"checkout.max_pending_age must be greater than recovery.min_age": func(c *AppConfig) { c.Checkout.MaxPendingAge = 30 * time.Second },
+		"checkout.max_pending_age must be greater than recovery.lease":   func(c *AppConfig) { c.Recovery.Lease = 40 * time.Minute },
+	} {
+		cfg := shippedConfig(t)
+		change(&cfg)
+		require.ErrorContains(t, cfg.Validate(), want)
+	}
+	cfg := shippedConfig(t)
+	cfg.Recovery.Lease = 12 * time.Second
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "recovery.lease must be greater than 2 × recovery.db_timeout + 2 × checkout.charge_timeout + checkout.finalize_timeout + 2s")
+	require.ErrorContains(t, err, "a lookup and a void at checkout.charge_timeout each")
+
+	cfg.Recovery.Lease = 21 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "recovery.lease must be greater than", "2s + 2s + 6s + 6s + 3s + 2s is not enough")
+	cfg.Recovery.MinAge, cfg.Recovery.Lease = 15*time.Second, 22*time.Second
+	require.NoError(t, cfg.Validate(), "just above 3s + 6s + 3s + 2s and 2s + 2s + 6s + 6s + 3s + 2s")
+}
+
+func TestValidatePublicOrigins(t *testing.T) {
+	cfg := shippedConfig(t)
+	cfg.HTTP.PublicOrigins = []string{"https://shop.example", "http://localhost:8081"}
+	require.NoError(t, cfg.Validate())
+	cfg.HTTP.PublicOrigins = []string{"https://shop.example", "https://shop.example/secret-path"}
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "http.public_origins[1] must be")
+	require.NotContains(t, err.Error(), "secret-path", "the configured value is never reported")
 }

@@ -33,13 +33,27 @@ type fakeCatalog struct {
 	report     catalog.ImportReport
 	importErr  error
 	imports    int
-	importName string
+	importOpts catalog.ImportOptions
 	importBody string
+	movements  []catalog.Movement
+	paging     catalog.Paging
+}
+
+func (f *fakeCatalog) Movements(_ context.Context, _ string, p catalog.Paging) (catalog.MovementPage, error) {
+	f.paging = p
+	if p.Page == 0 {
+		p = catalog.Paging{Page: 1, PageSize: 20}
+	}
+	total := len(f.movements)
+	if f.total > 0 {
+		total = f.total
+	}
+	return catalog.MovementPage{Items: f.movements, Page: p.Page, PageSize: p.PageSize, Total: total}, f.err
 }
 
 func (f *fakeCatalog) Import(_ context.Context, r io.Reader, opts catalog.ImportOptions) (catalog.ImportReport, error) {
 	f.imports++
-	f.importName = opts.FileName
+	f.importOpts = opts
 	body, err := io.ReadAll(r)
 	f.importBody = string(body)
 	if err != nil {
@@ -110,7 +124,7 @@ func newTestUI(t *testing.T, cat *fakeCatalog) (http.Handler, *bytes.Buffer) {
 	if cat.products == nil {
 		cat.products = map[string]catalog.Product{}
 	}
-	ui, err := New(Deps{Catalog: cat, Log: log, MaxImportBodyBytes: testMaxImportBodyBytes})
+	ui, err := New(Deps{Catalog: cat, Ordering: &fakeOrdering{}, Users: testUsers, Log: log, MaxImportBodyBytes: testMaxImportBodyBytes})
 	require.NoError(t, err)
 	return ui.Routes(), logs
 }
@@ -173,7 +187,7 @@ func TestLayoutConfiguresHTMXForTheCSP(t *testing.T) {
 
 	body := get(h, "/no-existe").Body.String()
 
-	require.Contains(t, body, `<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"historyCacheSize":0}'>`)
+	require.Contains(t, body, `<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"historyCacheSize":0,"responseHandling":[{"code":"204","swap":false},{"code":"[2345]..","swap":true,"error":false},{"code":"...","swap":false}]}'>`)
 	require.Contains(t, body, `<script src="/static/htmx.min.js" defer></script>`)
 	require.Contains(t, body, `<link rel="stylesheet" href="/static/app.css">`)
 }
@@ -197,7 +211,7 @@ func TestPanicsRenderAnHTMLErrorPage(t *testing.T) {
 	var logs bytes.Buffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
-	ui, err := New(Deps{Catalog: cat, Log: log, MaxImportBodyBytes: testMaxImportBodyBytes})
+	ui, err := New(Deps{Catalog: cat, Ordering: &fakeOrdering{}, Users: testUsers, Log: log, MaxImportBodyBytes: testMaxImportBodyBytes})
 	require.NoError(t, err)
 	h := securityHeaders(ui.recoverHTML(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })))
 
@@ -214,9 +228,13 @@ func TestNewRequiresDependencies(t *testing.T) {
 	_, err := New(Deps{})
 	require.EqualError(t, err, "web: catalog is required")
 	_, err = New(Deps{Catalog: &fakeCatalog{}})
+	require.EqualError(t, err, "web: ordering is required")
+	_, err = New(Deps{Catalog: &fakeCatalog{}, Ordering: &fakeOrdering{}})
+	require.EqualError(t, err, "web: demo users are required")
+	_, err = New(Deps{Catalog: &fakeCatalog{}, Ordering: &fakeOrdering{}, Users: testUsers})
 	require.EqualError(t, err, "web: logger is required")
 	log, logErr := logger.New(logger.Config{Level: "info"}, io.Discard)
 	require.NoError(t, logErr)
-	_, err = New(Deps{Catalog: &fakeCatalog{}, Log: log})
+	_, err = New(Deps{Catalog: &fakeCatalog{}, Ordering: &fakeOrdering{}, Users: testUsers, Log: log})
 	require.EqualError(t, err, "web: import body limit is required")
 }

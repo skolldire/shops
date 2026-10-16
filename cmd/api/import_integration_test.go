@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/platform/lifecycle"
@@ -70,6 +71,7 @@ func (c client) upload(path, name string, content []byte) (*http.Response, strin
 	req, err := http.NewRequestWithContext(c.t.Context(), http.MethodPost, c.base+path, &body)
 	require.NoError(c.t, err)
 	req.Header.Set("Content-Type", form.FormDataContentType())
+	req.Header.Set("Origin", c.base)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(c.t, err)
 	defer resp.Body.Close()
@@ -85,6 +87,34 @@ func (c client) importReport(content []byte) reportJSON {
 	var report reportJSON
 	require.NoError(c.t, json.Unmarshal([]byte(body), &report), body)
 	return report
+}
+
+func (c client) uploadImport(mode string, content []byte) (*http.Response, string) {
+	c.t.Helper()
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	require.NoError(c.t, form.WriteField("idempotency_key", uuid.NewString()))
+	require.NoError(c.t, form.WriteField("mode", mode))
+	part, err := form.CreateFormFile("file", "products.csv")
+	require.NoError(c.t, err)
+	_, err = part.Write(content)
+	require.NoError(c.t, err)
+	require.NoError(c.t, form.Close())
+	req, err := http.NewRequestWithContext(c.t.Context(), http.MethodPost, c.base+"/admin/imports", &body)
+	require.NoError(c.t, err)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	req.Header.Set("Origin", c.base)
+	return c.send(req)
+}
+
+func (c client) send(req *http.Request) (*http.Response, string) {
+	c.t.Helper()
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(c.t, err)
+	defer resp.Body.Close()
+	out, err := io.ReadAll(resp.Body)
+	require.NoError(c.t, err)
+	return resp, string(out)
 }
 
 func (c client) products() (total, active, maxVersion int) {
@@ -174,9 +204,9 @@ func TestOfficialCSVImport(t *testing.T) {
 	require.Contains(t, body, "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;")
 	require.NotContains(t, body, "<script>alert(")
 
-	resp, body = c.upload("/admin/imports", "products.csv", official)
+	resp, body = c.uploadImport("replace", official)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Contains(t, body, "0 created, 0 updated, 81 unchanged, 14 rejected and 2 empty rows skipped, out of 97 records.")
+	require.Contains(t, body, "Replaced the inventory: 0 created, 0 updated, 81 unchanged, 14 rejected and 2 empty rows skipped, out of 97 records.")
 	require.Contains(t, body, `<tr><td class="numeric">89</td><td>BS-021</td><td>sku</td><td>duplicate_in_file</td><td>also used on lines 11 and 56</td></tr>`)
 	require.Contains(t, body, `<tr><td class="numeric">3</td><td>CB-010</td><td>sku</td><td>sku_deleted</td>`)
 	require.Contains(t, body, officialSHA256)
@@ -277,7 +307,7 @@ func TestStartSeedsBeforeServingAndFailsWithoutTheFile(t *testing.T) {
 	cfg.HTTP.Addr = "127.0.0.1:0"
 	cfg.Metrics.Addr = "127.0.0.1:0"
 	cfg.Demo.Seed = true
-	var logs bytes.Buffer
+	var logs syncBuffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
 
@@ -304,10 +334,9 @@ func TestStartSeedsBeforeServingAndFailsWithoutTheFile(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- start(ctx, seeded, log, lc) }()
 
-		require.Eventually(t, func() bool {
-			total, _, _ := c.products()
-			return total == 82
-		}, 20*time.Second, 50*time.Millisecond)
+		require.Eventually(t, func() bool { return strings.Contains(logs.String(), "server listening") }, 20*time.Second, 20*time.Millisecond)
+		total, _, _ := c.products()
+		require.Equal(t, 82, total)
 		cancel()
 		select {
 		case err := <-done:

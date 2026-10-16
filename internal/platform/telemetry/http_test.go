@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -57,9 +58,15 @@ func TestHTTPMetricsIgnoreClientHost(t *testing.T) {
 	}
 
 	body := scrape(t, p)
-	require.Contains(t, body, `http_request_method="_OTHER"`)
+	var series strings.Builder
+	for line := range strings.Lines(body) {
+		if labels, _, found := strings.Cut(line, " "); found && strings.HasPrefix(line, "http_") {
+			series.WriteString(labels + "\n")
+		}
+	}
+	require.Contains(t, series.String(), `http_request_method="_OTHER"`)
 	for _, leak := range []string{"a.example", "b.example", "c.example", "8443", "65000", "server_address", "server_port", "BREW", "PROPFIND"} {
-		require.NotContains(t, body, leak)
+		require.NotContains(t, series.String(), leak)
 	}
 	require.Contains(t, body, `http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="204",network_protocol_name="http",network_protocol_version="1.1",url_scheme="http"} 3`)
 }

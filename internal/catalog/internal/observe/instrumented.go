@@ -17,7 +17,7 @@ const (
 )
 
 type FileImporter interface {
-	Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error)
+	Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error)
 }
 
 type Spans interface {
@@ -49,7 +49,7 @@ func NewInstrumentedImporter(next FileImporter, spans Spans, histograms Histogra
 	return &InstrumentedImporter{next: next, spans: spans, histograms: histograms, rejected: rejected}, nil
 }
 
-func (i *InstrumentedImporter) Import(ctx context.Context, r io.Reader, fileName string) (app.ImportReport, error) {
+func (i *InstrumentedImporter) Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error) {
 	start := time.Now()
 	defer func() {
 		i.histograms.Histogram(context.WithoutCancel(ctx), importDuration, time.Since(start).Seconds())
@@ -60,7 +60,7 @@ func (i *InstrumentedImporter) Import(ctx context.Context, r io.Reader, fileName
 		importErr error
 	)
 	_ = i.spans.Span(ctx, importSpan, func(ctx context.Context) error {
-		report, importErr = i.next.Import(ctx, r, fileName)
+		report, importErr = i.next.Import(ctx, r, opts)
 		if i.rejected(importErr) {
 			return nil
 		}

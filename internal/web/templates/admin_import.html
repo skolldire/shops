@@ -2,21 +2,42 @@
 {{define "content"}}
 <p><a href="/admin/products">← Back to products</a></p>
 <h1>Import products from CSV</h1>
-{{with .Problem}}<p class="notice error" role="alert">{{.}}</p>{{end}}
-<form class="form-card" action="/admin/imports" method="post" enctype="multipart/form-data">
+{{with .Data.Problem}}<p class="notice error" role="alert">{{.}}</p>{{end}}
+{{with .Data.DuplicateOf}}<p class="notice warning" role="alert">This same file was already added to the inventory on {{.UTC.Format "2006-01-02 15:04"}} UTC, so nothing was imported. To add its units again, choose the file again and tick "Add again".</p>{{end}}
+<form class="form-card import-form" action="/admin/imports" method="post" enctype="multipart/form-data">
+<input type="hidden" name="idempotency_key" value="{{.Data.Key}}">
+<fieldset class="field choices">
+<legend>What should the file do with the stock?</legend>
+<div class="choice">
+<input id="mode-add" name="mode" type="radio" value="add" required{{if eq .Data.Mode "add"}} checked{{end}}>
+<label for="mode-add">Add to the current inventory</label>
+<p class="field-note">There are 50 and the file says 10: 60 remain. Prices, names and the other fields are replaced by the file.</p>
+</div>
+<div class="choice">
+<input id="mode-replace" name="mode" type="radio" value="replace" required>
+<label for="mode-replace">Replace the inventory</label>
+<p class="field-note">There are 50 and the file says 10: 10 remain. A product cannot go below the units reserved by pending purchases.</p>
+</div>
+</fieldset>
+{{if .Data.DuplicateOf}}
+<div class="field choice">
+<input id="allow_duplicate" name="allow_duplicate" type="checkbox" value="true" required>
+<label for="allow_duplicate">Add again</label>
+</div>
+{{end}}
 <div class="field">
 <label for="file">CSV file</label>
 <input id="file" name="file" type="file" accept=".csv,text/csv" required>
-<p class="results-summary">UTF-8. The first line must be name,sku,description,category,price,stock,weight_kg. Existing products are updated by SKU and stock is replaced, not added.</p>
+<p class="results-summary">UTF-8. The first line must be name,sku,description,category,price,stock,weight_kg. The file is applied as soon as you import it; there is no review step.</p>
 </div>
 <div class="actions">
-<button type="submit">Import</button>
+<button type="submit"><span class="when-none">Import</span><span class="when-add">Import adding</span><span class="when-replace">Import replacing</span></button>
 </div>
 </form>
-{{with .Report}}
+{{with .Data.Report}}
 <section id="import-report">
 <h2>Result for {{.File.Name}}</h2>
-<p class="notice" role="status">{{.Created}} created, {{.Updated}} updated, {{.Unchanged}} unchanged, {{.Rejected}} rejected and {{.Skipped}} empty rows skipped, out of {{.Records}} records.</p>
+<p class="notice" role="status">{{if eq .Mode "add"}}Added to the inventory{{else}}Replaced the inventory{{end}}: {{.Created}} created, {{.Updated}} updated, {{.Unchanged}} unchanged, {{.Rejected}} rejected and {{.Skipped}} empty rows skipped, out of {{.Records}} records.</p>
 <div class="table-wrap">
 <table>
 <thead>
@@ -30,7 +51,25 @@
 <p class="results-summary">{{.File.Bytes}} bytes · SHA-256 {{.File.SHA256}}</p>
 </section>
 {{end}}
-{{if .Errors}}
+{{if .Data.Changes}}
+<section id="import-changes">
+<h2>Existing products</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>SKU</th><th class="numeric">Stock before</th><th class="numeric">Stock after</th><th class="numeric">Price before</th><th class="numeric">Price after</th></tr>
+</thead>
+<tbody>
+{{range .Data.Changes}}
+<tr><td>{{.SKU}}</td><td class="numeric">{{.StockBefore}}</td><td class="numeric">{{.StockAfter}}</td><td class="numeric">${{money .PriceBefore}}</td><td class="numeric">${{money .PriceAfter}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{if .Data.MoreChanges}}<p class="results-summary">Showing the first {{len .Data.Changes}} existing products. {{.Data.MoreChanges}} more are not shown; the API returns all of them.</p>{{end}}
+</section>
+{{end}}
+{{if .Data.Errors}}
 <section id="import-errors">
 <h2>Rejected rows</h2>
 <div class="table-wrap">
@@ -39,13 +78,13 @@
 <tr><th class="numeric">Line</th><th>SKU</th><th>Field</th><th>Code</th><th>Message</th></tr>
 </thead>
 <tbody>
-{{range .Errors}}
+{{range .Data.Errors}}
 <tr><td class="numeric">{{.Line}}</td><td>{{.SKU}}</td><td>{{.Field}}</td><td>{{.Code}}</td><td>{{.Message}}</td></tr>
 {{end}}
 </tbody>
 </table>
 </div>
-{{if .More}}<p class="results-summary">Showing the first {{len .Errors}} errors. {{.More}} more are not shown; the API returns all of them.</p>{{end}}
+{{if .Data.More}}<p class="results-summary">Showing the first {{len .Data.Errors}} errors. {{.Data.More}} more are not shown; the API returns all of them.</p>{{end}}
 </section>
 {{end}}
 {{end}}

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/app/apptest"
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/catalog/internal/observe"
 	"github.com/skolldire/shops/internal/platform/logger"
@@ -73,18 +74,20 @@ type flakyStore struct {
 	failSKU string
 }
 
-func (f flakyStore) Upsert(_ context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
+func (flakyStore) LockExisting(context.Context, []string) error { return nil }
+
+func (f flakyStore) Upsert(_ context.Context, _ domain.ImportMode, products []domain.Product, _ string) (app.UpsertResult, error) {
 	if len(products) > 1 {
-		return nil, errors.New("batch exploded")
+		return app.UpsertResult{}, errors.New("batch exploded")
 	}
 	out := map[string]app.UpsertOutcome{}
 	for _, p := range products {
 		if p.SKU == f.failSKU {
-			return nil, errors.New("row exploded")
+			return app.UpsertResult{}, errors.New("row exploded")
 		}
 		out[p.SKU] = app.OutcomeCreated
 	}
-	return out, nil
+	return app.UpsertResult{Outcomes: out}, nil
 }
 
 func importRow(t *testing.T, line int, sku string) app.ImportRow {
@@ -104,12 +107,12 @@ func TestABatchRecoveryIsLoggedOnceAndEachRejectedRowOnce(t *testing.T) {
 	counters := &fakeCounters{}
 	recorder, err := observe.NewImportRecorder(counters)
 	require.NoError(t, err)
-	importer, err := app.NewImporter(flakyStore{failSKU: "B-1"}, recorder, reporter)
+	importer, err := app.NewImporter(flakyStore{failSKU: "B-1"}, apptest.NewLog(), apptest.Tx{}, recorder, reporter)
 	require.NoError(t, err)
 
-	report, err := importer.Import(t.Context(), app.ImportFile{Name: "products.csv"}, []app.ImportRow{
+	report, err := importer.Import(t.Context(), app.ImportRequest{File: app.ImportFile{Name: "products.csv"}, Mode: domain.ImportReplace, Rows: []app.ImportRow{
 		importRow(t, 2, "A-1"), importRow(t, 3, "B-1"), importRow(t, 4, "C-1"),
-	})
+	}})
 
 	require.NoError(t, err)
 	require.Equal(t, []int{2, 1}, []int{report.Created, report.Rejected})

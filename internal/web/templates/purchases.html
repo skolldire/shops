@@ -1,0 +1,36 @@
+{{define "title"}}Purchases{{end}}
+{{define "content"}}
+<div class="page-header">
+<h1>Your purchases</h1>
+</div>
+{{if .Data.Error}}
+<p role="alert">{{.Data.Error}}</p>
+{{else if .Data.Page.Items}}
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>Date</th><th>Status</th><th class="numeric">Total</th><th>Details</th></tr>
+</thead>
+<tbody>
+{{range .Data.Page.Items}}
+<tr>
+<td>{{.CreatedAt.UTC.Format "2006-01-02 15:04"}} UTC</td>
+<td><span class="status status-{{.Status}}">{{template "status" .Status}}</span></td>
+<td class="numeric">${{money .Total}}</td>
+<td><a href="/purchases/{{.ID}}">View</a></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{if or .Data.PrevURL .Data.NextURL}}
+<nav class="pagination" aria-label="Pagination">
+{{if .Data.PrevURL}}<a class="button secondary" href="{{.Data.PrevURL}}">Previous</a>{{end}}
+<span>Page {{.Data.Page.Page}}</span>
+{{if .Data.NextURL}}<a class="button secondary" href="{{.Data.NextURL}}">Next</a>{{end}}
+</nav>
+{{end}}
+{{else}}
+<p class="results-summary">You have no purchases yet.</p>
+{{end}}
+{{end}}

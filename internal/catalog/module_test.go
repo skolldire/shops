@@ -12,17 +12,69 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog/internal/app"
+	"github.com/skolldire/shops/internal/catalog/internal/app/apptest"
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
 	"github.com/skolldire/shops/internal/platform/validation"
 )
 
-const productID = "2b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
+const (
+	productID = "2b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
+	missingID = "9b6f0c3e-8d4a-4f6b-9e2a-1c0d5e7f9a3b"
+)
 
 type memoryRepo struct {
-	products map[string]domain.Product
-	search   domain.Search
+	products  map[string]domain.Product
+	search    domain.Search
+	reserved  []domain.StockRequest
+	settled   []domain.StockRequest
+	seedLocks int
+	reference string
+	movements []domain.Movement
+}
+
+func (m *memoryRepo) ReserveStock(_ context.Context, items []domain.StockRequest, reference string) ([]domain.StockLine, error) {
+	m.reference = reference
+	lines := make([]domain.StockLine, 0, len(items))
+	for _, it := range items {
+		p, ok := m.products[it.ProductID]
+		switch {
+		case !ok:
+			return nil, &app.ProductUnavailableError{ProductID: it.ProductID}
+		case p.Stock < it.Quantity:
+			return nil, &app.InsufficientStockError{ProductID: it.ProductID, Available: p.Stock}
+		}
+		m.reserved = append(m.reserved, it)
+		lines = append(lines, domain.StockLine{ProductID: p.ID, SKU: p.SKU, Name: p.Name, Price: p.Price, Quantity: it.Quantity})
+	}
+	return lines, nil
+}
+
+func (m *memoryRepo) ReleaseStock(ctx context.Context, items []domain.StockRequest, reference string) error {
+	return m.settle(items, reference)
+}
+
+func (m *memoryRepo) CommitStock(ctx context.Context, items []domain.StockRequest, reference string) error {
+	return m.settle(items, reference)
+}
+
+func (m *memoryRepo) settle(items []domain.StockRequest, reference string) error {
+	m.reference = reference
+	for _, it := range items {
+		if it.Quantity > m.products[it.ProductID].Stock {
+			return &app.StockInvariantError{ProductID: it.ProductID, Quantity: it.Quantity}
+		}
+	}
+	m.settled = append(m.settled, items...)
+	return nil
+}
+
+func (m *memoryRepo) Movements(_ context.Context, productID string, _ domain.Paging) ([]domain.Movement, int, error) {
+	if _, ok := m.products[productID]; !ok {
+		return nil, 0, app.ErrNotFound
+	}
+	return m.movements, len(m.movements), nil
 }
 
 func (m *memoryRepo) Create(_ context.Context, p domain.Product) (domain.Product, error) {
@@ -89,9 +141,11 @@ func testDeps(log logger.Service) Deps {
 	return Deps{Log: log, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(), Import: ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}}
 }
 
-func (m *memoryRepo) Upsert(ctx context.Context, products []domain.Product) (map[string]app.UpsertOutcome, error) {
+func (m *memoryRepo) LockExisting(context.Context, []string) error { return nil }
+
+func (m *memoryRepo) Upsert(ctx context.Context, _ domain.ImportMode, products []domain.Product, _ string) (app.UpsertResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return app.UpsertResult{}, err
 	}
 	out := make(map[string]app.UpsertOutcome, len(products))
 	for _, p := range products {
@@ -99,7 +153,12 @@ func (m *memoryRepo) Upsert(ctx context.Context, products []domain.Product) (map
 		p.ID, p.Version = p.SKU, 1
 		m.products[p.ID] = p
 	}
-	return out, nil
+	return app.UpsertResult{Outcomes: out}, nil
+}
+
+func (m *memoryRepo) LockSeed(ctx context.Context) (context.Context, func(), error) {
+	m.seedLocks++
+	return ctx, func() {}, nil
 }
 
 func (m *memoryRepo) HasProducts(context.Context) (bool, error) {
@@ -111,7 +170,7 @@ func newTestModule(t *testing.T) (*Module, *memoryRepo) {
 	log, err := logger.New(logger.Config{Level: "error"}, io.Discard)
 	require.NoError(t, err)
 	repo := &memoryRepo{products: map[string]domain.Product{}}
-	m, err := newModule(repo, testDeps(log))
+	m, err := newModule(repo, apptest.NewLog(), apptest.Tx{}, testDeps(log))
 	require.NoError(t, err)
 	return m, repo
 }
@@ -135,7 +194,7 @@ func TestModuleLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Product{
 		ID: productID, SKU: "RS-001", Name: "Running Shoes", Category: "Sports",
-		Price: *dec("29.99"), Stock: 10, WeightKg: *dec("0.850"), Version: 1,
+		Price: *dec("29.99"), Stock: 10, Available: 10, WeightKg: *dec("0.850"), Version: 1,
 	}, created)
 
 	got, err := m.Get(ctx, productID)
@@ -234,7 +293,59 @@ func TestNewModuleRequiresDependencies(t *testing.T) {
 	} {
 		deps := testDeps(log)
 		mutate(&deps)
-		_, err = newModule(&memoryRepo{}, deps)
+		_, err = newModule(&memoryRepo{}, apptest.NewLog(), apptest.Tx{}, deps)
 		require.Error(t, err, name)
 	}
+}
+
+func TestModuleReservationsTranslateErrors(t *testing.T) {
+	m, repo := newTestModule(t)
+	ctx := context.Background()
+	p, err := m.Create(ctx, validCreate())
+	require.NoError(t, err)
+
+	lines, err := m.ReserveStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 2}}, "purchase-1")
+	require.NoError(t, err)
+	require.Equal(t, []StockLine{{ProductID: p.ID, SKU: p.SKU, Name: p.Name, Price: p.Price, Quantity: 2}}, lines)
+	_, err = m.ReserveStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 1000}}, "purchase-2")
+	var short *InsufficientStockError
+	require.ErrorAs(t, err, &short)
+	_, err = m.ReserveStock(ctx, []StockRequest{{ProductID: missingID, Quantity: 1}}, "purchase-3")
+	require.ErrorIs(t, err, ErrProductUnavailable)
+
+	require.NoError(t, m.ReleaseStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 2}}, "purchase-1"))
+	require.NoError(t, m.CommitStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 2}}, "purchase-4"))
+	require.Equal(t, "purchase-4", repo.reference)
+	require.Len(t, repo.settled, 2)
+
+	err = m.CommitStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 1000}}, "purchase-5")
+	require.ErrorIs(t, err, ErrStockInvariant)
+	require.EqualError(t, err, "catalog: the reservation does not match the stock: product "+p.ID+" has fewer than 1000 reserved units to settle")
+	require.ErrorIs(t, m.ReleaseStock(ctx, []StockRequest{{ProductID: p.ID, Quantity: 0}}, "purchase-6"), ErrInvalidStockRequest)
+}
+
+func TestModuleMovements(t *testing.T) {
+	m, repo := newTestModule(t)
+	p, err := m.Create(context.Background(), validCreate())
+	require.NoError(t, err)
+	repo.movements = []domain.Movement{{ID: 1, ProductID: p.ID, Delta: 10, StockAfter: 10, Reason: "initial_stock"}}
+
+	page, err := m.Movements(context.Background(), p.ID, Paging{})
+	require.NoError(t, err)
+	require.Equal(t, 1, page.Page)
+	require.Equal(t, 20, page.PageSize)
+	require.Equal(t, []Movement{{ID: 1, ProductID: p.ID, Delta: 10, StockAfter: 10, Reason: "initial_stock"}}, page.Items)
+
+	_, err = m.Movements(context.Background(), missingID, Paging{})
+	require.ErrorIs(t, err, ErrNotFound)
+
+	_, err = m.Movements(context.Background(), p.ID, Paging{PageSize: 101})
+	var errs validation.Errors
+	require.ErrorAs(t, err, &errs)
+
+	paging, err := ParsePaging("2", "")
+	require.NoError(t, err)
+	require.Equal(t, Paging{Page: 2, PageSize: 20}, paging)
+	_, err = ParsePaging("x", "0")
+	require.ErrorAs(t, err, &errs)
 }

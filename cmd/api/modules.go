@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skolldire/shops/internal/catalog"
+	"github.com/skolldire/shops/internal/ordering"
+	"github.com/skolldire/shops/internal/payment"
 	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/health"
 	"github.com/skolldire/shops/internal/platform/httpx"
@@ -22,9 +24,10 @@ const (
 )
 
 type app struct {
-	api     http.Handler
-	metrics http.Handler
-	catalog *catalog.Module
+	api      http.Handler
+	metrics  http.Handler
+	catalog  *catalog.Module
+	ordering *ordering.Module
 }
 
 func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *telemetry.Provider) (*app, error) {
@@ -43,8 +46,27 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	if err != nil {
 		return nil, err
 	}
+	payments, err := payment.NewModule(pool)
+	if err != nil {
+		return nil, err
+	}
+	orders, err := ordering.NewModule(ordering.Deps{
+		Pool: pool, Catalog: products, Payments: payments, Log: log, Metrics: tel, Users: cfg.Demo.Users,
+		Budgets: ordering.Budgets{
+			Reserve: cfg.Checkout.ReserveTimeout, Charge: cfg.Checkout.ChargeTimeout,
+			Finalize: cfg.Checkout.FinalizeTimeout,
+		},
+		Recovery: ordering.RecoveryConfig{
+			Interval: cfg.Recovery.Interval, BatchSize: cfg.Recovery.BatchSize, MinAge: cfg.Recovery.MinAge,
+			Lease: cfg.Recovery.Lease, DBTimeout: cfg.Recovery.DBTimeout, BaseBackoff: cfg.Recovery.BaseBackoff, MaxBackoff: cfg.Recovery.MaxBackoff,
+			StuckAfterAttempts: cfg.Recovery.StuckAfterAttempts, MaxPendingAge: cfg.Checkout.MaxPendingAge,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
 	importBodyBytes := cfg.Import.MaxBytes + multipartOverheadBytes
-	ui, err := web.New(web.Deps{Catalog: products, Log: log, MaxImportBodyBytes: importBodyBytes})
+	ui, err := web.New(web.Deps{Catalog: products, Ordering: orders, Users: cfg.Demo.Users, Log: log, MaxImportBodyBytes: importBodyBytes, PublicOrigins: cfg.HTTP.PublicOrigins})
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +80,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 		api.Group(func(r chi.Router) {
 			r.Use(httpx.MaxBodyBytes(maxRequestBytes))
 			products.RegisterRoutes(r)
+			orders.RegisterRoutes(r)
 		})
 		api.Group(func(r chi.Router) {
 			r.Use(httpx.MaxBodyBytes(importBodyBytes))
@@ -69,7 +92,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	metrics := http.NewServeMux()
 	metrics.Handle("GET /metrics", tel.MetricsHandler())
 
-	return &app{api: tel.HTTPMiddleware()(router), metrics: metrics, catalog: products}, nil
+	return &app{api: tel.HTTPMiddleware()(router), metrics: metrics, catalog: products, ordering: orders}, nil
 }
 
 func contextFields(ctx context.Context) map[string]any {

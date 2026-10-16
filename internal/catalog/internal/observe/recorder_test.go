@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/skolldire/shops/internal/catalog/internal/app"
 	"github.com/skolldire/shops/internal/catalog/internal/observe"
 	"github.com/skolldire/shops/internal/platform/logger"
 	"github.com/skolldire/shops/internal/platform/telemetry"
@@ -31,7 +32,7 @@ func TestImportRecorderExposesRowsByOutcomeAndDuration(t *testing.T) {
 	recorder.RecordRows(t.Context(), "created", 3)
 	instrumented, err := observe.NewInstrumentedImporter(&fakeFileImporter{}, provider, provider, rejected)
 	require.NoError(t, err)
-	_, err = instrumented.Import(t.Context(), strings.NewReader("name\n"), "products.csv")
+	_, err = instrumented.Import(t.Context(), strings.NewReader("name\n"), app.ImportOptions{FileName: "products.csv"})
 	require.NoError(t, err)
 
 	rec := httptest.NewRecorder()

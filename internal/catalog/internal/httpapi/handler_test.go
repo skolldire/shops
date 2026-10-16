@@ -30,7 +30,7 @@ var stamp = time.Date(2026, 10, 9, 17, 0, 0, 0, time.UTC)
 func sample() domain.Product {
 	return domain.Product{
 		ID: id, SKU: "RS-001", Name: "Running Shoes", Description: "Light", Category: "Sports",
-		Price: decimal.RequireFromString("29.9"), Stock: 10, WeightKg: decimal.RequireFromString("0.85"),
+		Price: decimal.RequireFromString("29.9"), Stock: 10, Reserved: 4, WeightKg: decimal.RequireFromString("0.85"),
 		Version: 3, CreatedAt: stamp, UpdatedAt: stamp.Add(5 * time.Minute),
 	}
 }
@@ -135,7 +135,7 @@ func TestCreate(t *testing.T) {
 	require.Equal(t, "/api/v1/products/"+id, rec.Header().Get("Location"))
 	require.Equal(t, `"1"`, rec.Header().Get("ETag"))
 	require.JSONEq(t, `{"id":"`+id+`","sku":"RS-001","name":"Running Shoes","description":"Light","category":"Sports",
-		"price":"29.90","stock":10,"weight_kg":"0.850","version":1,
+		"price":"29.90","stock":10,"reserved":4,"available":6,"weight_kg":"0.850","version":1,
 		"created_at":"2026-10-09T17:00:00Z","updated_at":"2026-10-09T17:05:00Z"}`, rec.Body.String())
 	require.Equal(t, "29.99", svc.created.Price.String())
 	require.Equal(t, "0.85", svc.created.WeightKg.String())
@@ -152,6 +152,18 @@ func TestCreateDecimalsNeverPassThroughFloat(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code)
 	require.Equal(t, "1234567890123.123456", svc.created.Price.String())
 	require.Equal(t, "123456.789", svc.created.WeightKg.String())
+}
+
+func TestUpdateBelowReservedNamesTheStockField(t *testing.T) {
+	h, _ := newServer(t, &fakeService{err: &app.BelowReservedError{Reserved: 3}})
+
+	rec := do(h, http.MethodPatch, "/api/v1/products/"+id, `{"stock":1}`, "If-Match", `"3"`)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	p := decodeProblem(t, rec)
+	require.Equal(t, "below_reserved", p.Code)
+	require.Equal(t, map[string]string{"stock": "below_reserved"}, fieldCodes(p))
+	require.Contains(t, rec.Body.String(), "must be at least 3, the units reserved by pending purchases")
 }
 
 func TestGetReturnsETag(t *testing.T) {
@@ -256,6 +268,7 @@ func TestErrorTable(t *testing.T) {
 		"not found":               {app.ErrNotFound, http.MethodGet, "/api/v1/products/" + id, "", nil, 404, "not_found"},
 		"sku taken":               {app.ErrSKUTaken, http.MethodPost, "/api/v1/products", validBody, nil, 409, "sku_taken"},
 		"version conflict patch":  {app.ErrVersionConflict, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, []string{"If-Match", `"1"`}, 412, "version_conflict"},
+		"below reserved patch":    {&app.BelowReservedError{Reserved: 3}, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, []string{"If-Match", `"3"`}, 409, "below_reserved"},
 		"version conflict delete": {app.ErrVersionConflict, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", `"1"`}, 412, "version_conflict"},
 		"patch without if-match":  {nil, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, nil, 428, "precondition_required"},
 		"delete without if-match": {nil, http.MethodDelete, "/api/v1/products/" + id, "", nil, 428, "precondition_required"},
