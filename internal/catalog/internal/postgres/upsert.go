@@ -45,6 +45,8 @@ WHERE products.status = 'ACTIVE'
           (EXCLUDED.name, EXCLUDED.description, EXCLUDED.category, EXCLUDED.price, EXCLUDED.weight_kg))
 RETURNING sku, (xmax = 0), COALESCE(old.stock, 0), new.stock, COALESCE(old.price::text, '0'), new.price::text`
 
+const lockExistingByID = `SELECT id FROM products WHERE sku = ANY($1) ORDER BY id FOR UPDATE`
+
 const deletedSKUs = `SELECT sku FROM products WHERE sku = ANY($1) AND status = 'DELETED'`
 
 const belowReservedSKUs = `SELECT p.sku FROM products p
@@ -72,6 +74,9 @@ func (r *Repository) Upsert(ctx context.Context, mode domain.ImportMode, product
 		skus := make([]string, len(products))
 		for i, p := range products {
 			skus[i] = p.SKU
+		}
+		if err := lockExisting(ctx, q, skus); err != nil {
+			return err
 		}
 		if err := markDeleted(ctx, q, skus, outcomes); err != nil {
 			return err
@@ -145,6 +150,20 @@ func (r *Repository) Upsert(ctx context.Context, mode domain.ImportMode, product
 		return app.UpsertResult{}, err
 	}
 	return app.UpsertResult{Outcomes: outcomes, Changes: changes}, nil
+}
+
+func (r *Repository) LockExisting(ctx context.Context, skus []string) error {
+	return lockExisting(ctx, database.Q(ctx, r.pool), skus)
+}
+
+func lockExisting(ctx context.Context, q database.Querier, skus []string) error {
+	if len(skus) == 0 {
+		return nil
+	}
+	if _, err := q.Exec(ctx, lockExistingByID, skus); err != nil {
+		return fmt.Errorf("catalog: lock the existing products: %w", err)
+	}
+	return nil
 }
 
 func unchangedValues(ctx context.Context, q database.Querier, skus []string, outcomes map[string]app.UpsertOutcome, changes map[string]domain.ImportChange) error {

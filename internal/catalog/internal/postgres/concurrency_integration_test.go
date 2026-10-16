@@ -72,7 +72,7 @@ func async[T any](fn func() (T, error)) func() (T, error) {
 }
 
 const (
-	importStatement  = "INSERT INTO products"
+	importStatement  = "ORDER BY id FOR UPDATE"
 	reserveStatement = "SET reserved = reserved +"
 	releaseStatement = "SET reserved = reserved -"
 	commitStatement  = "SET stock = stock - $2, reserved = reserved - $2"

@@ -29,9 +29,18 @@ type fakeStore struct {
 	references []string
 	modes      []domain.ImportMode
 	onBatch    func(applied int)
+	calls      []string
+	locked     [][]string
+}
+
+func (f *fakeStore) LockExisting(_ context.Context, skus []string) error {
+	f.calls = append(f.calls, "lock")
+	f.locked = append(f.locked, skus)
+	return nil
 }
 
 func (f *fakeStore) Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (app.UpsertResult, error) {
+	f.calls = append(f.calls, "upsert")
 	f.references = append(f.references, reference)
 	f.modes = append(f.modes, mode)
 	skus := make([]string, len(products))
@@ -610,6 +619,8 @@ func (f fixedStore) Upsert(context.Context, domain.ImportMode, []domain.Product,
 	return f.result, nil
 }
 
+func (fixedStore) LockExisting(context.Context, []string) error { return nil }
+
 func TestNewImporterRequiresItsDependencies(t *testing.T) {
 	log, tx := apptest.NewLog(), apptest.Tx{}
 	_, err := app.NewImporter(nil, log, tx, &fakeRecorder{}, &fakeFailures{})
@@ -629,4 +640,51 @@ func product(t *testing.T, sku, name, price string, stock int) domain.Product {
 	d, err := domain.ParseDecimal(price)
 	require.NoError(t, err)
 	return domain.Product{SKU: sku, Name: name, Price: d, Stock: stock}
+}
+
+func largeFile(rows int) string {
+	var body strings.Builder
+	body.WriteString(csvHeader)
+	for i := rows; i >= 1; i-- {
+		fmt.Fprintf(&body, "Item,N-%04d,,A,5,1,1\n", i)
+	}
+	return body.String()
+}
+
+func TestAnAddLocksEveryExistingProductOnceBeforeItsFirstBatch(t *testing.T) {
+	store := &fakeStore{}
+	importer, _ := newImporter(t, store, &fakeRecorder{})
+	_, err := importer.Import(context.Background(), keyed(domain.ImportAdd, importKey, "h", largeFile(600)+"Bad,,,A,5,1,1\n"))
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"lock", "upsert", "upsert"}, store.calls, "one lock for the whole file, then the batches")
+	require.Len(t, store.locked[0], 600, "every valid row, never a rejected one")
+	require.True(t, sort.StringsAreSorted(store.locked[0]))
+	require.Equal(t, append(append([]string{}, store.batches[0]...), store.batches[1]...), store.locked[0], "the batches follow the order of the lock")
+}
+
+func TestAReplaceLocksNothingBeyondItsBatches(t *testing.T) {
+	store := &fakeStore{}
+	importer, _ := newImporter(t, store, &fakeRecorder{})
+	_, err := importer.Import(context.Background(), keyed(domain.ImportReplace, importKey, "h", largeFile(600)))
+	require.NoError(t, err)
+	require.Equal(t, []string{"upsert", "upsert"}, store.calls, "each batch commits on its own and locks its rows inside the upsert")
+}
+
+func TestTheBatchesInsertTheSKUsInOneAscendingOrder(t *testing.T) {
+	for _, mode := range []domain.ImportMode{domain.ImportAdd, domain.ImportReplace} {
+		t.Run(string(mode), func(t *testing.T) {
+			store := &fakeStore{}
+			importer, _ := newImporter(t, store, &fakeRecorder{})
+			_, err := importer.Import(context.Background(), keyed(mode, importKey, "h", largeFile(1200)))
+			require.NoError(t, err)
+			var all []string
+			for _, batch := range store.batches {
+				all = append(all, batch...)
+			}
+			require.Len(t, store.batches, 3)
+			require.Len(t, all, 1200)
+			require.True(t, sort.StringsAreSorted(all), "two imports insert new skus in the same global order")
+		})
+	}
 }

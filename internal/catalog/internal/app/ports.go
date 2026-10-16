@@ -12,6 +12,7 @@ type Tx interface {
 
 type ProductUpserter interface {
 	Upsert(ctx context.Context, mode domain.ImportMode, products []domain.Product, reference string) (UpsertResult, error)
+	LockExisting(ctx context.Context, skus []string) error
 }
 
 type ImportFailureReporter interface {

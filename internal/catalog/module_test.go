@@ -141,6 +141,8 @@ func testDeps(log logger.Service) Deps {
 	return Deps{Log: log, Metrics: telemetry.Noop(), Tracer: telemetry.Noop(), Import: ImportLimits{MaxBytes: 1 << 20, MaxRows: 100}}
 }
 
+func (m *memoryRepo) LockExisting(context.Context, []string) error { return nil }
+
 func (m *memoryRepo) Upsert(ctx context.Context, _ domain.ImportMode, products []domain.Product, _ string) (app.UpsertResult, error) {
 	if err := ctx.Err(); err != nil {
 		return app.UpsertResult{}, err

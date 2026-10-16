@@ -157,7 +157,7 @@ func TestUpsert(t *testing.T) {
 		require.Eventually(t, func() bool {
 			var waiting int
 			err := f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
-				WHERE wait_event_type = 'Lock' AND query LIKE '%INSERT INTO products%' AND pid <> pg_backend_pid()`).Scan(&waiting)
+				WHERE wait_event_type = 'Lock' AND query LIKE '%ORDER BY id FOR UPDATE%' AND pid <> pg_backend_pid()`).Scan(&waiting)
 			return err == nil && waiting == 1
 		}, 10*time.Second, 20*time.Millisecond, "the upsert never waited for the row being deleted")
 		require.NoError(t, deletion.Commit(ctx))

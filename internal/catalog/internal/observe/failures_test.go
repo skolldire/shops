@@ -74,6 +74,8 @@ type flakyStore struct {
 	failSKU string
 }
 
+func (flakyStore) LockExisting(context.Context, []string) error { return nil }
+
 func (f flakyStore) Upsert(_ context.Context, _ domain.ImportMode, products []domain.Product, _ string) (app.UpsertResult, error) {
 	if len(products) > 1 {
 		return app.UpsertResult{}, errors.New("batch exploded")

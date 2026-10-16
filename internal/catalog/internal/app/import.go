@@ -198,6 +198,9 @@ func (i *Importer) importAdd(ctx context.Context, req ImportRequest) (ImportRepo
 		if err := i.refuseDuplicate(ctx, rec, req.AllowDuplicate); err != nil {
 			return err
 		}
+		if err := i.store.LockExisting(ctx, skus(valid)); err != nil {
+			return err
+		}
 		report = prepared
 		report.ID = rec.ID
 		for batch := range slices.Chunk(valid, importBatchSize) {
@@ -271,6 +274,14 @@ func (i *Importer) applyAll(ctx context.Context, id string, batch []importRow, r
 		count(report, row, result)
 	}
 	return nil
+}
+
+func skus(rows []importRow) []string {
+	out := make([]string, len(rows))
+	for index, row := range rows {
+		out[index] = row.sku
+	}
+	return out
 }
 
 func products(batch []importRow) []domain.Product {

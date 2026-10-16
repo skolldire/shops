@@ -171,7 +171,7 @@ func (r replicas) waitFor(t *testing.T, query string, want int) {
 	}, 10*time.Second, 10*time.Millisecond, query)
 }
 
-const blockedImport = `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%INSERT INTO products%'`
+const blockedImport = `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%ORDER BY id FOR UPDATE%'`
 
 func TestAnInterruptedReplaceIsResumedByUploadingTheFileAgain(t *testing.T) {
 	r := twoReplicas(t)
