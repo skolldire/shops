@@ -252,6 +252,20 @@ func (c cluster) status(t *testing.T, id string) (string, string) {
 	return status, reason
 }
 
+type recovered struct {
+	report ordering.RecoveryReport
+	err    error
+}
+
+func recoverAsync(ctx context.Context, r replica) <-chan recovered {
+	out := make(chan recovered, 1)
+	go func() {
+		report, err := r.orders.RecoverOnce(ctx)
+		out <- recovered{report: report, err: err}
+	}()
+	return out
+}
+
 func TestEachPurchaseIsChargedUnderItsOwnRenewedLease(t *testing.T) {
 	c := newCluster(t, 10)
 	ctx := context.Background()
@@ -269,12 +283,7 @@ func TestEachPurchaseIsChargedUnderItsOwnRenewedLease(t *testing.T) {
 			once.Do(func() { close(started); <-release })
 		}
 	}
-	reportA := make(chan ordering.RecoveryReport, 1)
-	go func() {
-		report, err := c.a.orders.RecoverOnce(ctx)
-		require.NoError(t, err)
-		reportA <- report
-	}()
+	reportA := recoverAsync(ctx, c.a)
 	<-started
 	require.Equal(t, 2, c.count(t, `SELECT count(*) FROM purchases WHERE lease_owner IS NOT NULL`), "worker A claimed both")
 	c.exec(t, false, `UPDATE purchases SET lease_until = now() - interval '1 second' WHERE id = $1::uuid`, ids[1])
@@ -283,7 +292,9 @@ func TestEachPurchaseIsChargedUnderItsOwnRenewedLease(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, reportB.Confirmed, "worker B took the purchase whose lease expired")
 	close(release)
-	a := <-reportA
+	gotA := <-reportA
+	require.NoError(t, gotA.err)
+	a := gotA.report
 
 	require.Equal(t, 1, a.Confirmed)
 	require.Equal(t, 1, a.Skipped, "worker A's renewal found the purchase taken and did not charge it")
@@ -463,19 +474,16 @@ func TestTwoWorkersResolvingTheSamePurchaseApplyOneEffect(t *testing.T) {
 			<-release
 		}
 	}
-	done := make(chan ordering.RecoveryReport, 1)
-	go func() {
-		report, err := c.a.orders.RecoverOnce(ctx)
-		require.NoError(t, err)
-		done <- report
-	}()
+	done := recoverAsync(ctx, c.a)
 	<-inLookup
 	c.exec(t, false, `UPDATE purchases SET lease_until = now() - interval '1 second' WHERE id = $1::uuid`, p.ID)
 	reportB, err := c.b.orders.RecoverOnce(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, reportB.Voided)
 	close(release)
-	reportA := <-done
+	gotA := <-done
+	require.NoError(t, gotA.err)
+	reportA := gotA.report
 
 	require.Zero(t, reportA.Voided, "worker A's finalization found the purchase settled")
 	require.Equal(t, 1, reportA.Skipped)
@@ -551,14 +559,10 @@ func TestTwoReplicasCheckingOutAndRecoveringChargeAndSettleEachPurchaseOnce(t *t
 	require.Positive(t, pending)
 	c.age(t, "1 minute")
 
-	var recovered sync.WaitGroup
-	for _, r := range []replica{c.a, c.b} {
-		recovered.Go(func() {
-			_, err := r.orders.RecoverOnce(ctx)
-			require.NoError(t, err)
-		})
+	results := []<-chan recovered{recoverAsync(ctx, c.a), recoverAsync(ctx, c.b)}
+	for _, result := range results {
+		require.NoError(t, (<-result).err)
 	}
-	recovered.Wait()
 
 	require.Zero(t, c.count(t, `SELECT count(*) FROM purchases WHERE status = 'PENDING'`))
 	require.Zero(t, c.count(t, `

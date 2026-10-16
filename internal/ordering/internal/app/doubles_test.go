@@ -291,14 +291,15 @@ func (w *world) Finish(ctx context.Context, id domain.ID, o domain.Outcome) (boo
 }
 
 func (w *world) Reserve(ctx context.Context, items []domain.Quantity, _ string) ([]domain.ReservedLine, error) {
-	if w.reserveErr != nil {
-		return nil, w.reserveErr
-	}
 	var (
 		lines []domain.ReservedLine
 		err   error
 	)
 	w.locked(ctx, func() {
+		if w.reserveErr != nil {
+			err = w.reserveErr
+			return
+		}
 		for _, it := range items {
 			p, ok := w.state.stock[it.ProductID]
 			switch {

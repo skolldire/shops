@@ -130,7 +130,17 @@ func (m *Module) CheckoutCart(ctx context.Context, userID, idempotencyKey, payme
 	if err != nil {
 		return CheckoutResult{}, publicError(err)
 	}
-	return CheckoutResult{Purchase: fromPurchase(res.Purchase), Kind: ResultKind(res.Kind)}, nil
+	return CheckoutResult{Purchase: fromPurchase(res.Purchase), Kind: fromKind(res.Kind)}, nil
+}
+
+func fromKind(k app.ResultKind) ResultKind {
+	switch k {
+	case app.Replayed:
+		return Replayed
+	case app.InProgress:
+		return InProgress
+	}
+	return Created
 }
 
 func (m *Module) Purchase(ctx context.Context, userID, id string) (Purchase, error) {
