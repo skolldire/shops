@@ -63,7 +63,8 @@ func TestCheckoutCountsOneOutcomeAndLogsOneLineWithoutTheToken(t *testing.T) {
 	out := lines(logs)
 	require.Len(t, out, 1)
 	require.Contains(t, out[0], `"purchase_id":"p-1"`)
-	require.Contains(t, out[0], `"user_id":"alice"`)
+	require.NotContains(t, logs.String(), "alice")
+	require.NotContains(t, logs.String(), "user_id")
 	require.Contains(t, out[0], `"status":"CONFIRMED"`)
 	require.NotContains(t, logs.String(), "pm_secret_token_value")
 }
@@ -84,6 +85,8 @@ func TestPendingCheckoutLogsItsCauseOnceAsAWarning(t *testing.T) {
 	require.Contains(t, out[0], `"severity":"WARN"`)
 	require.Contains(t, out[0], `"cause":"ordering: charge: timeout"`)
 	require.NotContains(t, out[0], "pm_approved")
+	require.NotContains(t, out[0], "bob")
+	require.NotContains(t, out[0], "user_id")
 }
 
 func TestEveryRecoverySeriesExistsFromTheStart(t *testing.T) {

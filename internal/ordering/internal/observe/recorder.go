@@ -55,7 +55,7 @@ func (r *CheckoutRecorder) Checkout(ctx context.Context, outcome string, p *doma
 	}
 	fields := map[string]any{
 		"component": component, "outcome": outcome,
-		"purchase_id": string(p.ID), "user_id": p.UserID, "status": string(p.Status),
+		"purchase_id": string(p.ID), "status": string(p.Status),
 	}
 	if cause != nil {
 		fields["cause"] = cause.Error()
