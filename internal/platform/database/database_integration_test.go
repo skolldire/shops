@@ -181,5 +181,5 @@ func TestClosePoolWaitsForConnectionsWithinItsDeadline(t *testing.T) {
 
 	conn.Release()
 	require.NoError(t, database.ClosePool(ctx, pool))
-	require.Error(t, pool.Ping(ctx))
+	require.ErrorContains(t, pool.Ping(ctx), "closed pool", "the pool itself is closed, not merely unreachable")
 }
