@@ -19,7 +19,7 @@ var (
 	ErrProductUnavailable    = errors.New("ordering: product unavailable")
 	ErrInsufficientStock     = errors.New("ordering: insufficient stock")
 	ErrPriceChanged          = errors.New("ordering: price changed")
-	ErrCartFull              = errors.New("ordering: the cart already has 50 lines")
+	ErrCartFull              = fmt.Errorf("ordering: the cart already has %d lines", domain.MaxCartLines)
 	ErrBusy                  = errors.New("ordering: the database is busy, try again")
 	ErrPaymentOutcomeUnknown = errors.New("ordering: the outcome of the payment is unknown")
 	ErrPaymentUnavailable    = errors.New("ordering: the payment provider is unavailable")

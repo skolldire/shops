@@ -2,6 +2,7 @@ package ordering
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -17,7 +18,7 @@ var (
 	ErrProductUnavailable    = errors.New("ordering: product unavailable")
 	ErrInsufficientStock     = errors.New("ordering: insufficient stock")
 	ErrPriceChanged          = errors.New("ordering: price changed")
-	ErrCartFull              = errors.New("ordering: the cart already has 50 lines")
+	ErrCartFull              = fmt.Errorf("ordering: the cart already has %d lines", MaxCartLines)
 	ErrTryAgain              = errors.New("ordering: the database is busy, try again")
 )
 

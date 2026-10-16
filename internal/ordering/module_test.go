@@ -3,6 +3,7 @@ package ordering
 import (
 	"errors"
 	"io"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -53,4 +54,10 @@ func TestNewModuleRequiresItsDependencies(t *testing.T) {
 	require.NoError(t, err)
 	_, err = newModule(ports{}, Deps{Log: log, Metrics: telemetry.Noop()})
 	require.Error(t, err)
+}
+
+func TestThePublicCartFullErrorNamesTheSharedLimit(t *testing.T) {
+	require.Equal(t, MaxCartLines, domain.MaxItems, "the cart and the checkout share one limit")
+	require.Equal(t, "ordering: the cart already has "+strconv.Itoa(MaxCartLines)+" lines", ErrCartFull.Error())
+	require.Equal(t, app.ErrCartFull.Error(), ErrCartFull.Error())
 }

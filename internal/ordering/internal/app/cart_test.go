@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -127,4 +128,8 @@ func TestAFullCartIsAValidCheckoutAndOneMoreLineIsNot(t *testing.T) {
 	require.Equal(t, "items", errs[0].Field)
 	require.Contains(t, errs[0].Message, "between 1 and 50 items")
 	require.ErrorIs(t, c.Add(ctx, "alice", idA, 1), app.ErrCartFull, "the cart refuses the same extra line")
+}
+
+func TestTheCartFullErrorNamesTheSharedLimit(t *testing.T) {
+	require.Equal(t, "ordering: the cart already has "+strconv.Itoa(domain.MaxItems)+" lines", app.ErrCartFull.Error())
 }
