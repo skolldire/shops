@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -373,4 +374,50 @@ func (c client) requireAuditInvariant() {
 		WHERE (m.reason = 'reservation_release' AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.id::text = m.reference AND p.status = 'FAILED'))
 		   OR (m.reason = 'sale' AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.id::text = m.reference AND p.status = 'CONFIRMED'))`),
 		"a release belongs to a declined purchase and a sale to a confirmed one")
+}
+
+func TestAMalformedOrMissingExpectedPriceChangesNothing(t *testing.T) {
+	c := startApp(t)
+	id := c.product("FMT-1", "10.00", 5)
+	require.NoError(t, c.app.ordering.AddToCart(t.Context(), "alice", id, 2))
+	movements := c.scalar(`SELECT count(*) FROM inventory_movements`)
+	unchanged := func(t *testing.T) {
+		t.Helper()
+		require.Zero(t, c.scalar(`SELECT count(*) FROM purchases`), "no purchase")
+		require.Zero(t, c.scalar(`SELECT count(*) FROM purchase_items`), "no purchase item")
+		require.Zero(t, c.scalar(`SELECT reserved FROM products WHERE id = $1::uuid`, id), "nothing reserved")
+		require.Equal(t, movements, c.scalar(`SELECT count(*) FROM inventory_movements`), "no movement")
+		require.Zero(t, c.scalar(`SELECT count(*) FROM payment_fake_charges`), "the provider was not asked to charge")
+		require.Equal(t, 2, c.scalar(`SELECT quantity FROM cart_items WHERE user_id = 'alice' AND product_id = $1::uuid`, id), "the cart is untouched")
+	}
+	invalidCount := func() string {
+		rec := httptest.NewRecorder()
+		c.app.metrics.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		for line := range strings.Lines(rec.Body.String()) {
+			if strings.HasPrefix(line, `checkout_total{outcome="invalid"}`) {
+				return strings.TrimSpace(line)
+			}
+		}
+		return ""
+	}
+
+	resp, body := c.checkout("alice", uuid.NewString(), `{"items":[{"product_id":"`+id+`","quantity":2,"expected_unit_price":"abc"}],"payment_token":"pm_approved"}`)
+	require.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode, body)
+	code, fields := errorCodes(t, body)
+	require.Equal(t, "validation_failed", code)
+	require.Equal(t, map[string]string{"items[0].expected_unit_price": "invalid_format"}, fields)
+	unchanged(t)
+	require.Empty(t, invalidCount(), "a malformed body never reaches the checkout use case")
+
+	resp, body = c.checkout("alice", uuid.NewString(), `{"items":[{"product_id":"`+id+`","quantity":2}],"payment_token":"pm_approved"}`)
+	require.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode, body)
+	code, fields = errorCodes(t, body)
+	require.Equal(t, "validation_failed", code)
+	require.Equal(t, map[string]string{"items[0].expected_unit_price": "required"}, fields, "the expected price is required by the contract")
+	unchanged(t)
+	require.Equal(t, `checkout_total{outcome="invalid"} 1`, invalidCount(), "a well-formed body is validated by ordering")
+
+	resp, body = c.checkout("alice", uuid.NewString(), checkoutBody("pm_approved", item(id, 2, "10.00")))
+	require.Equal(t, http.StatusCreated, resp.StatusCode, body)
+	require.Equal(t, 3, c.stockOf(id))
 }

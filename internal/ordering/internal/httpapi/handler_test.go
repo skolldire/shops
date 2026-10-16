@@ -256,6 +256,9 @@ func TestCheckoutRequestErrors(t *testing.T) {
 			}
 			rec := s.do(http.MethodPost, "/api/v1/checkout", tc.payload, headers...)
 			require.Equal(t, tc.status, rec.Code)
+			if name == "formats" {
+				require.Zero(t, s.checkout.calls, "a body with format errors never reaches the checkout")
+			}
 			p := decodeProblem(t, rec)
 			require.Equal(t, tc.code, p.Code)
 			if tc.fields != nil {
@@ -267,6 +270,21 @@ func TestCheckoutRequestErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAnInvalidExpectedPriceIsRejectedBeforeTheCheckout(t *testing.T) {
+	s := newServer(t)
+	s.checkout.result = app.CheckoutResult{Purchase: purchase(domain.StatusConfirmed), Kind: app.Created}
+	for _, price := range []string{`"abc"`, `"1e3"`, `"29.99.1"`, `true`, `null`} {
+		rec := s.checkoutWith(`{"items":[{"product_id":"` + productID + `","quantity":2,"expected_unit_price":` + price + `}],"payment_token":"pm_approved"}`)
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, price)
+		p := decodeProblem(t, rec)
+		require.Equal(t, "validation_failed", p.Code)
+		require.Len(t, p.Errors, 1, price)
+		require.Equal(t, "items[0].expected_unit_price", p.Errors[0].Field)
+		require.Equal(t, "invalid_format", p.Errors[0].Code)
+	}
+	require.Zero(t, s.checkout.calls, "no checkout operation runs for a malformed body")
 }
 
 func TestCheckoutTooLarge(t *testing.T) {

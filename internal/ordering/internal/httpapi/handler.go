@@ -113,10 +113,11 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in, format := body.input(r.Header.Get(IdempotencyKeyHeader))
-	res, err := h.checkout.Checkout(r.Context(), userFrom(r.Context()), in)
 	if len(format) > 0 {
-		err = validation.Merge(format, err)
+		h.writeError(w, r, format)
+		return
 	}
+	res, err := h.checkout.Checkout(r.Context(), userFrom(r.Context()), in)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
