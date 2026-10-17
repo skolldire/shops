@@ -112,8 +112,13 @@ type EventStats struct {
 	Stuck         int
 }
 
+type ClaimedEvents struct {
+	Readable   []domain.StoredEvent
+	Unreadable []domain.UnreadableEvent
+}
+
 type EventQueue interface {
-	Claim(ctx context.Context, owner string, lease time.Duration, batch int) ([]domain.StoredEvent, error)
+	Claim(ctx context.Context, owner string, lease time.Duration, batch int) (ClaimedEvents, error)
 	Renew(ctx context.Context, seq int64, owner string, lease time.Duration) (bool, error)
 	MarkPublished(ctx context.Context, seq int64, owner string) (bool, error)
 	Reschedule(ctx context.Context, seq int64, owner string, backoff time.Duration, cause string) (int, bool, error)

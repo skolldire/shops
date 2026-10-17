@@ -48,6 +48,12 @@ type RelayReport struct {
 	StillPending int
 }
 
+type eventRef struct {
+	seq      int64
+	kind     domain.EventType
+	attempts int
+}
+
 type Relay struct {
 	queue   EventQueue
 	handler EventHandler
@@ -78,13 +84,19 @@ func NewRelay(queue EventQueue, handler EventHandler, rec RelayRecorder, policy 
 
 func (r *Relay) RunCycle(ctx context.Context) (RelayReport, error) {
 	claimCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
-	events, err := r.queue.Claim(claimCtx, r.policy.Owner, r.policy.Lease, r.policy.Batch)
+	claimed, err := r.queue.Claim(claimCtx, r.policy.Owner, r.policy.Lease, r.policy.Batch)
 	cancel()
 	if err != nil {
 		return RelayReport{}, fmt.Errorf("ordering: claim outbox events: %w", err)
 	}
 	var report RelayReport
-	for _, e := range events {
+	for _, u := range claimed.Unreadable {
+		if ctx.Err() != nil {
+			break
+		}
+		r.setAside(ctx, u, &report)
+	}
+	for _, e := range claimed.Readable {
 		if ctx.Err() != nil {
 			break
 		}
@@ -103,34 +115,53 @@ func (r *Relay) RunCycle(ctx context.Context) (RelayReport, error) {
 	return report, nil
 }
 
+func (r *Relay) renew(ctx context.Context, start time.Time, ref eventRef, report *RelayReport) bool {
+	renewCtx, cancel := context.WithDeadline(ctx, start.Add(r.policy.DBTimeout))
+	owned, err := r.queue.Renew(renewCtx, ref.seq, r.policy.Owner, r.policy.Lease)
+	cancel()
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return false
+	case err != nil:
+		report.StillPending++
+		r.attempt(ctx, ref, ref.attempts, RelayError, err)
+		return false
+	case !owned:
+		report.Skipped++
+		r.attempt(ctx, ref, ref.attempts, RelaySkipped, nil)
+		return false
+	}
+	return true
+}
+
+func (r *Relay) setAside(ctx context.Context, u domain.UnreadableEvent, report *RelayReport) {
+	start := time.Now()
+	item, cancelItem := context.WithDeadline(context.WithoutCancel(ctx), start.Add(r.item))
+	defer cancelItem()
+	ref := eventRef{seq: u.Seq, kind: u.Type, attempts: u.Attempts}
+	if r.renew(ctx, start, ref, report) {
+		r.reschedule(item, ref, u.Cause, report)
+	}
+}
+
 func (r *Relay) relay(ctx context.Context, e domain.StoredEvent, report *RelayReport) {
 	start := time.Now()
 	item, cancelItem := context.WithDeadline(context.WithoutCancel(ctx), start.Add(r.item))
 	defer cancelItem()
-	renewCtx, cancel := context.WithDeadline(ctx, start.Add(r.policy.DBTimeout))
-	owned, err := r.queue.Renew(renewCtx, e.Seq, r.policy.Owner, r.policy.Lease)
-	cancel()
-	switch {
-	case err != nil && ctx.Err() != nil:
-		return
-	case err != nil:
-		report.StillPending++
-		r.attempt(ctx, e, e.Attempts, RelayError, err)
-		return
-	case !owned:
-		report.Skipped++
-		r.attempt(ctx, e, e.Attempts, RelaySkipped, nil)
+	ref := eventRef{seq: e.Seq, kind: e.Event.Type, attempts: e.Attempts}
+	if !r.renew(ctx, start, ref, report) {
 		return
 	}
 	applied, err := r.handle(item, e)
 	if err != nil {
-		r.reschedule(item, e, err, report)
+		r.reschedule(item, ref, err, report)
 		return
 	}
 	if !applied {
 		report.Duplicates++
 		r.rec.RelayDuplicate(item)
 	}
+	var owned bool
 	markCtx, cancel, err := within(item, r.policy.DBTimeout)
 	if err == nil {
 		owned, err = r.queue.MarkPublished(markCtx, e.Seq, r.policy.Owner)
@@ -139,13 +170,13 @@ func (r *Relay) relay(ctx context.Context, e domain.StoredEvent, report *RelayRe
 	switch {
 	case err != nil:
 		report.StillPending++
-		r.attempt(item, e, e.Attempts, RelayError, err)
+		r.attempt(item, ref, ref.attempts, RelayError, err)
 	case !owned:
 		report.Skipped++
-		r.attempt(item, e, e.Attempts, RelaySkipped, nil)
+		r.attempt(item, ref, ref.attempts, RelaySkipped, nil)
 	default:
 		report.Published++
-		r.attempt(item, e, e.Attempts, RelayPublished, nil)
+		r.attempt(item, ref, ref.attempts, RelayPublished, nil)
 	}
 }
 
@@ -158,7 +189,7 @@ func (r *Relay) handle(item context.Context, e domain.StoredEvent) (bool, error)
 	return r.handler.Handle(ctx, e)
 }
 
-func (r *Relay) reschedule(item context.Context, e domain.StoredEvent, cause error, report *RelayReport) {
+func (r *Relay) reschedule(item context.Context, ref eventRef, cause error, report *RelayReport) {
 	report.StillPending++
 	var (
 		total int
@@ -166,19 +197,19 @@ func (r *Relay) reschedule(item context.Context, e domain.StoredEvent, cause err
 	)
 	ctx, cancel, err := within(item, r.policy.DBTimeout)
 	if err == nil {
-		total, owned, err = r.queue.Reschedule(ctx, e.Seq, r.policy.Owner, r.policy.Backoff(e.Attempts), sanitize(cause))
+		total, owned, err = r.queue.Reschedule(ctx, ref.seq, r.policy.Owner, r.policy.Backoff(ref.attempts), sanitize(cause))
 		cancel()
 	}
 	switch {
 	case err != nil:
-		r.attempt(item, e, e.Attempts, RelayError, errors.Join(cause, err))
+		r.attempt(item, ref, ref.attempts, RelayError, errors.Join(cause, err))
 	case !owned:
-		r.attempt(item, e, e.Attempts, RelaySkipped, cause)
+		r.attempt(item, ref, ref.attempts, RelaySkipped, cause)
 	default:
-		r.attempt(item, e, total, RelayStillPending, cause)
+		r.attempt(item, ref, total, RelayStillPending, cause)
 	}
 }
 
-func (r *Relay) attempt(ctx context.Context, e domain.StoredEvent, attempts int, outcome string, cause error) {
-	r.rec.RelayAttempt(ctx, RelayAttempt{Seq: e.Seq, Type: e.Event.Type, Attempts: attempts, Outcome: outcome, Cause: cause, StuckAfter: r.policy.StuckAfter})
+func (r *Relay) attempt(ctx context.Context, ref eventRef, attempts int, outcome string, cause error) {
+	r.rec.RelayAttempt(ctx, RelayAttempt{Seq: ref.seq, Type: ref.kind, Attempts: attempts, Outcome: outcome, Cause: cause, StuckAfter: r.policy.StuckAfter})
 }

@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -21,16 +22,19 @@ type queueCall struct {
 }
 
 type fakeQueue struct {
-	mu          sync.Mutex
-	events      []domain.StoredEvent
-	calls       []queueCall
-	lostRenew   map[int64]bool
-	lostMark    map[int64]bool
-	attempts    map[int64]int
-	renewErr    error
-	claimErr    error
-	published   []int64
-	rescheduled []int64
+	mu             sync.Mutex
+	events         []domain.StoredEvent
+	unreadable     []domain.UnreadableEvent
+	calls          []queueCall
+	lostRenew      map[int64]bool
+	lostMark       map[int64]bool
+	lostReschedule map[int64]bool
+	attempts       map[int64]int
+	causes         map[int64]string
+	renewErr       error
+	claimErr       error
+	published      []int64
+	rescheduled    []int64
 }
 
 func (q *fakeQueue) note(ctx context.Context, op string, seq int64, backoff time.Duration) {
@@ -40,12 +44,12 @@ func (q *fakeQueue) note(ctx context.Context, op string, seq int64, backoff time
 	q.calls = append(q.calls, queueCall{op: op, seq: seq, deadline: deadline, backoff: backoff})
 }
 
-func (q *fakeQueue) Claim(ctx context.Context, _ string, _ time.Duration, batch int) ([]domain.StoredEvent, error) {
+func (q *fakeQueue) Claim(ctx context.Context, _ string, _ time.Duration, batch int) (app.ClaimedEvents, error) {
 	q.note(ctx, "claim", 0, 0)
 	if q.claimErr != nil {
-		return nil, q.claimErr
+		return app.ClaimedEvents{}, q.claimErr
 	}
-	return q.events[:min(batch, len(q.events))], nil
+	return app.ClaimedEvents{Readable: q.events[:min(batch, len(q.events))], Unreadable: q.unreadable}, nil
 }
 
 func (q *fakeQueue) Renew(ctx context.Context, seq int64, _ string, _ time.Duration) (bool, error) {
@@ -64,15 +68,22 @@ func (q *fakeQueue) MarkPublished(ctx context.Context, seq int64, _ string) (boo
 	return true, nil
 }
 
-func (q *fakeQueue) Reschedule(ctx context.Context, seq int64, _ string, backoff time.Duration, _ string) (int, bool, error) {
+func (q *fakeQueue) Reschedule(ctx context.Context, seq int64, _ string, backoff time.Duration, cause string) (int, bool, error) {
 	q.note(ctx, "reschedule", seq, backoff)
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.lostReschedule[seq] {
+		return 0, false, nil
+	}
 	q.rescheduled = append(q.rescheduled, seq)
 	if q.attempts == nil {
 		q.attempts = map[int64]int{}
 	}
+	if q.causes == nil {
+		q.causes = map[int64]string{}
+	}
 	q.attempts[seq]++
+	q.causes[seq] = cause
 	return q.attempts[seq], true, nil
 }
 
@@ -164,6 +175,11 @@ func stored(seqs ...int64) []domain.StoredEvent {
 		out[i] = domain.StoredEvent{Seq: s, EventID: domain.ID("event"), Attempts: int(s) - 1, Event: domain.PurchaseEvent{Type: domain.EventPurchaseConfirmed}}
 	}
 	return out
+}
+
+func unreadable(seq int64, attempts int) domain.UnreadableEvent {
+	return domain.UnreadableEvent{Seq: seq, EventID: domain.ID("unreadable"), Type: domain.EventPurchaseConfirmed, Version: domain.PurchaseEventVersion,
+		Attempts: attempts, Cause: fmt.Errorf("%w: an amount that is not a decimal", domain.ErrUnreadablePayload)}
 }
 
 func newTestRelay(t *testing.T, q *fakeQueue, h *fakeHandler, rec *relayRecorder) *app.Relay {
@@ -259,4 +275,45 @@ func TestNewRelayValidatesItsPolicy(t *testing.T) {
 		_, err := app.NewRelay(&fakeQueue{}, &fakeHandler{}, &relayRecorder{}, p)
 		require.Error(t, err, name)
 	}
+}
+
+func TestAnUnreadableEventIsRescheduledAndTheRestOfTheBatchIsPublished(t *testing.T) {
+	q := &fakeQueue{events: stored(2, 3), unreadable: []domain.UnreadableEvent{unreadable(1, 0)}}
+	h, rec := &fakeHandler{}, &relayRecorder{}
+
+	report, err := newTestRelay(t, q, h, rec).RunCycle(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, app.RelayReport{Published: 2, StillPending: 1}, report)
+	require.Equal(t, []string{"claim", "renew", "reschedule", "renew", "mark", "renew", "mark", "stats"}, q.ops())
+	require.Equal(t, []int64{2, 3}, h.handled, "the unreadable event never reaches the consumer")
+	require.Equal(t, []int64{2, 3}, q.published)
+	require.Equal(t, []int64{1}, q.rescheduled)
+	require.Equal(t, time.Second, q.calls[2].backoff, "the same backoff as a failed delivery")
+	require.Equal(t, "ordering: the event payload does not match its type and version: an amount that is not a decimal", q.causes[1])
+	require.Equal(t, app.RelayStillPending, rec.attempts[0].Outcome)
+	require.Equal(t, 1, rec.attempts[0].Attempts)
+	require.ErrorIs(t, rec.attempts[0].Cause, domain.ErrUnreadablePayload)
+	require.Len(t, rec.gauges, 1, "the gauges are updated after a batch with an unreadable event")
+}
+
+func TestAnUnreadableEventReachesTheStuckThresholdLikeAFailedDelivery(t *testing.T) {
+	q := &fakeQueue{unreadable: []domain.UnreadableEvent{unreadable(1, 2)}, attempts: map[int64]int{1: 2}}
+	rec := &relayRecorder{}
+	_, err := newTestRelay(t, q, &fakeHandler{}, rec).RunCycle(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, app.RelayAttempt{Seq: 1, Type: domain.EventPurchaseConfirmed, Attempts: 3, Outcome: app.RelayStillPending,
+		Cause: rec.attempts[0].Cause, StuckAfter: 3}, rec.attempts[0], "the recorder logs the one error at the threshold")
+	require.Equal(t, 3*time.Second, q.calls[2].backoff)
+}
+
+func TestAnUnreadableEventThatAnotherRelayOwnsIsLeftAlone(t *testing.T) {
+	q := &fakeQueue{unreadable: []domain.UnreadableEvent{unreadable(1, 0), unreadable(2, 0)},
+		lostRenew: map[int64]bool{1: true}, lostReschedule: map[int64]bool{2: true}}
+	rec := &relayRecorder{}
+	report, err := newTestRelay(t, q, &fakeHandler{}, rec).RunCycle(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, app.RelayReport{Skipped: 1, StillPending: 1}, report)
+	require.Equal(t, []string{"claim", "renew", "renew", "reschedule", "stats"}, q.ops(), "a lost renewal does not reschedule")
+	require.Empty(t, q.rescheduled, "a lease taken before the reschedule leaves the attempts to the new owner")
+	require.Equal(t, []string{app.RelaySkipped, app.RelaySkipped}, rec.outcomes())
 }

@@ -17,7 +17,11 @@ const (
 	PurchaseEventVersion = 1
 )
 
-var ErrNoEventForOutcome = errors.New("ordering: only a confirmed or failed purchase has an outcome event")
+var (
+	ErrNoEventForOutcome = errors.New("ordering: only a confirmed or failed purchase has an outcome event")
+	ErrUnsupportedEvent  = errors.New("ordering: the event type and version are not supported by this release")
+	ErrUnreadablePayload = errors.New("ordering: the event payload does not match its type and version")
+)
 
 type EventItem struct {
 	ProductID ID
@@ -44,6 +48,19 @@ type StoredEvent struct {
 	OccurredAt time.Time
 	Attempts   int
 	Event      PurchaseEvent
+}
+
+type UnreadableEvent struct {
+	Seq      int64
+	EventID  ID
+	Type     EventType
+	Version  int
+	Attempts int
+	Cause    error
+}
+
+func SupportedEvent(t EventType, version int) bool {
+	return (t == EventPurchaseConfirmed || t == EventPurchaseFailed) && version == PurchaseEventVersion
 }
 
 func NewPurchaseEvent(p Purchase, o Outcome) (PurchaseEvent, error) {

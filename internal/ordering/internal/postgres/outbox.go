@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
@@ -72,39 +73,79 @@ func encodePayload(e domain.PurchaseEvent) ([]byte, error) {
 	return nil, fmt.Errorf("ordering: unknown event type %q", e.Type)
 }
 
-func decodePayload(kind domain.EventType, raw []byte) (domain.PurchaseEvent, error) {
-	e := domain.PurchaseEvent{Type: kind}
-	switch kind {
-	case domain.EventPurchaseConfirmed:
-		var in confirmedPayload
-		if err := json.Unmarshal(raw, &in); err != nil {
-			return domain.PurchaseEvent{}, err
+var (
+	errMalformedJSON = fmt.Errorf("%w: malformed JSON or a field of the wrong type", domain.ErrUnreadablePayload)
+	errInvalidAmount = fmt.Errorf("%w: an amount that is not a decimal", domain.ErrUnreadablePayload)
+	errInvalidFields = fmt.Errorf("%w: missing or inconsistent fields", domain.ErrUnreadablePayload)
+	errNoDecoder     = fmt.Errorf("%w: the outbox has no decoder for them", domain.ErrUnsupportedEvent)
+)
+
+type eventKey struct {
+	kind    domain.EventType
+	version int
+}
+
+var decoders = map[eventKey]func(raw []byte) (domain.PurchaseEvent, error){
+	{domain.EventPurchaseConfirmed, domain.PurchaseEventVersion}: decodeConfirmed,
+	{domain.EventPurchaseFailed, domain.PurchaseEventVersion}:    decodeFailed,
+}
+
+func decodePayload(kind domain.EventType, version int, aggregateID string, raw []byte) (domain.PurchaseEvent, error) {
+	decode, ok := decoders[eventKey{kind: kind, version: version}]
+	if !ok {
+		return domain.PurchaseEvent{}, errNoDecoder
+	}
+	e, err := decode(raw)
+	if err != nil {
+		return domain.PurchaseEvent{}, err
+	}
+	if !sameUUID(string(e.AggregateID), aggregateID) || len(e.Items) == 0 {
+		return domain.PurchaseEvent{}, errInvalidFields
+	}
+	for _, it := range e.Items {
+		if it.ProductID == "" || it.Quantity < 1 {
+			return domain.PurchaseEvent{}, errInvalidFields
 		}
-		total, err := decimal.NewFromString(in.Total)
+	}
+	e.Type, e.Version = kind, version
+	return e, nil
+}
+
+func sameUUID(a, b string) bool {
+	x, errA := uuid.Parse(a)
+	y, errB := uuid.Parse(b)
+	return errA == nil && errB == nil && x == y
+}
+
+func decodeConfirmed(raw []byte) (domain.PurchaseEvent, error) {
+	var in confirmedPayload
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return domain.PurchaseEvent{}, errMalformedJSON
+	}
+	total, err := decimal.NewFromString(in.Total)
+	if err != nil {
+		return domain.PurchaseEvent{}, errInvalidAmount
+	}
+	e := domain.PurchaseEvent{AggregateID: domain.ID(in.PurchaseID), Total: total, Currency: in.Currency, PaymentRef: in.PaymentRef,
+		Items: make([]domain.EventItem, len(in.Items))}
+	for i, it := range in.Items {
+		price, err := decimal.NewFromString(it.UnitPrice)
 		if err != nil {
-			return domain.PurchaseEvent{}, err
+			return domain.PurchaseEvent{}, errInvalidAmount
 		}
-		e.Total, e.Currency, e.PaymentRef = total, in.Currency, in.PaymentRef
-		e.Items = make([]domain.EventItem, len(in.Items))
-		for i, it := range in.Items {
-			price, err := decimal.NewFromString(it.UnitPrice)
-			if err != nil {
-				return domain.PurchaseEvent{}, err
-			}
-			e.Items[i] = domain.EventItem{ProductID: domain.ID(it.ProductID), SKU: it.SKU, Quantity: it.Quantity, UnitPrice: price}
-		}
-	case domain.EventPurchaseFailed:
-		var in failedPayload
-		if err := json.Unmarshal(raw, &in); err != nil {
-			return domain.PurchaseEvent{}, err
-		}
-		e.Reason = in.Reason
-		e.Items = make([]domain.EventItem, len(in.Items))
-		for i, it := range in.Items {
-			e.Items[i] = domain.EventItem{ProductID: domain.ID(it.ProductID), Quantity: it.Quantity}
-		}
-	default:
-		return domain.PurchaseEvent{}, fmt.Errorf("ordering: unknown event type %q", kind)
+		e.Items[i] = domain.EventItem{ProductID: domain.ID(it.ProductID), SKU: it.SKU, Quantity: it.Quantity, UnitPrice: price}
+	}
+	return e, nil
+}
+
+func decodeFailed(raw []byte) (domain.PurchaseEvent, error) {
+	var in failedPayload
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return domain.PurchaseEvent{}, errMalformedJSON
+	}
+	e := domain.PurchaseEvent{AggregateID: domain.ID(in.PurchaseID), Reason: in.Reason, Items: make([]domain.EventItem, len(in.Items))}
+	for i, it := range in.Items {
+		e.Items[i] = domain.EventItem{ProductID: domain.ID(it.ProductID), Quantity: it.Quantity}
 	}
 	return e, nil
 }
@@ -124,7 +165,7 @@ func (o *Outbox) Append(ctx context.Context, e domain.PurchaseEvent) error {
 	return nil
 }
 
-func (o *Outbox) Claim(ctx context.Context, owner string, lease time.Duration, batch int) ([]domain.StoredEvent, error) {
+func (o *Outbox) Claim(ctx context.Context, owner string, lease time.Duration, batch int) (app.ClaimedEvents, error) {
 	rows, err := database.Q(ctx, o.pool).Query(ctx,
 		`UPDATE outbox SET lease_owner = $1::uuid, lease_until = now() + $2 * interval '1 microsecond'
 		 WHERE id IN (
@@ -136,10 +177,10 @@ func (o *Outbox) Claim(ctx context.Context, owner string, lease time.Duration, b
 		 RETURNING id, event_id::text, occurred_at, attempts, aggregate_id::text, type, version, correlation_id, payload`,
 		owner, lease.Microseconds(), batch)
 	if err != nil {
-		return nil, fmt.Errorf("ordering: claim outbox events: %w", err)
+		return app.ClaimedEvents{}, fmt.Errorf("ordering: claim outbox events: %w", err)
 	}
 	var (
-		out                                       []domain.StoredEvent
+		out                                       app.ClaimedEvents
 		seq                                       int64
 		eventID, aggregateID, kind, correlationID string
 		occurredAt                                time.Time
@@ -147,16 +188,19 @@ func (o *Outbox) Claim(ctx context.Context, owner string, lease time.Duration, b
 		payload                                   []byte
 	)
 	_, err = pgx.ForEachRow(rows, []any{&seq, &eventID, &occurredAt, &attempts, &aggregateID, &kind, &version, &correlationID, &payload}, func() error {
-		e, err := decodePayload(domain.EventType(kind), payload)
+		e, err := decodePayload(domain.EventType(kind), version, aggregateID, payload)
 		if err != nil {
-			return fmt.Errorf("decode event %d: %w", seq, err)
+			out.Unreadable = append(out.Unreadable, domain.UnreadableEvent{
+				Seq: seq, EventID: domain.ID(eventID), Type: domain.EventType(kind), Version: version, Attempts: attempts, Cause: err,
+			})
+			return nil
 		}
-		e.AggregateID, e.CorrelationID, e.Version = domain.ID(aggregateID), correlationID, version
-		out = append(out, domain.StoredEvent{Seq: seq, EventID: domain.ID(eventID), OccurredAt: occurredAt, Attempts: attempts, Event: e})
+		e.AggregateID, e.CorrelationID = domain.ID(aggregateID), correlationID
+		out.Readable = append(out.Readable, domain.StoredEvent{Seq: seq, EventID: domain.ID(eventID), OccurredAt: occurredAt, Attempts: attempts, Event: e})
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("ordering: claim outbox events: %w", err)
+		return app.ClaimedEvents{}, fmt.Errorf("ordering: claim outbox events: %w", err)
 	}
 	return out, nil
 }
