@@ -48,6 +48,26 @@ func (b *markBarrier) MarkPublished(ctx context.Context, seq int64, owner string
 	return b.EventQueue.MarkPublished(ctx, seq, owner)
 }
 
+type rescheduleBarrier struct {
+	app.EventQueue
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	opened  sync.Once
+}
+
+func (b *rescheduleBarrier) open() {
+	b.opened.Do(func() { close(b.release) })
+}
+
+func (b *rescheduleBarrier) Reschedule(ctx context.Context, seq int64, owner string, backoff time.Duration, cause string) (int, bool, error) {
+	b.once.Do(func() {
+		close(b.entered)
+		<-b.release
+	})
+	return b.EventQueue.Reschedule(ctx, seq, owner, backoff, cause)
+}
+
 type relayFixture struct {
 	pool *pgxpool.Pool
 	cat  *catalog.Module
@@ -186,4 +206,41 @@ func TestStoppingTheRelayFinishesTheEventInProgressAndStartsNoOther(t *testing.T
 	require.Equal(t, 1, f.count(t, `SELECT units_sold FROM product_sales WHERE product_id = $1::uuid`, firstProduct))
 	require.Zero(t, f.count(t, `SELECT count(*) FROM product_sales WHERE product_id = $1::uuid`, secondProduct), "the next event of the batch was not started")
 	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM outbox WHERE published_at IS NULL`))
+}
+
+func TestARelayThatLostTheLeaseOfAnUnreadableEventDoesNotRescheduleIt(t *testing.T) {
+	f := newRelayFixture(t)
+	ctx := context.Background()
+	barrier := &rescheduleBarrier{entered: make(chan struct{}), release: make(chan struct{})}
+	a := f.module(t, func(q app.EventQueue) app.EventQueue { barrier.EventQueue = q; return barrier })
+	b := f.module(t, func(q app.EventQueue) app.EventQueue { return q })
+	t.Cleanup(barrier.open)
+	f.confirmed(t, a, "alice", 2)
+	_, err := f.pool.Exec(ctx, `UPDATE outbox SET payload = jsonb_set(payload, '{total}', '"not-a-decimal"')`)
+	require.NoError(t, err)
+
+	first := make(chan relayed, 1)
+	go func() {
+		report, err := a.RelayOnce(ctx)
+		first <- relayed{report, err}
+	}()
+	select {
+	case <-barrier.entered:
+	case got := <-first:
+		t.Fatalf("worker A never rescheduled the unreadable event: %+v", got)
+	}
+	_, err = f.pool.Exec(ctx, `UPDATE outbox SET lease_until = now() - interval '1 second'`)
+	require.NoError(t, err)
+
+	reportB, err := b.RelayOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, RelayReport{StillPending: 1}, reportB, "worker B took the expired lease and rescheduled the event")
+
+	barrier.open()
+	gotA := <-first
+	require.NoError(t, gotA.err)
+	require.Equal(t, RelayReport{StillPending: 1}, gotA.report, "A counts its own attempt as pending")
+	require.Equal(t, 1, f.count(t, `SELECT attempts FROM outbox`), "the reschedule of A changed no row")
+	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM outbox WHERE published_at IS NULL AND lease_owner IS NULL AND next_attempt_at > now()`))
+	require.Zero(t, f.count(t, `SELECT count(*) FROM inbox`))
 }
