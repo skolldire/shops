@@ -35,7 +35,7 @@ type Deps struct {
 type Module struct {
 	checkout *app.Checkout
 	recovery *app.Recovery
-	worker   *RecoveryWorker
+	worker   *Worker
 	queries  *app.Queries
 	cart     *app.Cart
 	http     *httpapi.Handler
@@ -119,7 +119,10 @@ func newModule(p ports, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	worker, err := newRecoveryWorker(recovery, d.Recovery.Interval, d.Log)
+	worker, err := newTickerWorker("recovery", d.Recovery.Interval, func(ctx context.Context) error {
+		_, err := recovery.RunCycle(ctx)
+		return err
+	}, d.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +234,7 @@ func (m *Module) AcceptCurrentPrice(ctx context.Context, userID, productID strin
 	return publicError(m.cart.AcceptCurrentPrice(ctx, userID, productID))
 }
 
-func (m *Module) RecoveryWorker() *RecoveryWorker {
+func (m *Module) RecoveryWorker() *Worker {
 	return m.worker
 }
 

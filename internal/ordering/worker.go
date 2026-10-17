@@ -8,12 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skolldire/shops/internal/ordering/internal/app"
 	"github.com/skolldire/shops/internal/platform/logger"
 )
 
-type RecoveryWorker struct {
-	recovery *app.Recovery
+type Worker struct {
+	name     string
+	cycle    func(ctx context.Context) error
 	interval time.Duration
 	log      logger.Service
 	mu       sync.Mutex
@@ -21,14 +21,17 @@ type RecoveryWorker struct {
 	done     chan struct{}
 }
 
-func newRecoveryWorker(recovery *app.Recovery, interval time.Duration, log logger.Service) (*RecoveryWorker, error) {
-	if interval <= 0 {
-		return nil, errors.New("ordering: the recovery interval must be positive")
+func newTickerWorker(name string, interval time.Duration, cycle func(ctx context.Context) error, log logger.Service) (*Worker, error) {
+	switch {
+	case interval <= 0:
+		return nil, errors.New("ordering: the " + name + " interval must be positive")
+	case cycle == nil || log == nil:
+		return nil, errors.New("ordering: the " + name + " worker requires a cycle and a logger")
 	}
-	return &RecoveryWorker{recovery: recovery, interval: interval, log: log}, nil
+	return &Worker{name: name, cycle: cycle, interval: interval, log: log}, nil
 }
 
-func (w *RecoveryWorker) Start(ctx context.Context) {
+func (w *Worker) Start(ctx context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.done != nil {
@@ -37,16 +40,16 @@ func (w *RecoveryWorker) Start(ctx context.Context) {
 	ctx, w.cancel = context.WithCancel(ctx)
 	w.done = make(chan struct{})
 	go w.run(ctx, w.done)
-	w.log.Info(ctx, "ordering: recovery worker started", map[string]any{"component": "ordering"})
+	w.log.Info(ctx, "ordering: "+w.name+" worker started", map[string]any{"component": "ordering"})
 }
 
-func (w *RecoveryWorker) run(ctx context.Context, done chan struct{}) {
+func (w *Worker) run(ctx context.Context, done chan struct{}) {
 	defer close(done)
-	defer w.log.Info(context.WithoutCancel(ctx), "ordering: recovery worker stopped", map[string]any{"component": "ordering"})
+	defer w.log.Info(context.WithoutCancel(ctx), "ordering: "+w.name+" worker stopped", map[string]any{"component": "ordering"})
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	for {
-		if _, err := w.recovery.RunCycle(ctx); err != nil && ctx.Err() == nil {
+		if err := w.cycle(ctx); err != nil && ctx.Err() == nil {
 			w.log.Error(ctx, err, map[string]any{"component": "ordering"})
 		}
 		select {
@@ -57,7 +60,7 @@ func (w *RecoveryWorker) run(ctx context.Context, done chan struct{}) {
 	}
 }
 
-func (w *RecoveryWorker) Stop(ctx context.Context) error {
+func (w *Worker) Stop(ctx context.Context) error {
 	w.mu.Lock()
 	cancel, done := w.cancel, w.done
 	w.mu.Unlock()
@@ -69,7 +72,7 @@ func (w *RecoveryWorker) Stop(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return errors.New("ordering: the recovery worker did not stop in time; its purchase stays pending until its lease expires")
+		return errors.New("ordering: the " + w.name + " worker did not stop in time; what it was processing stays pending until its lease expires")
 	}
 }
 
