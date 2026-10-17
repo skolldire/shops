@@ -239,7 +239,7 @@ func TestARelayThatLostTheLeaseOfAnUnreadableEventDoesNotRescheduleIt(t *testing
 	barrier.open()
 	gotA := <-first
 	require.NoError(t, gotA.err)
-	require.Equal(t, RelayReport{StillPending: 1}, gotA.report, "A counts its own attempt as pending")
+	require.Equal(t, RelayReport{Skipped: 1}, gotA.report, "A lost the lease before its reschedule, so its attempt is skipped")
 	require.Equal(t, 1, f.count(t, `SELECT attempts FROM outbox`), "the reschedule of A changed no row")
 	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM outbox WHERE published_at IS NULL AND lease_owner IS NULL AND next_attempt_at > now()`))
 	require.Zero(t, f.count(t, `SELECT count(*) FROM inbox`))

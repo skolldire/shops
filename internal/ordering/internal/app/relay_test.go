@@ -33,6 +33,7 @@ type fakeQueue struct {
 	causes         map[int64]string
 	renewErr       error
 	markErr        error
+	rescheduleErr  error
 	claimErr       error
 	published      []int64
 	rescheduled    []int64
@@ -76,6 +77,9 @@ func (q *fakeQueue) Reschedule(ctx context.Context, seq int64, _ string, backoff
 	q.note(ctx, "reschedule", seq, backoff)
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.rescheduleErr != nil {
+		return 0, false, q.rescheduleErr
+	}
 	if q.lostReschedule[seq] {
 		return 0, false, nil
 	}
@@ -316,7 +320,7 @@ func TestAnUnreadableEventThatAnotherRelayOwnsIsLeftAlone(t *testing.T) {
 	rec := &relayRecorder{}
 	report, err := newTestRelay(t, q, &fakeHandler{}, rec).RunCycle(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, app.RelayReport{Skipped: 1, StillPending: 1}, report)
+	require.Equal(t, app.RelayReport{Skipped: 2}, report, "a lost renewal and a lost reschedule both end as skipped")
 	require.Equal(t, []string{"claim", "renew", "renew", "reschedule", "stats"}, q.ops(), "a lost renewal does not reschedule")
 	require.Empty(t, q.rescheduled, "a lease taken before the reschedule leaves the attempts to the new owner")
 	require.Equal(t, []string{app.RelaySkipped, app.RelaySkipped}, rec.outcomes())
