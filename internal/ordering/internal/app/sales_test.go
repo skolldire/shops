@@ -17,6 +17,7 @@ type salesWorld struct {
 	units map[domain.ID]int
 	count map[domain.ID]int
 	fail  error
+	after func()
 }
 
 func newSalesWorld() *salesWorld {
@@ -24,15 +25,25 @@ func newSalesWorld() *salesWorld {
 }
 
 func (s *salesWorld) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	inbox, units, count := maps.Clone(s.inbox), maps.Clone(s.units), maps.Clone(s.count)
-	if err := fn(ctx); err != nil {
+	err := fn(ctx)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
 		s.inbox, s.units, s.count = inbox, units, count
 		return err
 	}
 	return nil
 }
 
-func (s *salesWorld) Record(_ context.Context, consumer string, eventID domain.ID) (bool, error) {
+func (s *salesWorld) Record(ctx context.Context, consumer string, eventID domain.ID) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	k := consumer + "/" + string(eventID)
 	if s.inbox[k] {
 		return false, nil
@@ -41,12 +52,18 @@ func (s *salesWorld) Record(_ context.Context, consumer string, eventID domain.I
 	return true, nil
 }
 
-func (s *salesWorld) AddSale(_ context.Context, productID domain.ID, units int) error {
+func (s *salesWorld) AddSale(ctx context.Context, productID domain.ID, units int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.fail != nil {
 		return s.fail
 	}
 	s.units[productID] += units
 	s.count[productID]++
+	if s.after != nil {
+		s.after()
+	}
 	return nil
 }
 
@@ -107,4 +124,52 @@ func TestTheProjectionRejectsATypeOrVersionItDoesNotSupport(t *testing.T) {
 	require.Empty(t, w.inbox, "an unsupported event is not recorded as processed")
 	require.Empty(t, w.units)
 	require.Empty(t, w.count)
+}
+
+func TestACancelledProjectionChangesNothing(t *testing.T) {
+	w := newSalesWorld()
+	projection, err := app.NewSalesProjection(w, w, w)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	applied, err := projection.Handle(ctx, confirmedEvent("e1"))
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, applied)
+	require.Empty(t, w.inbox)
+	require.Empty(t, w.units)
+	require.Empty(t, w.count)
+}
+
+func TestACancellationDuringTheProjectionRollsBackEverything(t *testing.T) {
+	for name, cancelAfter := range map[string]int{"between two sales": 1, "after the last sale": 2} {
+		t.Run(name, func(t *testing.T) {
+			w := newSalesWorld()
+			projection, err := app.NewSalesProjection(w, w, w)
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sales := 0
+			w.after = func() {
+				sales++
+				if sales == cancelAfter {
+					cancel()
+				}
+			}
+
+			applied, err := projection.Handle(ctx, confirmedEvent("e1"))
+			require.ErrorIs(t, err, context.Canceled)
+			require.False(t, applied)
+			require.Equal(t, cancelAfter, sales, "the sales before the cancellation were applied inside the transaction")
+			require.Empty(t, w.inbox, "the inbox row is rolled back with them")
+			require.Empty(t, w.units)
+			require.Empty(t, w.count)
+
+			w.after = nil
+			applied, err = projection.Handle(context.Background(), confirmedEvent("e1"))
+			require.NoError(t, err)
+			require.True(t, applied, "the event is processed when it is delivered again")
+			require.Equal(t, map[domain.ID]int{"p1": 2, "p2": 1}, w.units)
+		})
+	}
 }
