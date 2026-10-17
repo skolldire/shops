@@ -32,7 +32,7 @@ lint: lint-comments lint-arch lint-decimals tidy-check
 lint-comments:
 	@$(GO) run ./internal/tools/nocomments
 	@! grep -rn -- '--' db/init || { echo "SQL comments are not allowed"; exit 1; }
-	@! grep -rnE '^[[:space:]]*#' Makefile Dockerfile .gitignore .dockerignore .golangci.yml .coderabbit.yaml osv-scanner.toml compose*.yaml config deploy .github --include='*' --exclude='*.md' || { echo "# comments are not allowed"; exit 1; }
+	@! grep -rnE '^[[:space:]]*#' Makefile Dockerfile db/Dockerfile .gitignore .dockerignore .golangci.yml .coderabbit.yaml osv-scanner.toml compose*.yaml config deploy .github --include='*' --exclude='*.md' || { echo "# comments are not allowed"; exit 1; }
 	@! grep -rn '<!--' --include='*.html' internal || { echo "HTML comments are not allowed"; exit 1; }
 	@! grep -rn '/[*]' --include='*.css' internal || { echo "CSS comments are not allowed"; exit 1; }
 

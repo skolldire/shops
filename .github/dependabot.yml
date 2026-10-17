@@ -20,7 +20,7 @@ updates:
     labels: [dependencies, github-actions]
 
   - package-ecosystem: docker
-    directory: /
+    directories: ["/", "/db", "/deploy/prometheus"]
     schedule:
       interval: weekly
     labels: [dependencies, docker]
