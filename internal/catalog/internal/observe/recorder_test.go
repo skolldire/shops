@@ -73,9 +73,25 @@ func TestImportRecorderCountsRowsByOutcome(t *testing.T) {
 	recorder.RecordRows(context.Background(), "rejected", 13)
 
 	require.Equal(t, map[string]int64{
-		"import_rows_total{outcome=created}":  85,
-		"import_rows_total{outcome=rejected}": 13,
+		"import_rows_total{outcome=created}":   85,
+		"import_rows_total{outcome=updated}":   0,
+		"import_rows_total{outcome=unchanged}": 0,
+		"import_rows_total{outcome=skipped}":   0,
+		"import_rows_total{outcome=rejected}":  13,
 	}, counters.counters)
+}
+
+func TestEveryImportRowSeriesExistsFromTheStart(t *testing.T) {
+	counters := &fakeCounters{}
+	_, err := observe.NewImportRecorder(counters)
+	require.NoError(t, err)
+
+	want := map[string]int64{}
+	for _, outcome := range app.ImportRowOutcomes() {
+		want["import_rows_total{outcome="+outcome+"}"] = 0
+	}
+	require.Len(t, want, 5)
+	require.Equal(t, want, counters.counters, "zero is recorded, so the series exist before the first import")
 }
 
 func TestNewImportRecorderRequiresMetrics(t *testing.T) {

@@ -620,6 +620,9 @@ type recorder struct {
 }
 
 func (r *recorder) Checkout(_ context.Context, outcome string, p *domain.Purchase, cause error) {
+	if !slices.Contains(app.CheckoutOutcomes(), outcome) {
+		panic("ordering: the checkout recorded an outcome that has no series from the start: " + outcome)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var copied *domain.Purchase

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -348,6 +349,12 @@ func TestImportCountsEveryOutcome(t *testing.T) {
 	require.Equal(t, []string{"5 GONE-1 sku sku_deleted", "7 BAD-1 price invalid_format", "8 HELD-1 stock below_reserved"}, codes(report))
 	require.Equal(t, "must be at least the units reserved by pending purchases", report.Errors[2].Message)
 	require.Equal(t, map[string]int{"created": 1, "updated": 1, "unchanged": 1, "skipped": 1, "rejected": 3}, rec.rows)
+	require.ElementsMatch(t, app.ImportRowOutcomes(), slices.Collect(maps.Keys(rec.rows)), "every recorded outcome is canonical and every canonical outcome is recorded")
+	total := 0
+	for _, n := range rec.rows {
+		total += n
+	}
+	require.Equal(t, report.Records, total, "the canonical outcomes account for every record")
 }
 
 func TestImportRecordsEveryOutcomeEvenWhenItIsZero(t *testing.T) {
