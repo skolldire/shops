@@ -21,8 +21,15 @@ type Outbox struct {
 }
 
 func NewOutbox(pool *pgxpool.Pool) (*Outbox, error) {
+	return newOutbox(pool, decoders, domain.SupportedEvents())
+}
+
+func newOutbox(pool *pgxpool.Pool, registry map[domain.EventKind]func(raw []byte) (domain.PurchaseEvent, error), supported []domain.EventKind) (*Outbox, error) {
 	if pool == nil {
 		return nil, errors.New("ordering: the outbox requires a pool")
+	}
+	if err := checkDecoders(registry, supported); err != nil {
+		return nil, err
 	}
 	return &Outbox{pool: pool}, nil
 }
@@ -82,6 +89,28 @@ var (
 var decoders = map[domain.EventKind]func(raw []byte) (domain.PurchaseEvent, error){
 	{Type: domain.EventPurchaseConfirmed, Version: domain.PurchaseEventVersion}: decodeConfirmed,
 	{Type: domain.EventPurchaseFailed, Version: domain.PurchaseEventVersion}:    decodeFailed,
+}
+
+func checkDecoders(registry map[domain.EventKind]func(raw []byte) (domain.PurchaseEvent, error), supported []domain.EventKind) error {
+	listed := make(map[domain.EventKind]bool, len(supported))
+	for _, k := range supported {
+		decode, ok := registry[k]
+		switch {
+		case listed[k]:
+			return fmt.Errorf("ordering: %s version %d is listed twice as a supported event", k.Type, k.Version)
+		case !ok:
+			return fmt.Errorf("ordering: the outbox has no decoder for %s version %d", k.Type, k.Version)
+		case decode == nil:
+			return fmt.Errorf("ordering: the decoder for %s version %d is nil", k.Type, k.Version)
+		}
+		listed[k] = true
+	}
+	for k := range registry {
+		if !listed[k] {
+			return fmt.Errorf("ordering: the outbox has a decoder for %s version %d, which is not a supported event", k.Type, k.Version)
+		}
+	}
+	return nil
 }
 
 func decodePayload(kind domain.EventType, version int, aggregateID string, raw []byte) (domain.PurchaseEvent, error) {
