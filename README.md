@@ -698,7 +698,7 @@ Every finished purchase records one event, `PurchaseConfirmed` or `PurchaseFaile
 
 | Step | Statement | Deadline |
 |---|---|---|
-| Claim | One statement: `UPDATE outbox SET lease_owner, lease_until = now() + lease WHERE id IN (SELECT … WHERE published_at IS NULL AND next_attempt_at <= now() AND (lease_until IS NULL OR lease_until < now()) ORDER BY id LIMIT batch FOR UPDATE SKIP LOCKED)`. No lock is held afterwards | `events.db_timeout`, the worker's context |
+| Claim | One statement: `UPDATE outbox SET lease_owner, lease_until = now() + lease WHERE id IN (SELECT … WHERE published_at IS NULL AND next_attempt_at <= now() AND (lease_until IS NULL OR lease_until < now()) ORDER BY id LIMIT batch FOR UPDATE SKIP LOCKED)`. No lock is held afterwards. Each row is decoded on its own: an unreadable one is set aside with its id, `event_id` and attempts, and the rest of the batch goes on. Only a failure of the query itself fails the claim | `events.db_timeout`, the worker's context |
 | Renew, before each event | `UPDATE … SET lease_until = now() + lease WHERE id = $1 AND lease_owner = $owner AND published_at IS NULL`. No row changed: the event is skipped | `events.db_timeout` |
 | Consume | The consumer's own transaction (below) | `events.handler_timeout` |
 | Confirm | `UPDATE … SET published_at = now(), lease_owner = NULL, lease_until = NULL WHERE id = $1 AND lease_owner = $owner AND published_at IS NULL` | `events.db_timeout` |
@@ -708,7 +708,7 @@ Each event has one deadline, counted on the monotonic clock from just before its
 
 **Batch, lease and deadline.** A claim leases the whole batch at once, and the events are processed one after the other. With `events.batch_size: 10` and the worst case of 6s per event, the tail of a batch can outlive its 10s lease; another replica may then claim those events. That is harmless: the late worker's renewal changes no row and the event is counted as `skipped`, without effects. A smaller batch, or a longer lease, keeps that rare; a larger batch makes it common, which is why the default is 10.
 
-**The consumer.** `SalesProjection` keeps `product_sales`, the units sold per product, in one transaction: it inserts `(consumer, event_id)` into `inbox` with `ON CONFLICT DO NOTHING`, and only if that inserted a row and the event is `PurchaseConfirmed`, it adds `units_sold += quantity` and `purchases += 1` for every item. A `PurchaseFailed` is recorded in the inbox and changes nothing. `purchases` is the number of confirmed purchases that contain the product. If the projection fails, the checkout never knows: the event stays pending and is retried. There is no endpoint for the projection; it is read with SQL.
+**The consumer.** `SalesProjection` first checks that it supports the event's type and version, and answers an error without touching the database if it does not. Then it keeps `product_sales`, the units sold per product, in one transaction: it inserts `(consumer, event_id)` into `inbox` with `ON CONFLICT DO NOTHING`, and only if that inserted a row and the event is `PurchaseConfirmed`, it adds `units_sold += quantity` and `purchases += 1` for every item. A `PurchaseFailed` is recorded in the inbox and changes nothing. `purchases` is the number of confirmed purchases that contain the product. If the projection fails, the checkout never knows: the event stays pending and is retried. There is no endpoint for the projection; it is read with SQL.
 
 **Guarantees.** Delivery is at least once, with an idempotent effect:
 
@@ -730,6 +730,26 @@ GROUP BY i.product_id;
 **Logs and stuck events.** The attempt counter comes from `UPDATE … RETURNING attempts`, so only the relay whose reschedule returns exactly `events.stuck_after_attempts` writes the one `error`, also across replicas; later attempts are `warn`. Logs carry the event sequence, its type, the attempt and the cause, never the payload or a configuration value. Alerts are defined on `outbox_stuck_events` and `outbox_oldest_pending_seconds`.
 
 **Runbook for a stuck event.** Find it with `SELECT id, aggregate_id, type, attempts, last_error, next_attempt_at FROM outbox WHERE published_at IS NULL ORDER BY id`, fix the cause the error names (for example a lock held on `product_sales`), and let the relay retry it; `UPDATE outbox SET next_attempt_at = now() WHERE id = …` only brings the next attempt forward. **Never mark an event as published by hand**: the projection would miss it, and the reconciliation query is the only way to repair that afterwards.
+
+**Unreadable events and unsupported versions.** The outbox reads a payload with the decoder for its exact `(type, version)`; there is one per type, for version `1`. An event is unreadable when no decoder exists for that pair, or when its payload does not match it: malformed JSON or a field of the wrong type, an amount that is not a decimal, or missing or inconsistent fields (no items, an item without product or quantity, a `purchase_id` other than `aggregate_id`). The consumer repeats the type and version check as a second barrier. Such an event:
+
+- is handled on its own: the relay renews its lease, so a relay that lost it changes nothing, and reschedules it with the same `UPDATE … RETURNING attempts`, backoff and threshold as a failed delivery. The valid events of the same batch are published in the same cycle;
+- never reaches the consumer, gets no `inbox` row and changes no sale;
+- keeps its attempts growing, counts in `outbox_pending_events`, and in `outbox_stuck_events` from `events.stuck_after_attempts` on, with the one `error` and a `warn` per attempt afterwards;
+- is never dropped or marked as published.
+
+The cost: an event of a version no running consumer supports is retried at `events.max_backoff` (1 minute by default) forever, with a `warn` on every attempt and the stuck gauge above 0, until a compatible consumer is deployed or the data is fixed. It never blocks other events.
+
+`last_error` and the logs name only the category, never the payload or a value taken from it: `… does not match its type and version: an amount that is not a decimal`, `…: malformed JSON or a field of the wrong type`, `…: missing or inconsistent fields`, or `… are not supported by this release: the outbox has no decoder for them`. To find them without reading the payload:
+
+```sql
+SELECT id, event_id, aggregate_id, type, version, attempts, last_error, next_attempt_at
+FROM outbox
+WHERE published_at IS NULL AND (last_error LIKE '%does not match its type and version%' OR last_error LIKE '%not supported by this release%')
+ORDER BY id;
+```
+
+To resume, fix what produced the event, not only the row: deploy the consumer that supports the version, or fix the producer that wrote the bad payload. Only then, if the stored row itself is wrong, correct it in place with an `UPDATE` of `payload` or `version` that keeps its `id` and `event_id`, so the inbox still recognises it if it was ever delivered, and bring it forward with `UPDATE outbox SET next_attempt_at = now() WHERE id = …`. The next cycle publishes it once, and it leaves the pending and stuck gauges. Never insert a copy with a new `event_id`, delete the row or set `published_at` by hand.
 
 ## Web UI
 
@@ -904,6 +924,7 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 - **Movements and purchase snapshots are immutable only for the application.** The table owner or a superuser can disable their triggers, and `session_replication_role = replica` skips them.
 - **The outbox and the inbox grow without a purge.** Published events and inbox rows are kept; a purge by age is the next step once the volume matters.
 - **The units sold can lag behind the purchases.** The projection is updated by the relay after the purchase commits, so it trails it by up to an interval while events are pending, and longer while an event is retried. See the reconciliation query in [Purchase events](#purchase-events-transactional-outbox).
+- **An event no consumer supports is retried forever.** An unreadable event, or one of a version this release does not know, stays pending at `events.max_backoff` with a `warn` on every attempt until a compatible consumer is deployed or the data is fixed; it does not hold back the other events. See [Purchase events](#purchase-events-transactional-outbox).
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
 
 ## Evolution
