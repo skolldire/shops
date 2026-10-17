@@ -50,6 +50,7 @@ type ports struct {
 	pending     app.PendingPurchases
 	editor      app.CartEditor
 	remover     app.PurchasedCartRemover
+	events      app.EventOutbox
 }
 
 func NewModule(d Deps) (*Module, error) {
@@ -68,6 +69,10 @@ func NewModule(d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	outbox, err := postgres.NewOutbox(d.Pool)
+	if err != nil {
+		return nil, err
+	}
 	purchases, err := postgres.NewPurchases(d.Pool)
 	if err != nil {
 		return nil, err
@@ -78,7 +83,7 @@ func NewModule(d Deps) (*Module, error) {
 	}
 	return newModule(ports{
 		tx: tx, reservation: reservation, created: purchases, reader: purchases, finisher: purchases, pending: purchases,
-		editor: carts, remover: carts,
+		editor: carts, remover: carts, events: outbox,
 	}, d)
 }
 
@@ -99,7 +104,7 @@ func newModule(p ports, d Deps) (*Module, error) {
 		return nil, err
 	}
 	budgets := app.Budgets{Reserve: d.Budgets.Reserve, Charge: d.Budgets.Charge, Finalize: d.Budgets.Finalize}
-	settlement := app.Settlement{Tx: p.tx, Finisher: p.finisher, Stock: stock, Carts: p.remover}
+	settlement := app.Settlement{Tx: p.tx, Finisher: p.finisher, Stock: stock, Carts: p.remover, Events: p.events}
 	checkout, err := app.NewCheckout(app.CheckoutPorts{
 		Settlement: settlement, Reservation: p.reservation, Reservations: stock, Purchases: p.created, Lookup: p.reader, Payments: payments, Recorder: rec,
 	}, budgets)

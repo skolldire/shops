@@ -102,6 +102,10 @@ type PendingPurchaseStats interface {
 	PendingStats(ctx context.Context, stuckAfter int) (PendingStats, error)
 }
 
+type EventOutbox interface {
+	Append(ctx context.Context, e domain.PurchaseEvent) error
+}
+
 type PurchaseFinisher interface {
 	Finish(ctx context.Context, id domain.ID, o domain.Outcome) (bool, error)
 }
