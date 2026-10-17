@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -53,16 +54,21 @@ func TestAnUnsupportedTypeOrVersionIsNeverReadAsVersionOne(t *testing.T) {
 
 func TestAnUnreadablePayloadHasASafeCause(t *testing.T) {
 	for name, payload := range map[string]string{
-		"malformed json": `{"purchase_id": "` + secret,
-		"wrong type":     `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"product_id":"` + productID + `","quantity":"` + secret + `","unit_price":"1.00"}]}`,
-		"total":          `{"purchase_id":"` + purchaseID + `","total":"` + secret + `","items":[{"product_id":"` + productID + `","quantity":1,"unit_price":"1.00"}]}`,
-		"unit price":     `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"product_id":"` + productID + `","quantity":1,"unit_price":"` + secret + `"}]}`,
-		"no items":       `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[]}`,
-		"no product":     `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"quantity":1,"unit_price":"1.00"}]}`,
-		"no quantity":    `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"product_id":"` + productID + `","unit_price":"1.00"}]}`,
-		"other purchase": `{"purchase_id":"` + productID + `","total":"1.00","items":[{"product_id":"` + productID + `","quantity":1,"unit_price":"1.00"}]}`,
-		"empty object":   `{}`,
-		"null":           `null`,
+		"malformed json":  `{"purchase_id": "` + secret,
+		"wrong type":      `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"product_id":"` + productID + `","quantity":"` + secret + `","unit_price":"1.00"}]}`,
+		"total":           `{"purchase_id":"` + purchaseID + `","total":"` + secret + `","items":[{"product_id":"` + productID + `","quantity":1,"unit_price":"1.00"}]}`,
+		"unit price":      `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"product_id":"` + productID + `","quantity":1,"unit_price":"` + secret + `"}]}`,
+		"no items":        `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[]}`,
+		"no product":      `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"quantity":1,"unit_price":"1.00"}]}`,
+		"no quantity":     `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"product_id":"` + productID + `","unit_price":"1.00"}]}`,
+		"other purchase":  `{"purchase_id":"` + productID + `","total":"1.00","items":[{"product_id":"` + productID + `","quantity":1,"unit_price":"1.00"}]}`,
+		"product text":    `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"product_id":"` + secret + `","quantity":1,"unit_price":"1.00"}]}`,
+		"product braces":  `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"product_id":"{` + productID + `}","quantity":1,"unit_price":"1.00"}]}`,
+		"product urn":     `{"purchase_id":"` + purchaseID + `","total":"1.00","items":[{"product_id":"urn:uuid:` + productID + `","quantity":1,"unit_price":"1.00"}]}`,
+		"purchase braces": `{"purchase_id":"{` + purchaseID + `}","total":"1.00","items":[{"product_id":"` + productID + `","quantity":1,"unit_price":"1.00"}]}`,
+		"purchase urn":    `{"purchase_id":"urn:uuid:` + purchaseID + `","total":"1.00","items":[{"product_id":"` + productID + `","quantity":1,"unit_price":"1.00"}]}`,
+		"empty object":    `{}`,
+		"null":            `null`,
 	} {
 		_, err := decodePayload(domain.EventPurchaseConfirmed, domain.PurchaseEventVersion, purchaseID, []byte(payload))
 		require.ErrorIs(t, err, domain.ErrUnreadablePayload, name)
@@ -71,4 +77,21 @@ func TestAnUnreadablePayloadHasASafeCause(t *testing.T) {
 	}
 	_, err := decodePayload(domain.EventPurchaseFailed, domain.PurchaseEventVersion, purchaseID, []byte(`{"purchase_id":"`+purchaseID+`","items":[]}`))
 	require.ErrorIs(t, err, domain.ErrUnreadablePayload, "a failed purchase also lists its items")
+}
+
+func TestIdentifiersAreReadWithTheDomainGrammar(t *testing.T) {
+	upper := `{"purchase_id":"` + strings.ToUpper(purchaseID) + `","total":"1.00","items":[{"product_id":"` + strings.ToUpper(productID) + `","quantity":1,"unit_price":"1.00"}]}`
+	e, err := decodePayload(domain.EventPurchaseConfirmed, domain.PurchaseEventVersion, purchaseID, []byte(upper))
+	require.NoError(t, err, "the same ids in upper case match")
+	require.Equal(t, domain.ID(purchaseID), e.AggregateID, "and are normalised")
+	require.Equal(t, domain.ID(productID), e.Items[0].ProductID)
+
+	raw, err := encodePayload(confirmedV1())
+	require.NoError(t, err)
+	_, err = decodePayload(domain.EventPurchaseConfirmed, domain.PurchaseEventVersion, strings.ToUpper(purchaseID), raw)
+	require.NoError(t, err, "the aggregate id is compared after normalising it too")
+	for name, aggregate := range map[string]string{"other": productID, "braces": "{" + purchaseID + "}", "urn": "urn:uuid:" + purchaseID} {
+		_, err := decodePayload(domain.EventPurchaseConfirmed, domain.PurchaseEventVersion, aggregate, raw)
+		require.ErrorIs(t, err, domain.ErrUnreadablePayload, name)
+	}
 }

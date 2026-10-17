@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
@@ -99,22 +98,20 @@ func decodePayload(kind domain.EventType, version int, aggregateID string, raw [
 	if err != nil {
 		return domain.PurchaseEvent{}, err
 	}
-	if !sameUUID(string(e.AggregateID), aggregateID) || len(e.Items) == 0 {
+	purchase, err := domain.ParseID(string(e.AggregateID))
+	aggregate, errAggregate := domain.ParseID(aggregateID)
+	if err != nil || errAggregate != nil || purchase != aggregate || len(e.Items) == 0 {
 		return domain.PurchaseEvent{}, errInvalidFields
 	}
-	for _, it := range e.Items {
-		if it.ProductID == "" || it.Quantity < 1 {
+	for i, it := range e.Items {
+		product, err := domain.ParseID(string(it.ProductID))
+		if err != nil || it.Quantity < 1 {
 			return domain.PurchaseEvent{}, errInvalidFields
 		}
+		e.Items[i].ProductID = product
 	}
-	e.Type, e.Version = kind, version
+	e.AggregateID, e.Type, e.Version = purchase, kind, version
 	return e, nil
-}
-
-func sameUUID(a, b string) bool {
-	x, errA := uuid.Parse(a)
-	y, errB := uuid.Parse(b)
-	return errA == nil && errB == nil && x == y
 }
 
 func decodeConfirmed(raw []byte) (domain.PurchaseEvent, error) {

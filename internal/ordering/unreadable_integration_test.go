@@ -189,3 +189,37 @@ func TestARepairedEventIsPublishedOnceAndLeavesTheStuckEvents(t *testing.T) {
 	require.Equal(t, 1, c.count(t, `SELECT purchases FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
 	requireProjectionMatchesTheSource(t, c)
 }
+
+func TestAnInvalidProductIDIsSetAsideWithoutReachingTheDatabase(t *testing.T) {
+	c := eventCluster(t)
+	ctx := context.Background()
+	c.pay.set(false, false)
+	tent, lamp := c.product(t, "TENT-1", 50), c.product(t, "LAMP-1", 50)
+	invalid := c.checkout(t, c.a, "alice", "pm_approved", map[catalog.Product]int{tent: 4})
+	c.checkout(t, c.a, "bob", "pm_approved", map[catalog.Product]int{lamp: 2})
+	marker := syntheticSecret + "-not-a-uuid"
+	c.exec(t, false, `UPDATE outbox SET payload = jsonb_set(payload, '{items,0,product_id}', to_jsonb($2::text)) WHERE aggregate_id = $1::uuid`, invalid.ID, marker)
+
+	before := c.dbNow(t)
+	report, err := c.a.orders.RelayOnce(ctx)
+	require.NoError(t, err)
+	after := c.dbNow(t)
+	require.Equal(t, ordering.RelayReport{Published: 1, StillPending: 1}, report, "the valid event of the batch is published")
+
+	e := c.event(t, invalid.ID)
+	require.False(t, e.published)
+	require.Equal(t, 1, e.attempts)
+	require.False(t, e.leased, "the reschedule releases the lease")
+	require.False(t, e.next.Before(before.Add(eventsConfig.BaseBackoff/2)), "the next attempt waits for the backoff")
+	require.False(t, e.next.After(after.Add(eventsConfig.BaseBackoff)))
+	require.Equal(t, "ordering: the event payload does not match its type and version: missing or inconsistent fields", e.lastError)
+	require.NotContains(t, e.lastError, syntheticSecret)
+	require.False(t, c.a.logs.contains(syntheticSecret), "the logs never carry the payload")
+	c.noEffectOf(t, invalid.ID)
+
+	require.Equal(t, 1, c.count(t, `SELECT count(*) FROM inbox`), "only the valid event is recorded as processed")
+	require.Equal(t, 1, c.count(t, `SELECT count(*) FROM product_sales`), "only the valid event adds a product to the projection")
+	require.Zero(t, c.count(t, `SELECT count(*) FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
+	require.Equal(t, 2, c.count(t, `SELECT units_sold FROM product_sales WHERE product_id = $1::uuid`, lamp.ID))
+	require.Equal(t, 1, c.count(t, `SELECT purchases FROM product_sales WHERE product_id = $1::uuid`, lamp.ID))
+}
