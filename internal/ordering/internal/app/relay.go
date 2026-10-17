@@ -157,10 +157,6 @@ func (r *Relay) relay(ctx context.Context, e domain.StoredEvent, report *RelayRe
 		r.reschedule(item, ref, err, report)
 		return
 	}
-	if !applied {
-		report.Duplicates++
-		r.rec.RelayDuplicate(item)
-	}
 	var owned bool
 	markCtx, cancel, err := within(item, r.policy.DBTimeout)
 	if err == nil {
@@ -176,6 +172,10 @@ func (r *Relay) relay(ctx context.Context, e domain.StoredEvent, report *RelayRe
 		r.attempt(item, ref, ref.attempts, RelaySkipped, nil)
 	default:
 		report.Published++
+		if !applied {
+			report.Duplicates++
+			r.rec.RelayDuplicate(item)
+		}
 		r.attempt(item, ref, ref.attempts, RelayPublished, nil)
 	}
 }

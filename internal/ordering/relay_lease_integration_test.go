@@ -245,7 +245,7 @@ func TestARelayThatLostTheLeaseOfAnUnreadableEventDoesNotRescheduleIt(t *testing
 	require.Zero(t, f.count(t, `SELECT count(*) FROM inbox`))
 }
 
-func TestARedeliveryAbsorbedByTwoRelaysCountsTwoDetectionsAndOneEffect(t *testing.T) {
+func TestARedeliveryIsCountedOnlyByTheRelayThatConfirmsIt(t *testing.T) {
 	f := newRelayFixture(t)
 	ctx := context.Background()
 	barrier := newMarkBarrier(nil)
@@ -279,7 +279,7 @@ func TestARedeliveryAbsorbedByTwoRelaysCountsTwoDetectionsAndOneEffect(t *testin
 	barrier.open()
 	gotA := <-first
 	require.NoError(t, gotA.err)
-	require.Equal(t, RelayReport{Skipped: 1, Duplicates: 1}, gotA.report, "A detected the duplicate before it lost the lease")
+	require.Equal(t, RelayReport{Skipped: 1}, gotA.report, "A lost the lease before confirming, so it counts no duplicate")
 
 	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM inbox`))
 	require.Equal(t, 3, f.count(t, `SELECT units_sold FROM product_sales WHERE product_id = $1::uuid`, product), "one effect")

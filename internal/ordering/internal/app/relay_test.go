@@ -322,24 +322,45 @@ func TestAnUnreadableEventThatAnotherRelayOwnsIsLeftAlone(t *testing.T) {
 	require.Equal(t, []string{app.RelaySkipped, app.RelaySkipped}, rec.outcomes())
 }
 
-func TestEveryDuplicateTheInboxDetectsIsCountedWhateverTheConfirmation(t *testing.T) {
+func TestADuplicateCountsOnlyWhenThisRelayConfirmsItsPublication(t *testing.T) {
 	for name, tc := range map[string]struct {
-		queue   *fakeQueue
-		report  app.RelayReport
-		outcome string
+		queue      *fakeQueue
+		duplicate  bool
+		report     app.RelayReport
+		duplicates int
+		outcome    string
 	}{
-		"confirmed":          {&fakeQueue{events: stored(1)}, app.RelayReport{Published: 1, Duplicates: 1}, app.RelayPublished},
-		"lease lost":         {&fakeQueue{events: stored(1), lostMark: map[int64]bool{1: true}}, app.RelayReport{Skipped: 1, Duplicates: 1}, app.RelaySkipped},
-		"confirmation fails": {&fakeQueue{events: stored(1), markErr: errors.New("connection reset")}, app.RelayReport{StillPending: 1, Duplicates: 1}, app.RelayError},
+		"first delivery confirmed": {&fakeQueue{events: stored(1)}, false, app.RelayReport{Published: 1}, 0, app.RelayPublished},
+		"duplicate confirmed":      {&fakeQueue{events: stored(1)}, true, app.RelayReport{Published: 1, Duplicates: 1}, 1, app.RelayPublished},
+		"duplicate, lease lost":    {&fakeQueue{events: stored(1), lostMark: map[int64]bool{1: true}}, true, app.RelayReport{Skipped: 1}, 0, app.RelaySkipped},
+		"duplicate, confirmation fails": {&fakeQueue{events: stored(1), markErr: errors.New("connection reset")}, true,
+			app.RelayReport{StillPending: 1}, 0, app.RelayError},
 	} {
 		t.Run(name, func(t *testing.T) {
-			h, rec := &fakeHandler{duplicate: map[int64]bool{1: true}}, &relayRecorder{}
+			h, rec := &fakeHandler{duplicate: map[int64]bool{1: tc.duplicate}}, &relayRecorder{}
 			report, err := newTestRelay(t, tc.queue, h, rec).RunCycle(context.Background())
 			require.NoError(t, err)
 			require.Equal(t, tc.report, report)
-			require.Equal(t, 1, rec.duplicates, "the inbox absorbed the delivery, so the detection is counted")
+			require.Equal(t, tc.duplicates, rec.duplicates)
 			require.Equal(t, []string{tc.outcome}, rec.outcomes())
 			require.Empty(t, tc.queue.rescheduled, "an absorbed delivery is not a failure of the consumer")
 		})
 	}
+}
+
+func TestAnotherRelayCountsTheDuplicateWhoseConfirmationFailed(t *testing.T) {
+	q, h := &fakeQueue{events: stored(1), markErr: errors.New("connection reset")}, &fakeHandler{duplicate: map[int64]bool{1: true}}
+	first := &relayRecorder{}
+	report, err := newTestRelay(t, q, h, first).RunCycle(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, app.RelayReport{StillPending: 1}, report)
+	require.Zero(t, first.duplicates)
+
+	q.markErr = nil
+	second := &relayRecorder{}
+	report, err = newTestRelay(t, q, h, second).RunCycle(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, app.RelayReport{Published: 1, Duplicates: 1}, report, "the relay that confirms the redelivery counts it")
+	require.Equal(t, 1, second.duplicates)
+	require.Equal(t, []int64{1}, q.published)
 }
