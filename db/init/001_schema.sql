@@ -192,6 +192,42 @@ CREATE TABLE imports (
 
 CREATE INDEX imports_applied_add_hash_idx ON imports (file_hash) WHERE mode = 'add' AND status = 'APPLIED';
 
+CREATE TABLE outbox (
+    id              bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id        uuid        NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+    aggregate_type  text        NOT NULL CHECK (aggregate_type IN ('Purchase')),
+    aggregate_id    uuid        NOT NULL,
+    type            text        NOT NULL CHECK (type IN ('PurchaseConfirmed', 'PurchaseFailed')),
+    version         integer     NOT NULL CHECK (version >= 1),
+    occurred_at     timestamptz NOT NULL DEFAULT now(),
+    correlation_id  text        NOT NULL,
+    payload         jsonb       NOT NULL,
+    attempts        integer     NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    lease_owner     uuid        NULL,
+    lease_until     timestamptz NULL,
+    published_at    timestamptz NULL,
+    last_error      text        NULL,
+    CONSTRAINT outbox_lease_check CHECK ((lease_owner IS NULL) = (lease_until IS NULL))
+);
+
+CREATE UNIQUE INDEX outbox_one_event_per_purchase ON outbox (aggregate_id) WHERE aggregate_type = 'Purchase';
+CREATE INDEX outbox_pending_idx ON outbox (next_attempt_at, id) WHERE published_at IS NULL;
+
+CREATE TABLE inbox (
+    consumer     text        NOT NULL,
+    event_id     uuid        NOT NULL,
+    processed_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (consumer, event_id)
+);
+
+CREATE TABLE product_sales (
+    product_id uuid        PRIMARY KEY,
+    units_sold bigint      NOT NULL DEFAULT 0 CHECK (units_sold >= 0),
+    purchases  bigint      NOT NULL DEFAULT 0 CHECK (purchases >= 0),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE payment_fake_charges (
     reference    text          PRIMARY KEY,
     status       text          NOT NULL CHECK (status IN ('APPROVED', 'DECLINED', 'VOIDED')),
