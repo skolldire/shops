@@ -12,9 +12,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+
+	"github.com/skolldire/shops/internal/catalog"
 )
 
 type purchaseJSON struct {
@@ -420,4 +423,50 @@ func TestAMalformedOrMissingExpectedPriceChangesNothing(t *testing.T) {
 	resp, body = c.checkout("alice", uuid.NewString(), checkoutBody("pm_approved", item(id, 2, "10.00")))
 	require.Equal(t, http.StatusCreated, resp.StatusCode, body)
 	require.Equal(t, 3, c.stockOf(id))
+}
+
+func TestACheckoutThatWaitsTooLongForAnAddImportIsTryAgain(t *testing.T) {
+	c := startApp(t)
+	ctx := t.Context()
+	low, high := "00000000-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000a2"
+	_, err := c.pool.Exec(ctx, `INSERT INTO products (id, sku, name, category, price, stock, weight_kg)
+		VALUES ($1::uuid, 'LOCK-A', 'Locked by the import', 'Tests', 10.00, 5, 1), ($2::uuid, 'LOCK-B', 'Held by the test', 'Tests', 10.00, 5, 1)`, low, high)
+	require.NoError(t, err)
+	require.NoError(t, c.app.ordering.AddToCart(ctx, "alice", low, 2))
+	movements := c.scalar(`SELECT count(*) FROM inventory_movements`)
+
+	holder, err := c.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	_, err = holder.Exec(ctx, `SELECT 1 FROM products WHERE id = $1::uuid FOR UPDATE`, high)
+	require.NoError(t, err)
+
+	imported := make(chan error, 1)
+	go func() {
+		_, err := c.app.catalog.Import(context.Background(), strings.NewReader(importHeader+"A,LOCK-A,,Tests,10.00,3,1\nB,LOCK-B,,Tests,10.00,3,1\n"),
+			catalog.ImportOptions{FileName: "delivery.csv", Mode: catalog.ImportAdd, IdempotencyKey: uuid.NewString()})
+		imported <- err
+	}()
+	require.Eventually(t, func() bool {
+		return c.scalar(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%ORDER BY id FOR UPDATE%'`) == 1
+	}, 10*time.Second, 10*time.Millisecond, "the add import holds LOCK-A and waits for LOCK-B")
+
+	resp, body := c.checkout("alice", uuid.NewString(), checkoutBody("pm_approved", item(low, 2, "10.00")))
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, body)
+	require.Equal(t, "1", resp.Header.Get("Retry-After"))
+	code, _ := errorCodes(t, body)
+	require.Equal(t, "try_again", code)
+
+	require.Zero(t, c.scalar(`SELECT count(*) FROM purchases`), "no purchase")
+	require.Zero(t, c.scalar(`SELECT count(*) FROM purchase_items`), "no purchase item")
+	require.Zero(t, c.scalar(`SELECT reserved FROM products WHERE id = $1::uuid`, low), "nothing reserved")
+	require.Equal(t, movements, c.scalar(`SELECT count(*) FROM inventory_movements`), "no movement while the import is still waiting")
+	require.Zero(t, c.scalar(`SELECT count(*) FROM payment_fake_charges`), "no charge")
+	require.Equal(t, 2, c.scalar(`SELECT quantity FROM cart_items WHERE user_id = 'alice' AND product_id = $1::uuid`, low), "the cart is untouched")
+
+	require.NoError(t, holder.Rollback(ctx))
+	require.NoError(t, <-imported, "the import that was already running finishes")
+	require.Equal(t, 2, c.scalar(`SELECT count(*) FROM inventory_movements WHERE reason = 'import_add'`), "its own movements are the import's")
+	require.Zero(t, c.scalar(`SELECT count(*) FROM inventory_movements WHERE reason = 'reservation'`), "the rejected checkout left none")
+	require.Equal(t, 8, c.stockOf(low))
 }

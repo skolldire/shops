@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -267,6 +268,7 @@ func TestErrorTable(t *testing.T) {
 		"invalid search":          {nil, http.MethodGet, "/api/v1/products?page=0&sort=stock", "", nil, 422, "validation_failed"},
 		"not found":               {app.ErrNotFound, http.MethodGet, "/api/v1/products/" + id, "", nil, 404, "not_found"},
 		"sku taken":               {app.ErrSKUTaken, http.MethodPost, "/api/v1/products", validBody, nil, 409, "sku_taken"},
+		"import in progress":      {app.ErrImportInProgress, http.MethodPost, "/api/v1/products", validBody, nil, 409, "import_in_progress"},
 		"version conflict patch":  {app.ErrVersionConflict, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, []string{"If-Match", `"1"`}, 412, "version_conflict"},
 		"below reserved patch":    {&app.BelowReservedError{Reserved: 3}, http.MethodPatch, "/api/v1/products/" + id, `{"stock":1}`, []string{"If-Match", `"3"`}, 409, "below_reserved"},
 		"version conflict delete": {app.ErrVersionConflict, http.MethodDelete, "/api/v1/products/" + id, "", []string{"If-Match", `"1"`}, 412, "version_conflict"},
@@ -287,6 +289,9 @@ func TestErrorTable(t *testing.T) {
 			p := decodeProblem(t, rec)
 			require.Equal(t, tt.code, p.Code)
 			require.NotContains(t, rec.Body.String(), "10.0.0.5")
+			if tt.code == "import_in_progress" {
+				require.Equal(t, strconv.Itoa(app.ImportRetryAfterSeconds), rec.Header().Get("Retry-After"))
+			}
 		})
 	}
 }

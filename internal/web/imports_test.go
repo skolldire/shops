@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +208,9 @@ func TestImportWholeFileErrorsStayOnTheForm(t *testing.T) {
 			requireSafeHTML(t, rec)
 			body := rec.Body.String()
 			require.Contains(t, body, `<p class="notice error" role="alert">`+tt.message)
+			if errors.Is(tt.err, catalog.ErrImportInProgress) {
+				require.Equal(t, strconv.Itoa(catalog.ImportRetryAfterSeconds), rec.Header().Get("Retry-After"))
+			}
 			require.Contains(t, body, `<input id="file" name="file" type="file"`)
 			require.NotContains(t, body, "error-status")
 			require.NotContains(t, body, "import-report")

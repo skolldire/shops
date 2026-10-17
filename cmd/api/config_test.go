@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/skolldire/shops/internal/ordering"
 	"github.com/skolldire/shops/internal/platform/config"
 	"github.com/skolldire/shops/internal/platform/secret"
 )
@@ -40,7 +41,7 @@ func TestShippedConfigDefaults(t *testing.T) {
 
 	require.Equal(t, ":8080", cfg.HTTP.Addr)
 	require.Equal(t, ":9100", cfg.Metrics.Addr)
-	require.Equal(t, 25*time.Second, cfg.HTTP.ShutdownTimeout)
+	require.Equal(t, 35*time.Second, cfg.HTTP.ShutdownTimeout)
 	require.Equal(t, "db", cfg.Database.Host)
 	require.Equal(t, 5432, cfg.Database.Port)
 	require.Equal(t, testPassword, cfg.Database.Password.Reveal())
@@ -120,6 +121,7 @@ func TestShippedConfigCheckoutDefaults(t *testing.T) {
 	cfg := shippedConfig(t)
 	require.Equal(t, []string{"alice", "bob", "carol"}, cfg.Demo.Users)
 	require.Equal(t, 3*time.Second, cfg.Checkout.ReserveTimeout)
+	require.Equal(t, time.Second, cfg.Checkout.LockTimeout)
 	require.Equal(t, 6*time.Second, cfg.Checkout.ChargeTimeout)
 	require.Equal(t, 3*time.Second, cfg.Checkout.FinalizeTimeout)
 	require.Equal(t, 30*time.Minute, cfg.Checkout.MaxPendingAge)
@@ -163,12 +165,36 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 	cfg = shippedConfig(t)
 	cfg.HTTP.ShutdownTimeout = 20 * time.Second
 	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least the longer of a checkout request")
+	cfg.HTTP.ShutdownTimeout = 30 * time.Second
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "http.shutdown_timeout must be greater than recovery.lease", "30s covers the 19s purchase but equals the lease")
+	require.NotContains(t, err.Error(), "must be at least")
+	cfg.HTTP.ShutdownTimeout = 31 * time.Second
+	require.NoError(t, cfg.Validate(), "above the lease and above a recovered purchase of 19s plus 2s")
+
+	cfg = shippedConfig(t)
+	cfg.Recovery.Lease = 22 * time.Second
 	cfg.HTTP.ShutdownTimeout = 21 * time.Second
-	require.NoError(t, cfg.Validate(), "a recovered purchase of 19s plus 2s fits exactly")
-	cfg.Recovery.DBTimeout = time.Millisecond
-	cfg.HTTP.ShutdownTimeout = 15 * time.Second
-	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least", "a recovered purchase of 15.002s plus 2s")
-	cfg.HTTP.ShutdownTimeout = 18 * time.Second
+	err = cfg.Validate()
+	require.ErrorContains(t, err, "http.shutdown_timeout must be greater than recovery.lease", "the budget alone is not enough")
+	require.NotContains(t, err.Error(), "must be at least")
+	cfg.HTTP.ShutdownTimeout = 23 * time.Second
+	require.NoError(t, cfg.Validate())
+
+	cfg = shippedConfig(t)
+	cfg.Checkout.LockTimeout = 0
+	err = cfg.Validate()
+	require.ErrorContains(t, err, "checkout.lock_timeout must be positive")
+	require.NotContains(t, err.Error(), "at least 1ms", "zero is reported once, as not positive")
+	cfg.Checkout.LockTimeout = 500 * time.Microsecond
+	err = cfg.Validate()
+	require.ErrorContains(t, err, "checkout.lock_timeout must be at least 1ms", "the reservation cannot use less than its minimum")
+	require.NotContains(t, err.Error(), "must be positive")
+	cfg.Checkout.LockTimeout = ordering.MinLockTimeout
+	require.NoError(t, cfg.Validate(), "the minimum itself is accepted")
+	cfg.Checkout.LockTimeout = 3 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "checkout.lock_timeout must be less than checkout.reserve_timeout")
+	cfg.Checkout.LockTimeout = 2999 * time.Millisecond
 	require.NoError(t, cfg.Validate())
 
 	cfg = shippedConfig(t)

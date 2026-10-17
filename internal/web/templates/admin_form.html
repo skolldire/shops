@@ -8,6 +8,7 @@
 <p><a class="button secondary" href="/admin/products/{{.Data.ID}}/edit">Reload the latest version</a></p>
 </div>
 {{end}}
+{{if .Data.Busy}}<p class="notice error" role="alert">{{.Data.Busy}}</p>{{end}}
 {{if .Data.Errors}}<p class="notice error" role="alert">Please fix the highlighted fields.</p>{{end}}
 <form class="form-card" action="{{.Data.Action}}" method="post" novalidate>
 {{if .Data.Editing}}<input type="hidden" name="version" value="{{.Data.Version}}">{{end}}

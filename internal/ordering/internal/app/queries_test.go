@@ -30,17 +30,23 @@ func TestQueriesAreScopedToTheUser(t *testing.T) {
 	_, err = q.Purchase(ctx, "bob", string(first.Purchase.ID))
 	require.ErrorIs(t, err, app.ErrPurchaseNotFound)
 
-	page, err := q.Purchases(ctx, "alice", 0, 1)
+	page, err := q.Purchases(ctx, "alice", nil, intp(1))
 	require.NoError(t, err)
 	require.Equal(t, 2, page.Total)
 	require.Equal(t, 1, page.Page)
 	require.Equal(t, second.Purchase.ID, page.Items[0].ID, "newest first")
-	page, err = q.Purchases(ctx, "bob", 0, 0)
+	page, err = q.Purchases(ctx, "bob", nil, nil)
 	require.NoError(t, err)
 	require.Zero(t, page.Total)
 	require.Equal(t, 20, page.PageSize)
 
-	_, err = q.Purchases(ctx, "alice", 0, 101)
-	var errs validation.Errors
-	require.ErrorAs(t, err, &errs)
+	for _, size := range []int{0, 101} {
+		_, err = q.Purchases(ctx, "alice", nil, intp(size))
+		var errs validation.Errors
+		require.ErrorAs(t, err, &errs, "page size %d", size)
+	}
+}
+
+func intp(n int) *int {
+	return &n
 }

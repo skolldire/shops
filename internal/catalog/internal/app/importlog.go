@@ -7,6 +7,8 @@ import (
 	"github.com/skolldire/shops/internal/catalog/internal/domain"
 )
 
+const ImportRetryAfterSeconds = 5
+
 var (
 	ErrImportNotFound         = errors.New("catalog: import not found")
 	ErrInvalidIdempotencyKey  = errors.New("catalog: the idempotency key must be a UUID")

@@ -171,6 +171,12 @@ func ParseWholeNumber(raw string) (int64, error) {
 	return domain.ParseWholeNumber(raw)
 }
 
+const ImportRetryAfterSeconds = app.ImportRetryAfterSeconds
+
+func WholeNumberErrorCode(err error) string {
+	return domain.WholeNumberErrorCode(err)
+}
+
 func ParseSearchQuery(p SearchParams) (SearchQuery, error) {
 	s, err := httpquery.ParseParams(httpquery.Params(p))
 	if err != nil {
@@ -382,6 +388,8 @@ func publicError(err error) error {
 		return ErrNotFound
 	case errors.Is(err, app.ErrSKUTaken):
 		return ErrSKUTaken
+	case errors.Is(err, app.ErrImportInProgress):
+		return ErrImportInProgress
 	case errors.Is(err, app.ErrVersionConflict):
 		return ErrVersionConflict
 	}

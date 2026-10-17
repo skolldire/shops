@@ -31,6 +31,7 @@ type CheckoutResult struct {
 
 type CheckoutPorts struct {
 	Settlement
+	Reservation  Tx
 	Reservations StockReservation
 	Purchases    PurchaseCreation
 	Lookup       PurchaseLookup
@@ -40,25 +41,26 @@ type CheckoutPorts struct {
 
 type Checkout struct {
 	finalizer
-	stock     StockReservation
-	purchases PurchaseCreation
-	lookup    PurchaseLookup
-	payments  PaymentCharger
-	rec       CheckoutRecorder
-	budgets   Budgets
+	reservation Tx
+	stock       StockReservation
+	purchases   PurchaseCreation
+	lookup      PurchaseLookup
+	payments    PaymentCharger
+	rec         CheckoutRecorder
+	budgets     Budgets
 }
 
 var errKeyExists = errors.New("ordering: the idempotency key already exists")
 
 func NewCheckout(p CheckoutPorts, b Budgets) (*Checkout, error) {
 	switch {
-	case !p.complete(), p.Reservations == nil, p.Purchases == nil, p.Lookup == nil, p.Payments == nil, p.Recorder == nil:
+	case !p.complete(), p.Reservation == nil, p.Reservations == nil, p.Purchases == nil, p.Lookup == nil, p.Payments == nil, p.Recorder == nil:
 		return nil, errors.New("ordering: checkout requires a transaction manager, stock, payments, purchases, carts and a recorder")
 	case b.Reserve <= 0, b.Charge <= 0, b.Finalize <= 0:
 		return nil, errors.New("ordering: checkout time budgets must be positive")
 	}
 	return &Checkout{
-		finalizer: p.finalizer(), stock: p.Reservations, purchases: p.Purchases, lookup: p.Lookup,
+		finalizer: p.finalizer(), reservation: p.Reservation, stock: p.Reservations, purchases: p.Purchases, lookup: p.Lookup,
 		payments: p.Payments, rec: p.Recorder, budgets: b,
 	}, nil
 }
@@ -93,7 +95,7 @@ func (c *Checkout) reserve(ctx context.Context, req domain.CheckoutRequest) (dom
 	defer cancel()
 
 	var created domain.Purchase
-	err := c.tx.WithinTx(ctx, func(ctx context.Context) error {
+	err := c.reservation.WithinTx(ctx, func(ctx context.Context) error {
 		p, ok, err := c.purchases.Insert(ctx, domain.NewPendingPurchase(req))
 		if err != nil {
 			return err

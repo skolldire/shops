@@ -255,14 +255,27 @@ func TestCheckQuantityAndPage(t *testing.T) {
 	require.Equal(t, map[string]string{"quantity": validation.CodeOutOfRange}, fieldCodes(t, domain.CheckQuantity(0)))
 	require.Equal(t, map[string]string{"quantity": validation.CodeOutOfRange}, fieldCodes(t, domain.CheckQuantity(100)))
 
-	p, err := domain.NewPage(0, 0)
+	p, err := domain.NewPage(nil, nil)
 	require.NoError(t, err)
-	require.Equal(t, domain.Page{Page: 1, PageSize: 20}, p)
-	p, err = domain.NewPage(3, 10)
+	require.Equal(t, domain.Page{Page: 1, PageSize: 20}, p, "an absent page and size take the defaults")
+	p, err = domain.NewPage(intp(3), intp(10))
 	require.NoError(t, err)
 	require.Equal(t, 20, p.Offset())
-	require.Equal(t, map[string]string{"page": validation.CodeOutOfRange, "page_size": validation.CodeOutOfRange}, fieldCodes(t, func() error {
-		_, err := domain.NewPage(-1, 101)
-		return err
-	}()))
+	p, err = domain.NewPage(intp(100000), intp(100))
+	require.NoError(t, err)
+	require.Equal(t, domain.Page{Page: 100000, PageSize: 100}, p)
+	for name, values := range map[string][2]*int{
+		"explicit zero":   {intp(0), intp(0)},
+		"negative":        {intp(-1), intp(-1)},
+		"above the limit": {intp(100001), intp(101)},
+	} {
+		require.Equal(t, map[string]string{"page": validation.CodeOutOfRange, "page_size": validation.CodeOutOfRange}, fieldCodes(t, func() error {
+			_, err := domain.NewPage(values[0], values[1])
+			return err
+		}()), name)
+	}
+}
+
+func intp(n int) *int {
+	return &n
 }

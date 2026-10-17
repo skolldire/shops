@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 
 	"github.com/shopspring/decimal"
 
@@ -31,9 +32,10 @@ type fakeOrdering struct {
 	keys      []string
 	tokens    []string
 	purchases map[string]ordering.Purchase
-	listed    []int
-	sizes     []int
+	listed    []string
+	sizes     []string
 	listErr   error
+	extra     int
 }
 
 func (f *fakeOrdering) CartCount(_ context.Context, user string) (int, error) {
@@ -81,9 +83,16 @@ func (f *fakeOrdering) Purchase(_ context.Context, user, id string) (ordering.Pu
 	return p, nil
 }
 
-func (f *fakeOrdering) Purchases(_ context.Context, user string, page, pageSize int) (ordering.PurchasePage, error) {
-	f.listed = append(f.listed, page)
-	f.sizes = append(f.sizes, pageSize)
+func shown(n *int) string {
+	if n == nil {
+		return "absent"
+	}
+	return strconv.Itoa(*n)
+}
+
+func (f *fakeOrdering) Purchases(_ context.Context, user string, page, pageSize *int) (ordering.PurchasePage, error) {
+	f.listed = append(f.listed, shown(page))
+	f.sizes = append(f.sizes, shown(pageSize))
 	if f.listErr != nil {
 		return ordering.PurchasePage{}, f.listErr
 	}
@@ -94,7 +103,14 @@ func (f *fakeOrdering) Purchases(_ context.Context, user string, page, pageSize 
 		}
 	}
 	slices.SortFunc(items, func(a, b ordering.Purchase) int { return b.CreatedAt.Compare(a.CreatedAt) })
-	return ordering.PurchasePage{Items: items, Page: page, PageSize: pageSize, Total: len(items)}, nil
+	result := ordering.PurchasePage{Items: items, Page: 1, PageSize: 20, Total: len(items) + f.extra}
+	if page != nil {
+		result.Page = *page
+	}
+	if pageSize != nil {
+		result.PageSize = *pageSize
+	}
+	return result, nil
 }
 
 var errBoom = errors.New("boom: secret=hunter2")

@@ -47,14 +47,14 @@ func (ui *UI) movements(w http.ResponseWriter, r *http.Request) {
 	}
 	path := adminProducts + "/" + p.ID + "/movements"
 	if data.Page.Page > 1 {
-		data.PrevURL = movementsURL(path, data.Page.Page-1, data.Page.PageSize)
+		data.PrevURL = pagingURL(path, data.Page.Page-1, data.Page.PageSize)
 	}
 	if data.Page.Page*data.Page.PageSize < data.Page.Total {
-		data.NextURL = movementsURL(path, data.Page.Page+1, data.Page.PageSize)
+		data.NextURL = pagingURL(path, data.Page.Page+1, data.Page.PageSize)
 	}
 	ui.page(w, r, http.StatusOK, "admin_movements", data)
 }
 
-func movementsURL(path string, page, pageSize int) string {
+func pagingURL(path string, page, pageSize int) string {
 	return path + "?" + url.Values{"page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)}}.Encode()
 }

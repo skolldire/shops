@@ -53,7 +53,7 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 	orders, err := ordering.NewModule(ordering.Deps{
 		Pool: pool, Catalog: products, Payments: payments, Log: log, Metrics: tel, Users: cfg.Demo.Users,
 		Budgets: ordering.Budgets{
-			Reserve: cfg.Checkout.ReserveTimeout, Charge: cfg.Checkout.ChargeTimeout,
+			Reserve: cfg.Checkout.ReserveTimeout, LockTimeout: cfg.Checkout.LockTimeout, Charge: cfg.Checkout.ChargeTimeout,
 			Finalize: cfg.Checkout.FinalizeTimeout,
 		},
 		Recovery: ordering.RecoveryConfig{

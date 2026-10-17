@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,10 +19,9 @@ import (
 	"github.com/skolldire/shops/internal/platform/logger"
 )
 
-const (
-	importField      = "file"
-	importRetryAfter = "5"
-)
+const importField = "file"
+
+var importRetryAfter = strconv.Itoa(app.ImportRetryAfterSeconds)
 
 type Importer interface {
 	Import(ctx context.Context, r io.Reader, opts app.ImportOptions) (app.ImportReport, error)

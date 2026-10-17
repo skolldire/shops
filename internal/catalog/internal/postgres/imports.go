@@ -16,6 +16,8 @@ import (
 	"github.com/skolldire/shops/internal/platform/database"
 )
 
+const importsLockKey = `hashtextextended('catalog.imports', 0)`
+
 const importColumns = `id::text, COALESCE(idempotency_key::text, ''), mode, status, file_name, file_bytes, file_hash,
 records, skipped, created, updated, unchanged, rejected, errors, changes, created_at, applied_at`
 
@@ -66,7 +68,7 @@ func (l *ImportLog) LockImports(ctx context.Context) (context.Context, func(), b
 		return nil, nil, false, fmt.Errorf("catalog: acquire a connection for the imports lock: %w", err)
 	}
 	var locked bool
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended('catalog.imports', 0))`).Scan(&locked); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(`+importsLockKey+`)`).Scan(&locked); err != nil {
 		conn.Release()
 		return nil, nil, false, fmt.Errorf("catalog: lock the imports: %w", err)
 	}
@@ -75,7 +77,7 @@ func (l *ImportLog) LockImports(ctx context.Context) (context.Context, func(), b
 		return ctx, func() {}, false, nil
 	}
 	return database.WithConn(ctx, conn), func() {
-		releaseAdvisory(ctx, conn, `SELECT pg_advisory_unlock(hashtextextended('catalog.imports', 0))`)
+		releaseAdvisory(ctx, conn, `SELECT pg_advisory_unlock(`+importsLockKey+`)`)
 	}, true, nil
 }
 

@@ -147,7 +147,7 @@ func setup(t *testing.T, pay *provider) fixture {
 	require.NoError(t, err)
 	orders, err := ordering.NewModule(ordering.Deps{
 		Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: telemetry.Noop(), Users: []string{"alice", "bob"},
-		Budgets:  ordering.Budgets{Reserve: 3 * time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
+		Budgets:  ordering.Budgets{Reserve: 3 * time.Second, LockTimeout: time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
 		Recovery: recoveryConfig,
 	})
 	require.NoError(t, err)
@@ -500,16 +500,17 @@ func TestPurchasesArePagedNewestFirstAndScopedToTheUser(t *testing.T) {
 		require.NoError(t, err)
 		ids = append(ids, res.Purchase.ID)
 	}
-	page, err := f.orders.Purchases(ctx, "alice", 1, 1)
+	one, two := 1, 2
+	page, err := f.orders.Purchases(ctx, "alice", &one, &one)
 	require.NoError(t, err)
 	require.Equal(t, 2, page.Total)
 	require.Equal(t, ids[1], page.Items[0].ID)
-	page, err = f.orders.Purchases(ctx, "alice", 2, 1)
+	page, err = f.orders.Purchases(ctx, "alice", &two, &one)
 	require.NoError(t, err)
 	require.Equal(t, ids[0], page.Items[0].ID)
 	require.Len(t, page.Items[0].Items, 1)
 
-	page, err = f.orders.Purchases(ctx, "bob", 0, 0)
+	page, err = f.orders.Purchases(ctx, "bob", nil, nil)
 	require.NoError(t, err)
 	require.Zero(t, page.Total)
 	_, err = f.orders.Purchase(ctx, "bob", ids[0])

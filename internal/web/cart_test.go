@@ -259,8 +259,8 @@ func TestPurchasePages(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, get(h, "/purchases/b1").Code, "another user's purchase is not found")
 	require.Equal(t, http.StatusOK, get(h, "/purchases/b1", as("bob")...).Code)
 
-	body = get(h, "/purchases?page=x").Body.String()
-	require.Equal(t, []int{0}, orders.listed)
+	body = get(h, "/purchases").Body.String()
+	require.Equal(t, []string{"absent"}, orders.listed)
 	require.Equal(t, 3, strings.Count(body, `href="/purchases/`))
 	require.Contains(t, body, "Pending")
 	require.Contains(t, body, "Declined")
@@ -274,7 +274,7 @@ func requireNoInlineCode(t *testing.T, body string) {
 }
 
 func TestQuantityRangeValidationComesFromOrdering(t *testing.T) {
-	for _, quantity := range []string{"0", "-1", "100"} {
+	for _, quantity := range []string{"0", "-1", "100", " 3 "} {
 		t.Run(quantity, func(t *testing.T) {
 			orders := &fakeOrdering{writeErr: validation.Errors{{Field: "quantity", Code: "out_of_range", Message: "quantity rejected by ordering"}}}
 			h, _ := newOrderingUI(t, orders, &fakeCatalog{products: stockedShoes(3)})
@@ -287,22 +287,57 @@ func TestQuantityRangeValidationComesFromOrdering(t *testing.T) {
 	}
 }
 
-func TestPurchasePagingDelegatesRangeAndDefaultsToOrdering(t *testing.T) {
+func TestPurchasePagingSeparatesAbsenceFormatAndRange(t *testing.T) {
 	orders := &fakeOrdering{}
 	h, _ := newOrderingUI(t, orders, nil)
-	require.Equal(t, http.StatusOK, get(h, "/purchases").Code)
-	require.Equal(t, []int{0}, orders.listed)
-	require.Equal(t, []int{0}, orders.sizes)
+	for _, path := range []string{"/purchases", "/purchases?page=&page_size="} {
+		require.Equal(t, http.StatusOK, get(h, path).Code, path)
+	}
+	require.Equal(t, []string{"absent", "absent"}, orders.listed, "absent or empty parameters let ordering apply its defaults")
+	require.Equal(t, []string{"absent", "absent"}, orders.sizes)
+
+	for _, path := range []string{"/purchases?page=x", "/purchases?page=1.5", "/purchases?page=%2B2", "/purchases?page=99999999999999999999", "/purchases?page_size=x", "/purchases?page=%20"} {
+		rec := get(h, path)
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, path)
+		require.Contains(t, rec.Body.String(), "page or page size is invalid")
+	}
+	require.Len(t, orders.listed, 2, "a malformed parameter never reaches the purchase query")
+
+	require.Equal(t, http.StatusOK, get(h, "/purchases?page=%202%20").Code, "outer spaces follow the shared parser")
+	require.Equal(t, "2", orders.listed[2])
 
 	orders.listErr = validation.Errors{{Field: "page", Code: "out_of_range", Message: "invalid page"}}
-	for _, path := range []string{"/purchases?page=100001&page_size=101", "/purchases?page=-1"} {
+	for _, path := range []string{"/purchases?page=0", "/purchases?page_size=0", "/purchases?page=-1", "/purchases?page=100001&page_size=101"} {
 		rec := get(h, path)
-		require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, path)
 		require.Contains(t, rec.Body.String(), "page or page size is invalid")
 		require.NotContains(t, rec.Body.String(), "You have no purchases yet")
 	}
-	require.Equal(t, []int{0, 100001, -1}, orders.listed)
-	require.Equal(t, []int{0, 101, 0}, orders.sizes)
+	require.Equal(t, []string{"absent", "absent", "2", "0", "absent", "-1", "100001"}, orders.listed, "explicit integers, zero included, are left to ordering")
+	require.Equal(t, []string{"absent", "absent", "absent", "absent", "0", "absent", "101"}, orders.sizes)
+}
+
+func TestPurchaseNavigationKeepsThePageSize(t *testing.T) {
+	orders := &fakeOrdering{purchases: map[string]ordering.Purchase{"alice/x": {ID: "x", Status: ordering.StatusConfirmed}}, extra: 20}
+	h, _ := newOrderingUI(t, orders, nil)
+	body := get(h, "/purchases?page=2&page_size=5").Body.String()
+	require.Contains(t, body, `href="/purchases?page=1&amp;page_size=5"`)
+	require.Contains(t, body, `href="/purchases?page=3&amp;page_size=5"`)
+}
+
+func TestQuantityFormatIsCheckedBeforeOrdering(t *testing.T) {
+	for _, quantity := range []string{"+5", "1.5", "x", "99999999999", ""} {
+		t.Run(quantity, func(t *testing.T) {
+			orders := &fakeOrdering{}
+			h, _ := newOrderingUI(t, orders, &fakeCatalog{products: stockedShoes(3)})
+			rec := submit(h, "/cart/items", url.Values{"product_id": {"p1"}, "quantity": {quantity}})
+			require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+			require.Contains(t, rec.Body.String(), "between 1 and 99")
+			rec = submit(h, "/cart/items/p1/quantity", url.Values{"quantity": {quantity}})
+			require.Equal(t, "/cart?notice=quantity", rec.Header().Get("Location"))
+			require.Empty(t, orders.calls, "a malformed quantity never reaches ordering")
+		})
+	}
 }
 
 func TestTheCartFullMessageUsesTheOrderingLimit(t *testing.T) {

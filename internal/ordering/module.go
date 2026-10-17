@@ -42,13 +42,14 @@ type Module struct {
 }
 
 type ports struct {
-	tx       app.Tx
-	created  app.PurchaseCreation
-	reader   app.PurchaseReader
-	finisher app.PurchaseFinisher
-	pending  app.PendingPurchases
-	editor   app.CartEditor
-	remover  app.PurchasedCartRemover
+	tx          app.Tx
+	reservation app.Tx
+	created     app.PurchaseCreation
+	reader      app.PurchaseReader
+	finisher    app.PurchaseFinisher
+	pending     app.PendingPurchases
+	editor      app.CartEditor
+	remover     app.PurchasedCartRemover
 }
 
 func NewModule(d Deps) (*Module, error) {
@@ -63,6 +64,10 @@ func NewModule(d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	reservation, err := postgres.NewReservationTx(manager, d.Pool, d.Budgets.LockTimeout)
+	if err != nil {
+		return nil, err
+	}
 	purchases, err := postgres.NewPurchases(d.Pool)
 	if err != nil {
 		return nil, err
@@ -72,7 +77,7 @@ func NewModule(d Deps) (*Module, error) {
 		return nil, err
 	}
 	return newModule(ports{
-		tx: tx, created: purchases, reader: purchases, finisher: purchases, pending: purchases,
+		tx: tx, reservation: reservation, created: purchases, reader: purchases, finisher: purchases, pending: purchases,
 		editor: carts, remover: carts,
 	}, d)
 }
@@ -96,7 +101,7 @@ func newModule(p ports, d Deps) (*Module, error) {
 	budgets := app.Budgets{Reserve: d.Budgets.Reserve, Charge: d.Budgets.Charge, Finalize: d.Budgets.Finalize}
 	settlement := app.Settlement{Tx: p.tx, Finisher: p.finisher, Stock: stock, Carts: p.remover}
 	checkout, err := app.NewCheckout(app.CheckoutPorts{
-		Settlement: settlement, Reservations: stock, Purchases: p.created, Lookup: p.reader, Payments: payments, Recorder: rec,
+		Settlement: settlement, Reservation: p.reservation, Reservations: stock, Purchases: p.created, Lookup: p.reader, Payments: payments, Recorder: rec,
 	}, budgets)
 	if err != nil {
 		return nil, err
@@ -131,6 +136,7 @@ func newModule(p ports, d Deps) (*Module, error) {
 const (
 	RecoveryLeaseMargin = app.LeaseMargin
 	MaxCartLines        = domain.MaxCartLines
+	MinLockTimeout      = app.MinLockTimeout
 )
 
 func RecoveryItemBudget(b Budgets, dbTimeout time.Duration) time.Duration {
@@ -171,7 +177,7 @@ func (m *Module) Purchase(ctx context.Context, userID, id string) (Purchase, err
 	return fromPurchase(p), nil
 }
 
-func (m *Module) Purchases(ctx context.Context, userID string, page, pageSize int) (PurchasePage, error) {
+func (m *Module) Purchases(ctx context.Context, userID string, page, pageSize *int) (PurchasePage, error) {
 	res, err := m.queries.Purchases(ctx, userID, page, pageSize)
 	if err != nil {
 		return PurchasePage{}, publicError(err)

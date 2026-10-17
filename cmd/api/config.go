@@ -56,6 +56,7 @@ type DemoConfig struct {
 
 type CheckoutConfig struct {
 	ReserveTimeout  time.Duration `mapstructure:"reserve_timeout"`
+	LockTimeout     time.Duration `mapstructure:"lock_timeout"`
 	ChargeTimeout   time.Duration `mapstructure:"charge_timeout"`
 	FinalizeTimeout time.Duration `mapstructure:"finalize_timeout"`
 	MaxPendingAge   time.Duration `mapstructure:"max_pending_age"`
@@ -102,6 +103,7 @@ func (c AppConfig) Validate() error {
 		"health.timeout":            c.Health.Timeout,
 		"database.connect_timeout":  c.Database.ConnectTimeout,
 		"checkout.reserve_timeout":  c.Checkout.ReserveTimeout,
+		"checkout.lock_timeout":     c.Checkout.LockTimeout,
 		"checkout.charge_timeout":   c.Checkout.ChargeTimeout,
 		"checkout.finalize_timeout": c.Checkout.FinalizeTimeout,
 		"checkout.max_pending_age":  c.Checkout.MaxPendingAge,
@@ -136,6 +138,8 @@ func (c AppConfig) Validate() error {
 	check(!c.Demo.Seed || c.Demo.SeedFile != "", "demo.seed_file is required when demo.seed is true")
 	errs = append(errs, validateUsers(c.Demo.Users)...)
 
+	check(c.Checkout.LockTimeout <= 0 || c.Checkout.LockTimeout >= ordering.MinLockTimeout, "checkout.lock_timeout must be at least 1ms")
+	check(c.Checkout.LockTimeout < c.Checkout.ReserveTimeout, "checkout.lock_timeout must be less than checkout.reserve_timeout")
 	request := c.Checkout.ReserveTimeout + c.Checkout.ChargeTimeout + c.Checkout.FinalizeTimeout + checkoutMargin
 	check(request <= c.HTTP.WriteTimeout, "checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s must not exceed http.write_timeout")
 
@@ -149,6 +153,7 @@ func (c AppConfig) Validate() error {
 	}, r.DBTimeout)
 	check(r.Lease > item+ordering.RecoveryLeaseMargin, "recovery.lease must be greater than 2 × recovery.db_timeout + 2 × checkout.charge_timeout + checkout.finalize_timeout + 2s: the renewal, a lookup and a void at checkout.charge_timeout each, the finalization, the reschedule and the margin")
 	check(c.HTTP.ShutdownTimeout >= max(request, item)+shutdownMargin, "http.shutdown_timeout must be at least the longer of a checkout request (checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s) and a recovered purchase (2 × recovery.db_timeout + 2 × checkout.charge_timeout + checkout.finalize_timeout), plus 2s to close the pool and telemetry")
+	check(c.HTTP.ShutdownTimeout > r.Lease, "http.shutdown_timeout must be greater than recovery.lease")
 	check(c.Checkout.MaxPendingAge > r.MinAge, "checkout.max_pending_age must be greater than recovery.min_age")
 	check(c.Checkout.MaxPendingAge > r.Lease, "checkout.max_pending_age must be greater than recovery.lease")
 

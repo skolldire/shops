@@ -129,6 +129,24 @@ func TestImportLog(t *testing.T) {
 		}, 10*time.Second, 10*time.Millisecond, "the connection was closed instead of going back to the pool")
 	})
 
+	t.Run("the unlock does not inherit the cancellation of the request", func(t *testing.T) {
+		reset(t)
+		request, cancel := context.WithCancel(ctx)
+		locked, unlock, ok, err := log.LockImports(request)
+		require.NoError(t, err)
+		require.True(t, ok)
+		var pid int
+		require.NoError(t, database.Q(locked, f.pool).QueryRow(locked, `SELECT pg_backend_pid()`).Scan(&pid))
+		cancel()
+
+		unlock()
+		var held, alive int
+		require.NoError(t, f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'`).Scan(&held))
+		require.Zero(t, held, "the lock is released at once although the request was cancelled")
+		require.NoError(t, f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE pid = $1`, pid).Scan(&alive))
+		require.Equal(t, 1, alive, "a clean unlock keeps the connection for the pool")
+	})
+
 	t.Run("an applied key is found without the lock", func(t *testing.T) {
 		reset(t)
 		_, found, err := log.ByKey(ctx, importKey)

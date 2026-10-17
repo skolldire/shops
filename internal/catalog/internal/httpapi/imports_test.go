@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -150,7 +151,7 @@ func TestImportErrorTable(t *testing.T) {
 			require.Contains(t, rec.Body.String(), tt.detail)
 			require.NotContains(t, rec.Body.String(), "10.0.0.5")
 			if tt.code == "import_in_progress" {
-				require.Equal(t, "5", rec.Header().Get("Retry-After"))
+				require.Equal(t, strconv.Itoa(app.ImportRetryAfterSeconds), rec.Header().Get("Retry-After"))
 			}
 			if tt.status == 500 {
 				require.Contains(t, logs.String(), "db exploded")

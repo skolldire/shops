@@ -24,7 +24,7 @@ type Checkout interface {
 
 type Queries interface {
 	Purchase(ctx context.Context, userID, id string) (domain.Purchase, error)
-	Purchases(ctx context.Context, userID string, page, pageSize int) (app.PurchasePage, error)
+	Purchases(ctx context.Context, userID string, page, pageSize *int) (app.PurchasePage, error)
 }
 
 type Handler struct {
@@ -148,10 +148,11 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	var format validation.Errors
 	page := pageParam(&format, "page", r.URL.Query().Get("page"))
 	size := pageParam(&format, "page_size", r.URL.Query().Get("page_size"))
-	res, err := h.queries.Purchases(r.Context(), userFrom(r.Context()), page, size)
 	if len(format) > 0 {
-		err = validation.Merge(format, err)
+		h.writeError(w, r, format)
+		return
 	}
+	res, err := h.queries.Purchases(r.Context(), userFrom(r.Context()), page, size)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -163,18 +164,15 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
-func pageParam(errs *validation.Errors, field, raw string) int {
+func pageParam(errs *validation.Errors, field, raw string) *int {
 	if raw == "" {
-		return 0
+		return nil
 	}
 	n, err := catalog.ParseWholeNumber(raw)
-	switch {
-	case err != nil:
-		errs.Add(field, validation.CodeInvalidFormat, "must be a whole number such as 2")
-		return 1
-	case n < 1:
-		errs.Add(field, validation.CodeOutOfRange, "must be at least 1")
-		return 1
+	if err != nil {
+		errs.Add(field, catalog.WholeNumberErrorCode(err), err.Error())
+		return nil
 	}
-	return int(n)
+	value := int(n)
+	return &value
 }

@@ -9,10 +9,13 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/skolldire/shops/internal/catalog"
 )
 
 type browser struct {
@@ -197,4 +200,35 @@ func TestUIFormsFromAnotherOriginAreRejected(t *testing.T) {
 	require.Zero(t, c.scalar(`SELECT count(*) FROM purchases`))
 	require.Zero(t, c.scalar(`SELECT count(*) FROM products WHERE sku = 'EVIL-1'`))
 	require.Equal(t, 1, c.scalar(`SELECT count(*) FROM products WHERE status = 'ACTIVE'`))
+}
+
+func TestCreatingAProductDuringAnImportIsRefusedInTheAPIAndTheUI(t *testing.T) {
+	c := startApp(t)
+	ctx := t.Context()
+	conn, err := c.pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+	_, err = conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('catalog.imports', 0))`)
+	require.NoError(t, err)
+	before, _, _ := c.products()
+
+	resp, body := c.do(http.MethodPost, "/api/v1/products", `{"sku":"BUSY-1","name":"Busy","category":"Tests","price":"10.00","stock":5,"weight_kg":"1"}`)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	apiRetry := resp.Header.Get("Retry-After")
+	require.Equal(t, strconv.Itoa(catalog.ImportRetryAfterSeconds), apiRetry)
+	code, _ := errorCodes(t, body)
+	require.Equal(t, "import_in_progress", code)
+
+	b := newBrowser(c)
+	resp, body = b.post("/admin/products", url.Values{"sku": {"BUSY-2"}, "name": {"Busy"}, "category": {"Tests"}, "price": {"10.00"}, "stock": {"5"}, "weight_kg": {"1"}})
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Equal(t, apiRetry, resp.Header.Get("Retry-After"), "the API and the UI ask for the same delay")
+	require.Contains(t, body, "An import is being applied. Nothing was created; try again in a few seconds.")
+	after, _, _ := c.products()
+	require.Equal(t, before, after, "neither request created a product")
+
+	_, err = conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended('catalog.imports', 0))`)
+	require.NoError(t, err)
+	resp, body = c.do(http.MethodPost, "/api/v1/products", `{"sku":"BUSY-1","name":"Busy","category":"Tests","price":"10.00","stock":5,"weight_kg":"1"}`)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, body)
 }

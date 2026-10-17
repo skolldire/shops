@@ -103,9 +103,10 @@ type Cart struct {
 }
 
 type Budgets struct {
-	Reserve  time.Duration
-	Charge   time.Duration
-	Finalize time.Duration
+	Reserve     time.Duration
+	LockTimeout time.Duration
+	Charge      time.Duration
+	Finalize    time.Duration
 }
 
 type RecoveryConfig struct {
