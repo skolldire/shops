@@ -357,6 +357,10 @@ func TestImportCountsEveryOutcome(t *testing.T) {
 	require.Equal(t, report.Records, total, "the canonical outcomes account for every record")
 }
 
+func TestImportRowOutcomesKeepTheirNamesAndOrder(t *testing.T) {
+	require.Equal(t, []string{"created", "updated", "unchanged", "skipped", "rejected"}, app.ImportRowOutcomes())
+}
+
 func TestImportRecordsEveryOutcomeEvenWhenItIsZero(t *testing.T) {
 	_, rec := run(t, &fakeStore{}, csvHeader)
 
