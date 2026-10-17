@@ -179,6 +179,14 @@ func newCluster(t *testing.T, stuckAfter int) cluster {
 
 func newClusterWith(t *testing.T, stuckAfter int, tune func(*ordering.RecoveryConfig)) cluster {
 	t.Helper()
+	config := recoveryConfig
+	config.StuckAfterAttempts = stuckAfter
+	tune(&config)
+	return buildCluster(t, config, eventsConfig)
+}
+
+func buildCluster(t *testing.T, config ordering.RecoveryConfig, events ordering.EventsConfig) cluster {
+	t.Helper()
 	pool, cfg := dbtest.Start(t)
 	quiet, err := logger.New(logger.Config{Level: "error"}, io.Discard)
 	require.NoError(t, err)
@@ -187,9 +195,6 @@ func newClusterWith(t *testing.T, stuckAfter int, tune func(*ordering.RecoveryCo
 	real, err := payment.NewModule(pool)
 	require.NoError(t, err)
 	pay := &gate{real: real, charges: map[string]int{}, deadlines: map[string]time.Time{}}
-	config := recoveryConfig
-	config.StuckAfterAttempts = stuckAfter
-	tune(&config)
 	newReplica := func() replica {
 		logs := &logBuffer{}
 		log, err := logger.New(logger.Config{Level: "info"}, logs)
@@ -199,7 +204,7 @@ func newClusterWith(t *testing.T, stuckAfter int, tune func(*ordering.RecoveryCo
 			Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: metrics, Users: []string{"alice", "bob"},
 			Budgets:  ordering.Budgets{Reserve: 3 * time.Second, LockTimeout: time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
 			Recovery: config,
-			Events:   eventsConfig,
+			Events:   events,
 		})
 		require.NoError(t, err)
 		return replica{orders: orders, logs: logs, metrics: metrics}
