@@ -40,7 +40,7 @@ There are no data migrations: `db/init/001_schema.sql` only runs when the data v
 make down && make up
 ```
 
-Phase 2 added the `version` column to `products` and moved to PostgreSQL 18. Phase 4 adds `inventory_movements` with its triggers, the `payment_token` column of `purchases`, the `reserved` units of `products`, the reserved columns of `inventory_movements`, the `imports` table, the recovery columns of `purchases` (`recovery_attempts`, `next_attempt_at`, `lease_until`, `lease_owner`, `last_recovery_error`) and `payment_fake_charges`. At startup the app checks that the columns it needs exist and stops with `database: the schema is out of date, recreate the volume with make down && make up` when one is missing. The message does not name the column. The app never runs DDL.
+Phase 2 added the `version` column to `products` and moved to PostgreSQL 18. Phase 4 adds `inventory_movements` with its triggers, the `payment_token` column of `purchases`, the `reserved` units of `products`, the reserved columns of `inventory_movements`, the `imports` table, the recovery columns of `purchases` (`recovery_attempts`, `next_attempt_at`, `lease_until`, `lease_owner`, `last_recovery_error`) and `payment_fake_charges`. Phase 6 adds `outbox`, `inbox` and `product_sales`. At startup the app checks that the columns it needs exist and stops with `database: the schema is out of date, recreate the volume with make down && make up` when one is missing. The message does not name the column. The app never runs DDL.
 
 ### Debug stack
 
@@ -130,13 +130,13 @@ The ordering module follows the same layout:
 
 | Package | Role | May import |
 |---|---|---|
-| `domain` | Purchases and their states, the checkout rules, the canonical request hash, cart limits and `ParseID` | A closed list: `crypto/sha256`, `encoding/hex`, `errors`, `regexp`, `slices`, `strconv`, `strings`, `time`, `shopspring/decimal` and `platform/validation` |
-| `app` | Checkout, finalization, recovery, cart and purchase queries, and small ports per consumer: `Tx`; `StockReservation`, `StockSettlement` and `ProductReader`; `PaymentCharger` and `Payments`; `PurchaseCreation`, `PurchaseLookup`, `PurchaseReader`, `PurchaseFinisher` and `PendingPurchases`; `CartEditor` and `PurchasedCartRemover`; `CheckoutRecorder` and `RecoveryRecorder`. Each use case receives only the ones it calls | A closed list: `context`, `errors`, `fmt`, `slices`, `time`, `shopspring/decimal`, `domain` and `platform/validation` |
+| `domain` | Purchases and their states, the checkout rules, the canonical request hash, cart limits, `ParseID` and the purchase outcome events | A closed list: `crypto/sha256`, `encoding/hex`, `errors`, `regexp`, `slices`, `strconv`, `strings`, `time`, `shopspring/decimal` and `platform/validation` |
+| `app` | Checkout, finalization, recovery, the event relay, the sales projection, cart and purchase queries, and small ports per consumer: `Tx`; `StockReservation`, `StockSettlement` and `ProductReader`; `PaymentCharger` and `Payments`; `PurchaseCreation`, `PurchaseLookup`, `PurchaseReader`, `PurchaseFinisher` and `PendingPurchases`; `CartEditor` and `PurchasedCartRemover`; `CheckoutRecorder` and `RecoveryRecorder`; `EventOutbox`, `EventQueue`, `EventHandler`, `Inbox`, `SalesProjectionStore` and `RelayRecorder`. Each use case receives only the ones it calls | A closed list: `context`, `errors`, `fmt`, `slices`, `time`, `shopspring/decimal`, `domain` and `platform/validation` |
 | `httpapi` | The checkout and purchase endpoints. Reads `X-Demo-User-ID` and `Idempotency-Key`, decodes JSON and parses prices with `catalog.ParseDecimal` | `app`, `domain`, `platform` and the catalog facade for number parsing |
-| `postgres` | `Tx`, the purchase ports and the cart ports on `purchases`, `purchase_items` and `cart_items` | `app`, `domain` and `platform` |
+| `postgres` | `Tx`, the purchase ports and the cart ports on `purchases`, `purchase_items` and `cart_items`; the outbox, the inbox and the units sold on `outbox`, `inbox` and `product_sales` | `app`, `domain` and `platform` |
 | `catalogstock` | Implements the stock and product ports with the catalog facade (`ReserveStock`, `ReleaseStock`, `CommitStock`, `Get`) | `app`, `domain` and the catalog facade |
 | `paymentgw` | Implements `Payments` with the payment facade and translates its errors | `app` and the payment facade |
-| `observe` | Implements `CheckoutRecorder` and `RecoveryRecorder`: the checkout and recovery metrics and logs | `domain` and `platform` |
+| `observe` | Implements `CheckoutRecorder`, `RecoveryRecorder` and `RelayRecorder`: the checkout, recovery and relay metrics and logs | `domain` and `platform` |
 
 `payment` has no `internal/` packages because its only piece is the simulated charge; a real provider adapter would go to `payment/internal` behind the same facade. Each module owns its tables: ordering never reads `products`, it goes through the catalog facade, and catalog and payment do not know ordering.
 
@@ -671,15 +671,65 @@ A purchase becomes `FAILED` only with a `DECLINED` or a `VOIDED` confirmed by th
 
 The attempt counter is returned by the database (`UPDATE … RETURNING recovery_attempts`), so the `error` is written once even with several replicas. **Alerts are defined on the metric `checkout_recovery_stuck`, not on the logs**: the gauge keeps the signal while a stuck purchase exists, and a single log line can be missed.
 
-**Shutdown.** SIGTERM reaches the worker and the HTTP servers at the same time:
+**Shutdown.** SIGTERM reaches the recovery worker, the event relay and the HTTP servers at the same time:
 
-1. The worker stops claiming at once and does not start the next purchase of its batch.
-2. The purchase in progress finishes within its own deadline, while the HTTP servers drain the requests in flight.
-3. Once the servers are drained, the closers run in reverse order: the worker is awaited, then the pool and the telemetry are closed.
-4. `http.shutdown_timeout` is the single budget for all of it. It must be at least the longer of a checkout request (`reserve + charge + finalize + 2s`, 14s) and a recovered purchase (19s), plus 2s for the pool and the telemetry, so 21s, and greater than `recovery.lease` (30s). The default is 35s, and `stop_grace_period` in `compose.yaml` is 40s, so the container is not killed before the budget ends. An import request in flight is drained like any other request; releasing its imports lock has its own 5s deadline, and a release that fails or runs out of time closes the connection instead of returning it to the pool.
-5. If the budget runs out, the pool is not closed under a worker that still holds a connection. Its close is abandoned, and the app exits with an error that says the pool did not close in time. A purchase that did not finish stays `PENDING` and its lease expires.
+1. Both workers stop claiming at once and do not start the next purchase or event of their batch.
+2. The purchase and the event in progress finish within their own deadlines, while the HTTP servers drain the requests in flight.
+3. Once the servers are drained, the closers run in reverse order: the relay and the recovery worker are awaited, then the pool and the telemetry are closed.
+4. `http.shutdown_timeout` is the single budget for all of it. It must be at least the longest of a checkout request (`reserve + charge + finalize + 2s`, 14s), a recovered purchase (19s) and a relayed event (`2 × events.db_timeout + events.handler_timeout`, 6s), plus 2s for the pool and the telemetry, so 21s, and greater than `recovery.lease` (30s). The default is 35s, and `stop_grace_period` in `compose.yaml` is 40s, so the container is not killed before the budget ends. An import request in flight is drained like any other request; releasing its imports lock has its own 5s deadline, and a release that fails or runs out of time closes the connection instead of returning it to the pool.
+5. If the budget runs out, the pool is not closed under a worker that still holds a connection. Its close is abandoned, and the app exits with an error that says the pool did not close in time. A purchase that did not finish stays `PENDING` and an event that was not confirmed stays pending; their leases expire and another replica takes them.
 
 **Runbook, only for the open case (the provider does not answer).** Find the purchases with `checkout_recovery_stuck` and `checkout_recovery_stuck_reserved_units`, or with `SELECT id, recovery_attempts, last_recovery_error FROM purchases WHERE status = 'PENDING' ORDER BY created_at`. Check the provider by reference (the purchase id) and wait for the recovery to resolve them once it answers. **Never finalize a purchase with direct SQL**: it would skip the stock and cart rules and could contradict what the provider charged.
+
+### Purchase events (transactional outbox)
+
+Every finished purchase records one event, `PurchaseConfirmed` or `PurchaseFailed`, in the `outbox` table, inside the same transaction as its finalization: only when `Finish … WHERE status = 'PENDING'` wins, after the stock is settled and the cart cleaned. A repeated finalization loses that update and never tries to insert. If the insert fails, the whole finalization rolls back and the purchase stays `PENDING` for the recovery. The reservation, the charge and the finalization stay synchronous: events only report what already happened, and nothing in the checkout depends on them.
+
+| Column | Value |
+|---|---|
+| `event_id` | A UUID from PostgreSQL; the identity a consumer deduplicates on |
+| `aggregate_type`, `aggregate_id` | `Purchase` and the purchase id. `outbox_one_event_per_purchase`, a unique index on `aggregate_id` limited to purchases, keeps at most one event per purchase. The `CHECK` on `aggregate_type` makes a new aggregate an explicit decision |
+| `type`, `version` | `PurchaseConfirmed` or `PurchaseFailed`, version `1` |
+| `occurred_at` | The `now()` of the finalization transaction |
+| `correlation_id` | `purchase:<id>` |
+| `payload` | Confirmed: `purchase_id`, `total`, `currency`, `payment_ref` and the items (`product_id`, `sku`, `quantity`, `unit_price`). Failed: `purchase_id`, `reason` and the items (`product_id`, `quantity`). Amounts are exact decimal text, such as `"total": "59.98"`, never JSON numbers. No payment token, token hash, user or idempotency key |
+
+**The relay.** Every replica runs one, on the same ticker worker as the recovery (`events.interval`). All the coordination goes through PostgreSQL:
+
+| Step | Statement | Deadline |
+|---|---|---|
+| Claim | One statement: `UPDATE outbox SET lease_owner, lease_until = now() + lease WHERE id IN (SELECT … WHERE published_at IS NULL AND next_attempt_at <= now() AND (lease_until IS NULL OR lease_until < now()) ORDER BY id LIMIT batch FOR UPDATE SKIP LOCKED)`. No lock is held afterwards | `events.db_timeout`, the worker's context |
+| Renew, before each event | `UPDATE … SET lease_until = now() + lease WHERE id = $1 AND lease_owner = $owner AND published_at IS NULL`. No row changed: the event is skipped | `events.db_timeout` |
+| Consume | The consumer's own transaction (below) | `events.handler_timeout` |
+| Confirm | `UPDATE … SET published_at = now(), lease_owner = NULL, lease_until = NULL WHERE id = $1 AND lease_owner = $owner AND published_at IS NULL` | `events.db_timeout` |
+| On failure | `UPDATE … SET attempts = attempts + 1, next_attempt_at = now() + backoff, last_error = <sanitized>, lease_owner = NULL, lease_until = NULL WHERE id = $1 AND lease_owner = $owner RETURNING attempts` | `events.db_timeout` |
+
+Each event has one deadline, counted on the monotonic clock from just before its renewal: `2 × events.db_timeout + events.handler_timeout`, 6s with the defaults, and `events.lease` must be greater than that plus 2s. The worker stops claiming as soon as the shutdown starts, finishes the event in progress within its deadline, does not start the next one of its batch and stops before the pool.
+
+**Batch, lease and deadline.** A claim leases the whole batch at once, and the events are processed one after the other. With `events.batch_size: 10` and the worst case of 6s per event, the tail of a batch can outlive its 10s lease; another replica may then claim those events. That is harmless: the late worker's renewal changes no row and the event is counted as `skipped`, without effects. A smaller batch, or a longer lease, keeps that rare; a larger batch makes it common, which is why the default is 10.
+
+**The consumer.** `SalesProjection` keeps `product_sales`, the units sold per product, in one transaction: it inserts `(consumer, event_id)` into `inbox` with `ON CONFLICT DO NOTHING`, and only if that inserted a row and the event is `PurchaseConfirmed`, it adds `units_sold += quantity` and `purchases += 1` for every item. A `PurchaseFailed` is recorded in the inbox and changes nothing. `purchases` is the number of confirmed purchases that contain the product. If the projection fails, the checkout never knows: the event stays pending and is retried. There is no endpoint for the projection; it is read with SQL.
+
+**Guarantees.** Delivery is at least once, with an idempotent effect:
+
+- A crash before the consumer commits leaves no effect, and the lease expires so the event is claimed again.
+- A crash after the consumer commits and before the confirmation delivers the event again; the inbox recognises its `event_id` and the projection does not change twice.
+- A worker whose lease expired: its renewal changes no row, so it does not consume; if it had already consumed, its confirmation changes no row and the inbox absorbs the repeated effect. A worker frozen past its lease keeps the same guarantee.
+- Order: there is at most one event per purchase, so there is nothing to reorder inside an aggregate, and the projection only adds, so the order between purchases does not matter. The relay does not exclude aggregates.
+- Events are never dropped: a failing event is retried with exponential backoff, jitter and a ceiling (`events.base_backoff`, `events.max_backoff`).
+
+**Reconciliation.** Once no event of the set is pending (`SELECT count(*) FROM outbox WHERE published_at IS NULL` is 0), the projection equals the confirmed purchase items. Pending and failed purchases are not counted. While events are pending, the projection can lag behind. The same query verifies it and, run as an `INSERT`, rebuilds it:
+
+```sql
+SELECT i.product_id, sum(i.quantity) AS units_sold, count(*) AS purchases
+FROM purchase_items i JOIN purchases p ON p.id = i.purchase_id
+WHERE p.status = 'CONFIRMED'
+GROUP BY i.product_id;
+```
+
+**Logs and stuck events.** The attempt counter comes from `UPDATE … RETURNING attempts`, so only the relay whose reschedule returns exactly `events.stuck_after_attempts` writes the one `error`, also across replicas; later attempts are `warn`. Logs carry the event sequence, its type, the attempt and the cause, never the payload or a configuration value. Alerts are defined on `outbox_stuck_events` and `outbox_oldest_pending_seconds`.
+
+**Runbook for a stuck event.** Find it with `SELECT id, aggregate_id, type, attempts, last_error, next_attempt_at FROM outbox WHERE published_at IS NULL ORDER BY id`, fix the cause the error names (for example a lock held on `product_sales`), and let the relay retry it; `UPDATE outbox SET next_attempt_at = now() WHERE id = …` only brings the next attempt forward. **Never mark an event as published by hand**: the projection would miss it, and the reconciliation query is the only way to repair that afterwards.
 
 ## Web UI
 
@@ -815,6 +865,26 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 
 **Revisit when** imports become frequent or automated, for example a supplier feed every few minutes: then a queue of imports applied by a worker is better than asking clients to retry.
 
+### D11. Purchase events through a transactional outbox
+
+**Context.** Other parts of a store react to purchases: sales figures, stock alerts, notifications. Reporting a purchase must not change the checkout, which already guarantees one charge and one effect per purchase, and the store has no message broker in this phase.
+
+**Alternatives.**
+
+| Option | Consequence |
+|---|---|
+| Publish right after the commit, without an outbox | A process that stops between the commit and the publication loses the event for good |
+| Change data capture on the WAL | Exact and decoupled, but it needs replication slots, a decoder and another process to operate |
+| A message broker | Out of scope for this phase; it would still need an outbox to publish atomically with the purchase |
+| Confirm the consumption and the publication in one transaction | Exactly once, but only because the consumer shares this database; it ties the design to that and does not show how an external consumer is handled |
+| An outbox written with the finalization, a relay per replica under leases, and an idempotent consumer with an inbox | At least once with an idempotent effect, no new infrastructure, and the same relay can later publish to a broker |
+
+**Decision.** The outbox written in the finalization transaction, a relay per replica that claims events under leases with `FOR UPDATE SKIP LOCKED`, and a consumer that deduplicates on `event_id` through an inbox in the same transaction as its effect. One event per purchase is enforced by a unique index, so no ordering mechanism is needed, and the projection is commutative.
+
+**Example.** A purchase is approved: in one transaction it becomes `CONFIRMED`, sells its units, cleans the cart and inserts its `PurchaseConfirmed`. The relay of replica A claims it, the projection adds 2 units of the tent, and A crashes before confirming. Ten seconds later replica B claims the event again, the inbox already has its `event_id`, the projection does not change, and B marks it published.
+
+**Revisit when** a purchase needs more than one event, such as a refund: then the unique index is replaced by a sequence per aggregate (`aggregate_seq`) with a rule that rejects or postpones events out of order, which needs approval. Also when a broker is introduced: the relay publishes to it instead of calling the projection, with the same guarantees.
+
 ## Known limitations
 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
@@ -832,6 +902,8 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 - **A gateway that does not meet the payment contract can charge twice.** The contract test is the acceptance criterion for any provider.
 - **The payment is a simulated provider.** It is persisted and meets the contract, but it never times out on its own; unavailability is exercised by the tests.
 - **Movements and purchase snapshots are immutable only for the application.** The table owner or a superuser can disable their triggers, and `session_replication_role = replica` skips them.
+- **The outbox and the inbox grow without a purge.** Published events and inbox rows are kept; a purge by age is the next step once the volume matters.
+- **The units sold can lag behind the purchases.** The projection is updated by the relay after the purchase commits, so it trails it by up to an interval while events are pending, and longer while an event is retried. See the reconciliation query in [Purchase events](#purchase-events-transactional-outbox).
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
 
 ## Evolution
@@ -843,7 +915,9 @@ Pieces left out of this phase, with what would justify them:
 | Real HTTP payment provider (phase 4b: HTTP adapter, retries, circuit breaker) | Choosing a provider. It plugs in behind the payment port without changing ordering, if it passes `paymenttest.Contract` and supports `Lookup` and `Void` by reference |
 | `inventory_movements`, `purchases` and `purchase_items` owned by a separate role, with `REVOKE UPDATE, DELETE` (column-level `UPDATE` grants for the purchase outcome) for the application role | Production, where the audit must hold even against the application's own credentials |
 | Real authentication and sessions instead of demo users | Anyone other than an evaluator using the store |
-| Outbox and message broker | Phase 5 |
+| Purge of published events and old inbox rows | The size of `outbox` and `inbox` |
+| Several events per purchase with a sequence per aggregate (`aggregate_seq`), replacing `outbox_one_event_per_purchase`; requires approval | A purchase that changes after it is finished, such as a refund |
+| A message broker behind the same relay | Consumers outside this database |
 
 ## Configuration
 
@@ -883,14 +957,19 @@ Keys without an environment variable:
 | `recovery.min_age` | `30s`. Must be greater than `reserve + charge + finalize + 2s`, so the recovery never takes a checkout in progress |
 | `recovery.lease` | `30s`. Must be greater than `2 × db_timeout + 2 × charge + finalize + 2s`, the deadline of one purchase plus the margin |
 | `recovery.db_timeout` | `2s`. The deadline of each recovery statement. See [Periodic recovery](#periodic-recovery) |
-| `http.shutdown_timeout` | `35s`. Must be at least the longer of a checkout request and a recovered purchase, plus 2s, and greater than `recovery.lease` |
+| `http.shutdown_timeout` | `35s`. Must be at least the longest of a checkout request, a recovered purchase and a relayed event, plus 2s, and greater than `recovery.lease` |
 | `recovery.base_backoff`, `recovery.max_backoff` | `5s` and `5m`; the base cannot exceed the ceiling |
 | `recovery.stuck_after_attempts` | `10` |
+| `events.interval`, `events.batch_size` | `1s` and `10`. See [Purchase events](#purchase-events-transactional-outbox) for the relation between the batch and the lease |
+| `events.lease` | `10s`. Must be greater than `2 × events.db_timeout + events.handler_timeout + 2s`, the deadline of one event plus the margin |
+| `events.db_timeout`, `events.handler_timeout` | `2s` and `2s` |
+| `events.base_backoff`, `events.max_backoff` | `1s` and `1m`; the base cannot exceed the ceiling |
+| `events.stuck_after_attempts` | `10` |
 | `http.public_origins` | `[]`. See [Same-origin check for forms](#same-origin-check-for-forms) |
 
 ## Observability
 
 - **Logs:** JSON on stdout with `timestamp`, `severity` and `message`. Every request line carries `request_id`, `trace_id` and `span_id`. Sensitive fields and values (passwords, tokens, bearer credentials, card numbers) are redacted. The configuration is never logged. An import that recovers from a failed batch logs it once as a warning; a row the database finally rejects is logged once as an error.
-- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish (the image has no shell, so use `make up-debug`, which publishes it on `127.0.0.1:9100`). Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole. Every checkout that reaches the use case counts once in `checkout_total{outcome}`: `confirmed`, `declined`, `pending` (a stored purchase without a definitive payment result), `insufficient_stock`, `price_changed`, `product_unavailable`, `invalid` (field rules and the idempotency key, which the use case validates), `idempotency_conflict`, `replayed`, `in_progress`, `try_again` (only `40P01` and `55P03`) and `error` (unexpected failures); a failure counts as `try_again` or as `error`, never both. Requests rejected before the use case (unknown demo user, unreadable JSON, a body too large) are not counted there; the HTTP server metrics cover them. The recovery counts every attempt in `checkout_recovery_total{outcome}` (`confirmed`, `declined`, `still_pending`, `error`, `skipped`) and every resolution with the provider in `checkout_recovery_resolutions_total{result}` (`confirmed`, `declined`, `voided`, `mismatch`, `error`); every series is recorded with 0 at startup so it exists before the first attempt. After each cycle it publishes the gauges `checkout_pending_purchases`, `checkout_oldest_pending_seconds`, `checkout_recovery_stuck` and `checkout_recovery_stuck_reserved_units`. Every replica publishes the same values from the same database, so the gauges are aggregated across replicas with `max`, never summed. No label carries users, purchases, tokens or error text.
+- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish (the image has no shell, so use `make up-debug`, which publishes it on `127.0.0.1:9100`). Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole. Every checkout that reaches the use case counts once in `checkout_total{outcome}`: `confirmed`, `declined`, `pending` (a stored purchase without a definitive payment result), `insufficient_stock`, `price_changed`, `product_unavailable`, `invalid` (field rules and the idempotency key, which the use case validates), `idempotency_conflict`, `replayed`, `in_progress`, `try_again` (only `40P01` and `55P03`) and `error` (unexpected failures); a failure counts as `try_again` or as `error`, never both. Requests rejected before the use case (unknown demo user, unreadable JSON, a body too large) are not counted there; the HTTP server metrics cover them. The recovery counts every attempt in `checkout_recovery_total{outcome}` (`confirmed`, `declined`, `still_pending`, `error`, `skipped`) and every resolution with the provider in `checkout_recovery_resolutions_total{result}` (`confirmed`, `declined`, `voided`, `mismatch`, `error`); every series is recorded with 0 at startup so it exists before the first attempt. After each cycle it publishes the gauges `checkout_pending_purchases`, `checkout_oldest_pending_seconds`, `checkout_recovery_stuck` and `checkout_recovery_stuck_reserved_units`. The relay counts every attempt in `outbox_relay_total{outcome}` (`published`, `still_pending`, `skipped`, `error`) and every redelivered event the inbox recognised in `inbox_duplicates_total`, and publishes `outbox_pending_events`, `outbox_oldest_pending_seconds` and `outbox_stuck_events` after each cycle. Every replica publishes the same values from the same database, so the gauges are aggregated across replicas with `max`, never summed. No label carries users, purchases, tokens or error text.
 - **Checkout logs:** every checkout that ends with a purchase writes one line with `purchase_id` and `status`, at `warn` with its cause when the purchase stays `PENDING`. The payment token is never logged. An unexpected failure is logged once, by the HTTP adapter.
 - **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route. Under the request span, an import adds one `catalog.import` span for the whole operation, and every statement sent to PostgreSQL adds a `postgres <OPERATION>` child span, such as `postgres SELECT` or `postgres COMMIT`. The trace shows how long the import took, which statements ran, how long each one took and which one failed; the time not spent in PostgreSQL is reading, validating and preparing the rows. Spans carry the operation name only: never the SQL text, its arguments, a file name or a product value. The checkout adds no spans of its own; its PostgreSQL statements hang from the request span. A file rejected as a whole is an expected rejection: the caller still gets the error, but the span is not marked as failed.
