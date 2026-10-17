@@ -23,6 +23,9 @@ func NewSalesProjection(tx Tx, inbox Inbox, sales SalesProjectionStore) (*SalesP
 }
 
 func (s *SalesProjection) Handle(ctx context.Context, e domain.StoredEvent) (bool, error) {
+	if !domain.SupportedEvent(e.Event.Type, e.Event.Version) {
+		return false, domain.ErrUnsupportedEvent
+	}
 	applied := false
 	err := s.tx.WithinTx(ctx, func(ctx context.Context) error {
 		applied = false

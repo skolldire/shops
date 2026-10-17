@@ -51,7 +51,7 @@ func (s *salesWorld) AddSale(_ context.Context, productID domain.ID, units int) 
 }
 
 func confirmedEvent(id string) domain.StoredEvent {
-	return domain.StoredEvent{EventID: domain.ID(id), Event: domain.PurchaseEvent{Type: domain.EventPurchaseConfirmed,
+	return domain.StoredEvent{EventID: domain.ID(id), Event: domain.PurchaseEvent{Type: domain.EventPurchaseConfirmed, Version: domain.PurchaseEventVersion,
 		Items: []domain.EventItem{{ProductID: "p1", Quantity: 2}, {ProductID: "p2", Quantity: 1}}}}
 }
 
@@ -70,7 +70,7 @@ func TestTheProjectionAddsAConfirmedPurchaseOnce(t *testing.T) {
 	require.Equal(t, map[domain.ID]int{"p1": 2, "p2": 1}, w.units)
 	require.Equal(t, map[domain.ID]int{"p1": 1, "p2": 1}, w.count, "one confirmed purchase per product")
 
-	failed := domain.StoredEvent{EventID: "e2", Event: domain.PurchaseEvent{Type: domain.EventPurchaseFailed, Items: []domain.EventItem{{ProductID: "p1", Quantity: 5}}}}
+	failed := domain.StoredEvent{EventID: "e2", Event: domain.PurchaseEvent{Type: domain.EventPurchaseFailed, Version: domain.PurchaseEventVersion, Items: []domain.EventItem{{ProductID: "p1", Quantity: 5}}}}
 	applied, err = projection.Handle(ctx, failed)
 	require.NoError(t, err)
 	require.True(t, applied, "a failed purchase is recorded in the inbox")
@@ -87,4 +87,24 @@ func TestAProjectionFailureLeavesNoInboxRow(t *testing.T) {
 	require.Empty(t, w.inbox, "the event is not marked as processed, so it is retried")
 	_, err = app.NewSalesProjection(nil, w, w)
 	require.Error(t, err)
+}
+
+func TestTheProjectionRejectsATypeOrVersionItDoesNotSupport(t *testing.T) {
+	w := newSalesWorld()
+	projection, err := app.NewSalesProjection(w, w, w)
+	require.NoError(t, err)
+	newer := confirmedEvent("e1")
+	newer.Event.Version = domain.PurchaseEventVersion + 1
+	unknown := confirmedEvent("e2")
+	unknown.Event.Type = "PurchaseRefunded"
+	missing := confirmedEvent("e3")
+	missing.Event.Version = 0
+	for _, e := range []domain.StoredEvent{newer, unknown, missing} {
+		applied, err := projection.Handle(context.Background(), e)
+		require.ErrorIs(t, err, domain.ErrUnsupportedEvent, string(e.EventID))
+		require.False(t, applied)
+	}
+	require.Empty(t, w.inbox, "an unsupported event is not recorded as processed")
+	require.Empty(t, w.units)
+	require.Empty(t, w.count)
 }
