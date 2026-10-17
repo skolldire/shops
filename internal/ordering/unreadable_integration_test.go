@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog"
@@ -166,6 +167,43 @@ func TestAnEventOfAnUnsupportedVersionIsLeftPendingAndUntouched(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ordering.RelayReport{Published: 1}, repaired, "a compatible version is consumed")
 	require.Equal(t, float64(0), c.a.metrics.gauge("outbox_unsupported_events"))
+	requireProjectionMatchesTheSource(t, c)
+}
+
+func TestAnEventOfAnUnknownTypeIsLeftPendingAndUntouched(t *testing.T) {
+	c := eventCluster(t)
+	ctx := context.Background()
+	c.pay.set(false, false)
+	tent := c.product(t, "TENT-1", 50)
+	c.exec(t, false, `ALTER TABLE outbox DROP CONSTRAINT outbox_type_check,
+		ADD CONSTRAINT outbox_type_check CHECK (type IN ('PurchaseConfirmed', 'PurchaseFailed', 'PurchaseRefunded'))`)
+	unknown := uuid.NewString()
+	c.exec(t, false, `INSERT INTO outbox (aggregate_type, aggregate_id, type, version, correlation_id, payload)
+		VALUES ('Purchase', $1::uuid, 'PurchaseRefunded', 1, $2, '{}')`, unknown, "purchase:"+unknown)
+	before := c.event(t, unknown)
+	c.checkout(t, c.a, "alice", "pm_approved", map[catalog.Product]int{tent: 4})
+	c.checkout(t, c.a, "bob", "pm_approved", map[catalog.Product]int{tent: 2})
+
+	report, err := c.a.orders.RelayOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ordering.RelayReport{Published: 2}, report, "the compatible events are published in the same cycle")
+	for range 2 {
+		report, err = c.a.orders.RelayOnce(ctx)
+		require.NoError(t, err)
+		require.Equal(t, ordering.RelayReport{}, report, "the event of an unknown type is never claimed")
+	}
+	e := c.event(t, unknown)
+	require.False(t, e.published, "it is never dropped or published")
+	require.False(t, e.leased)
+	require.Zero(t, e.attempts, "no attempt is counted for an event this replica cannot read")
+	require.Empty(t, e.lastError)
+	require.True(t, e.next.Equal(before.next), "no backoff is applied")
+	require.Zero(t, c.a.logs.count("WARN", "")+c.a.logs.count("ERROR", ""), "no delivery log")
+	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_unsupported_events"))
+	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_pending_events"))
+	c.noEffectOf(t, unknown)
+	require.Equal(t, 6, c.count(t, `SELECT units_sold FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
+	require.Equal(t, 2, c.count(t, `SELECT purchases FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
 	requireProjectionMatchesTheSource(t, c)
 }
 

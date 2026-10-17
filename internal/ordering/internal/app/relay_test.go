@@ -35,6 +35,7 @@ type fakeQueue struct {
 	markErr        error
 	rescheduleErr  error
 	kinds          []domain.EventKind
+	statsKinds     []domain.EventKind
 	claimErr       error
 	published      []int64
 	rescheduled    []int64
@@ -99,8 +100,11 @@ func (q *fakeQueue) Reschedule(ctx context.Context, seq int64, _ string, backoff
 	return q.attempts[seq], true, nil
 }
 
-func (q *fakeQueue) Stats(ctx context.Context, _ int, _ []domain.EventKind) (app.EventStats, error) {
+func (q *fakeQueue) Stats(ctx context.Context, _ int, kinds []domain.EventKind) (app.EventStats, error) {
 	q.note(ctx, "stats", 0, 0)
+	q.mu.Lock()
+	q.statsKinds = kinds
+	q.mu.Unlock()
 	return app.EventStats{Pending: len(q.events)}, nil
 }
 
@@ -394,4 +398,5 @@ func TestTheRelayClaimsAndCountsOnlyTheKindsItsConsumerSupports(t *testing.T) {
 	_, err = r.RunCycle(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, kinds, q.kinds, "the claim is limited to what the consumer supports")
+	require.Equal(t, kinds, q.statsKinds, "the unsupported events are counted against the same pairs")
 }

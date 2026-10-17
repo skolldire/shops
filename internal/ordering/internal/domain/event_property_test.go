@@ -120,14 +120,15 @@ func TestAConfirmedEventKeepsTheInvariantsOfAValidPurchase(t *testing.T) {
 }
 
 func TestAFailedEventKeepsTheIdentityReasonAndItemsOfAValidPurchase(t *testing.T) {
-	rng := newSequence(propertySeed + 1)
+	seed := propertySeed + 1
+	rng := newSequence(seed)
 	for i := range propertyPurchases {
 		g := validPurchase(t, rng)
 		p := g.purchase
 		reason := []string{"card_declined", "insufficient_funds", "payment_not_completed"}[rng.intn(3)]
 		require.NoError(t, p.Apply(domain.Failed(reason)))
 		e, err := domain.NewPurchaseEvent(p, domain.Outcome{Status: domain.StatusFailed, FailureReason: reason})
-		require.NoError(t, err, "seed %d, purchase %d", propertySeed, i)
+		require.NoError(t, err, "seed %d, purchase %d", seed, i)
 
 		require.Equal(t, domain.EventPurchaseFailed, e.Type)
 		require.Equal(t, p.ID, e.AggregateID)

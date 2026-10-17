@@ -57,7 +57,8 @@ To see the metrics, start the debug stack instead and follow [Monitoring with Pr
   - Engine 23.0 is the first release that builds with BuildKit by default, which the Dockerfiles need (`RUN --mount=type=cache`, `COPY --chmod`).
   - Compose 2.17 is the first release with `up --wait --wait-timeout`, which the CI smoke test uses. `make up` itself only needs `up --build`.
   - Recent Compose releases build through Buildx. Without it they fall back to the classic builder, which stops on these Dockerfiles with `the --chmod option requires BuildKit`.
-  - Checked with Engine 23.0.6, Compose 2.22.0 and Buildx 0.11.2 and with Engine 29.5.2, Compose 5.6.0 and Buildx 0.38.0. The CI runner uses Engine 28.0.4, Compose 2.38.2 and Buildx 0.38.0.
+  - Checked locally with Engine 23.0.6, Compose 2.22.0 and Buildx 0.11.2 and with Engine 29.5.2, Compose 5.6.0 and Buildx 0.38.0.
+  - Checked in CI with Engine 28.0.4 and Compose 2.38.2, the versions listed for the image of GitHub's `ubuntu-latest` runner (`ubuntu24/20261012.334`), where the image scan and end-to-end smoke job passes.
 - Go as declared in `go.mod` (currently 1.27.2), only to run tests or the binary outside Docker
 - `make`, optional: every target that starts the stack has its `docker compose` equivalent below
 
@@ -869,9 +870,13 @@ The cost: an unreadable event is retried forever, with the stuck gauge above 0, 
 ```sql
 SELECT id, event_id, aggregate_id, type, version, attempts, last_error, next_attempt_at
 FROM outbox
-WHERE published_at IS NULL AND (last_error LIKE '%does not match its type and version%' OR version <> 1)
+WHERE published_at IS NULL
+  AND (last_error LIKE '%does not match its type and version%'
+       OR (type, version) NOT IN (VALUES ('PurchaseConfirmed', 1), ('PurchaseFailed', 1)))
 ORDER BY id;
 ```
+
+A pair is unsupported when its type and its version together are not in the list, so the query finds an unknown type as well as an unknown version of a known type, like `outbox_unsupported_events`. The `VALUES` list is `domain.SupportedEvents()` of this release, the pairs `Outbox.Stats` uses: the query describes what this release supports. A newer replica can support other pairs, so take the list from the release whose view you are checking.
 
 To resume, fix what produced the event, not only the row: deploy a release whose consumer supports the version, or fix the producer that wrote the bad payload. Only then, if the stored row itself is wrong, correct it in place with an `UPDATE` of `payload` or `version` that keeps its `id` and `event_id`, so the inbox still recognises it if it was ever delivered, and bring it forward with `UPDATE outbox SET next_attempt_at = now() WHERE id = …`. The next cycle publishes it once, and it leaves the pending and stuck gauges. Never insert a copy with a new `event_id`, delete the row or set `published_at` by hand.
 
