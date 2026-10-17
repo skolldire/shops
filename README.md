@@ -497,7 +497,7 @@ Keys are scoped by user.
 | Same key, other hash | The purchase is not changed | `409 idempotency_conflict` |
 | Recoverable lock error in the reservation, rolled back | No purchase and no units reserved | `503 try_again`, `Retry-After: 1` |
 
-Concurrent requests with the same key wait on the unique index until the first reservation finishes, and then land in one of these rows. If a commit fails in a way that leaves unknown whether it was applied (for example the connection dropped), the answer is `500 internal_error`; if the purchase was persisted, a retry with the same key finds it and the recovery settles it.
+A second request with the same key while the first is still reserving waits on the unique index until the first reservation finishes or until `checkout.lock_timeout`, whichever comes first. If the first finishes in time, the second lands in one of these rows. If the wait reaches `checkout.lock_timeout`, the second answers `503 try_again` with `Retry-After: 1` and leaves nothing of its own: no purchase, item, reservation, movement, charge or cart change. The client sends it again with the same key and the same body: once the first purchase is finished it gets that result with `200` and no new charge; while it is still `PENDING` it gets `202` with the `PENDING` purchase and starts no charge of its own, so a definitive result only comes from the checkout that created the purchase or from the recovery. If a commit fails in a way that leaves unknown whether it was applied (for example the connection dropped), the answer is `500 internal_error`; if the purchase was persisted, a retry with the same key finds it and the recovery settles it.
 
 ### Errors
 
