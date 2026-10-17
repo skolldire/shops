@@ -6,9 +6,13 @@ It currently ships the platform layer (`internal/platform`), the product catalog
 
 ## Requirements
 
-- Docker with the Compose v2 and Buildx plugins (Docker Desktop includes both)
+- Docker Engine 23.0 or later with the Compose plugin, 2.17 or later, and the Buildx plugin. That is all the stack needs: the images carry every file they use, so no file of the clone is mounted into a container and the clone works from any directory.
+  - Engine 23.0 is the first release that builds with BuildKit by default, which the Dockerfiles need (`RUN --mount=type=cache`, `COPY --chmod`).
+  - Compose 2.17 is the first release with `up --wait --wait-timeout`, which the CI smoke test uses. `make up` itself only needs `up --build`.
+  - Recent Compose releases build through Buildx. Without it they fall back to the classic builder, which stops on these Dockerfiles with `the --chmod option requires BuildKit`.
+  - Checked with Engine 23.0.6, Compose 2.22.0 and Buildx 0.11.2 and with Engine 29.5.2, Compose 5.6.0 and Buildx 0.38.0. The CI runner uses Engine 28.0.4, Compose 2.38.2 and Buildx 0.38.0.
 - Go as declared in `go.mod` (currently 1.27.2), only to run tests or the binary outside Docker
-- `make`
+- `make`, optional: every target that starts the stack has its `docker compose` equivalent below
 
 ## Run with Docker
 
@@ -19,8 +23,8 @@ make up
 | Service | Purpose |
 |---|---|
 | `secrets-init` | Generates the database password into a named volume on first run, then exits |
-| `db` | PostgreSQL 18. `db/init/001_schema.sql` is applied when the data volume is created |
-| `app` | The store, the admin UI and the API on `http://localhost:8080` |
+| `db` | PostgreSQL 18, built from `db/Dockerfile` with `db/init` copied into the image. `db/init/001_schema.sql` is applied when the data volume is created |
+| `app` | The store, the admin UI and the API on `http://localhost:8080`. The image carries `config/config.yaml` and the demo CSV |
 
 ```sh
 curl -i localhost:8080/health/ready
@@ -31,6 +35,38 @@ Open `http://localhost:8080` for the store and `http://localhost:8080/admin/prod
 `make down` removes containers, data and the generated password together, so the next `make up` starts clean and the schema is applied again.
 
 `make up-replicas` starts two replicas of the app behind a proxy (`caddy`) on `http://localhost:8081`, besides the first replica on `8080`. Both replicas share the database: they seed once, recover purchases without duplicating charges and answer the same idempotency keys. The proxy keeps the `Host` header, so the same-origin check needs no configuration.
+
+Each target is one `docker compose` command, run from the root of the clone:
+
+| Target | Equivalent |
+|---|---|
+| `make up` | `docker compose up --build` |
+| `make up-replicas` | `docker compose --profile replicas up --build` |
+| `make up-debug` | `docker compose -f compose.yaml -f compose.debug.yaml up --build` |
+| `make down` | `docker compose -f compose.yaml -f compose.debug.yaml --profile replicas down -v --remove-orphans` |
+| `make logs` | `docker compose logs -f` |
+
+`up` stays in the foreground and shows the logs of every service. With `up -d` it returns as soon as the containers start, and a failure of the app only shows in `docker compose logs app`; `up -d --wait` returns once every service is healthy and fails when one is not.
+
+The ports published on the host can be changed with environment variables. They only change the host side: the containers keep their ports and receive none of these variables.
+
+| Variable | Default | Published by |
+|---|---|---|
+| `APP_PORT` | `8080` | `app` |
+| `PROXY_PORT` | `8081` | `proxy` (`make up-replicas`) |
+| `DB_PORT` | `5432` | `db`, on `127.0.0.1` (`make up-debug`). `make run` reads the same variable |
+| `METRICS_PORT` | `9100` | `app` metrics, on `127.0.0.1` (`make up-debug`) |
+| `PROMETHEUS_PORT` | `9090` | `prometheus`, on `127.0.0.1` (`make up-debug`) |
+
+```sh
+APP_PORT=18080 make up
+```
+
+To run with another configuration without rebuilding, add `compose.config.yaml`, which mounts `config/config.yaml` over the one in the image. It is the only file of the clone that is ever mounted, and only when it is asked for:
+
+```sh
+docker compose -f compose.yaml -f compose.config.yaml up --build
+```
 
 ### Upgrading an existing stack
 
@@ -50,11 +86,11 @@ make up-debug
 
 Adds, bound to `127.0.0.1` only:
 
-| Port | What |
-|---|---|
-| `5432` | PostgreSQL |
-| `9100` | Application metrics (`/metrics`) |
-| `9090` | Prometheus, scraping the app every 15s |
+| Port | Variable | What |
+|---|---|---|
+| `5432` | `DB_PORT` | PostgreSQL |
+| `9100` | `METRICS_PORT` | Application metrics (`/metrics`) |
+| `9090` | `PROMETHEUS_PORT` | Prometheus, scraping the app every 15s. Built from `deploy/prometheus/Dockerfile`, which copies `prometheus.yml` into the image |
 
 ## Run locally
 
@@ -76,7 +112,21 @@ make test-integration   # PostgreSQL via Testcontainers
 make vuln               # govulncheck
 ```
 
-Integration tests need a running Docker daemon. When `DOCKER_HOST` is unset, the Makefile uses the endpoint of the active Docker context, which also covers Colima.
+Integration tests start PostgreSQL with Testcontainers, which needs access to the Docker daemon of the machine. When `DOCKER_HOST` is unset, `make test-integration` takes the endpoint of the active Docker context (`docker context inspect`), whichever runtime it points to. Running `go test -tags=integration` directly needs `DOCKER_HOST` set the same way.
+
+## Troubleshooting
+
+**The app is not up after `up -d`.** `docker compose ps` shows the state of each service and `docker compose logs app` shows why the app stopped. A volume created by an earlier phase stops it with `database: the schema is out of date, recreate the volume with make down && make up`; `make down` deletes the data of that stack.
+
+**A port on the host is already in use.** Depending on the Docker setup, the conflict either stops the container with an error ending in `bind: address already in use`, or the container starts and the other process keeps answering on that port. `curl -s localhost:8080/health/ready` must answer `{"status":"up","checks":{"postgres":"up"}}`; anything else is not this app. Choose free ports with the [port variables](#run-with-docker) instead of stopping a process you do not know.
+
+**The first start.** The first `up --build` downloads the base images and the Go modules and compiles the app, which takes a few minutes; later starts reuse the build cache. The app is ready when its log shows `server listening` and `/health/ready` answers 200.
+
+**Integration tests fail with `rootless Docker not found, failed to create Docker provider`.** Testcontainers did not find the Docker daemon. Run them with `make test-integration`, or set `DOCKER_HOST` to the endpoint shown by `docker context inspect --format '{{.Endpoints.docker.Host}}'`.
+
+**Go version.** `go.mod` requires Go 1.27.2. An older Go downloads that toolchain on its own unless `GOTOOLCHAIN=local` is set, in which case it stops with `go.mod requires go >= 1.27.2`. `make up` builds inside Docker and needs no local Go.
+
+**A metric is missing in Prometheus.** Check that the `shops` target is `UP` in `http://127.0.0.1:9090/targets`, and wait for the next scrape (every 15s). Every series of the counters exists from the start with 0; the histograms (`import_duration_seconds` and the HTTP ones) create a series with its first observation, so `rate()` shows a new route from its second scrape on. See [Monitoring with Prometheus](#monitoring-with-prometheus).
 
 ## Continuous integration
 
@@ -84,11 +134,11 @@ Every pull request to `master` runs:
 
 | Check | What it enforces |
 |---|---|
-| Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS), the dependency rules described in [Architecture](#architecture), tidy modules, hadolint on the Dockerfile |
+| Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS, Dockerfiles), the dependency rules described in [Architecture](#architecture), tidy modules, hadolint on every Dockerfile |
 | Unit tests | Race detector on the `go.mod` version and on the latest stable Go |
 | Integration tests | Repositories, transactions, the inventory audit and HTTP acceptance tests of the product lifecycle, the checkout (concurrent buyers, idempotency, rejections, declined payments, recovery) and the UI purchase flow against PostgreSQL |
 | govulncheck | Known vulnerabilities in reachable code |
-| Image scan and end-to-end smoke | Trivy on the image, then the compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
+| Image scan and end-to-end smoke | Builds every image of the stack, Trivy on the app image, then the compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
 | Dependency review | OSV-Scanner compares the base branch with the pull request and fails on newly introduced vulnerable dependencies. Accepted exceptions live in `osv-scanner.toml` with a reason and an expiry date |
 | CodeQL | Static security analysis, also weekly |
 
