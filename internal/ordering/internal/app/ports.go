@@ -106,6 +106,14 @@ type EventOutbox interface {
 	Append(ctx context.Context, e domain.PurchaseEvent) error
 }
 
+type Inbox interface {
+	Record(ctx context.Context, consumer string, eventID domain.ID) (bool, error)
+}
+
+type SalesProjectionStore interface {
+	AddSale(ctx context.Context, productID domain.ID, units int) error
+}
+
 type PurchaseFinisher interface {
 	Finish(ctx context.Context, id domain.ID, o domain.Outcome) (bool, error)
 }
