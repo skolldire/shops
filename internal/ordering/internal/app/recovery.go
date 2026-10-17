@@ -12,6 +12,7 @@ import (
 const (
 	maxCauseLength = 500
 	LeaseMargin    = 2 * time.Second
+	MinLockTimeout = time.Millisecond
 )
 
 var (

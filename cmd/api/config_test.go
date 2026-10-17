@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/skolldire/shops/internal/ordering"
 	"github.com/skolldire/shops/internal/platform/config"
 	"github.com/skolldire/shops/internal/platform/secret"
 )
@@ -182,7 +183,15 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 
 	cfg = shippedConfig(t)
 	cfg.Checkout.LockTimeout = 0
-	require.ErrorContains(t, cfg.Validate(), "checkout.lock_timeout must be positive")
+	err = cfg.Validate()
+	require.ErrorContains(t, err, "checkout.lock_timeout must be positive")
+	require.NotContains(t, err.Error(), "at least 1ms", "zero is reported once, as not positive")
+	cfg.Checkout.LockTimeout = 500 * time.Microsecond
+	err = cfg.Validate()
+	require.ErrorContains(t, err, "checkout.lock_timeout must be at least 1ms", "the reservation cannot use less than its minimum")
+	require.NotContains(t, err.Error(), "must be positive")
+	cfg.Checkout.LockTimeout = ordering.MinLockTimeout
+	require.NoError(t, cfg.Validate(), "the minimum itself is accepted")
 	cfg.Checkout.LockTimeout = 3 * time.Second
 	require.ErrorContains(t, cfg.Validate(), "checkout.lock_timeout must be less than checkout.reserve_timeout")
 	cfg.Checkout.LockTimeout = 2999 * time.Millisecond

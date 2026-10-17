@@ -52,7 +52,7 @@ func NewReservationTx(manager *database.TxManager, pool *pgxpool.Pool, lockTimeo
 	switch {
 	case pool == nil:
 		return nil, errors.New("ordering: the reservation transaction requires a pool")
-	case lockTimeout < time.Millisecond:
+	case lockTimeout < app.MinLockTimeout:
 		return nil, errors.New("ordering: the reservation lock timeout must be at least 1ms")
 	}
 	tx, err := NewTx(manager)

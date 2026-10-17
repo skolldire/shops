@@ -138,6 +138,7 @@ func (c AppConfig) Validate() error {
 	check(!c.Demo.Seed || c.Demo.SeedFile != "", "demo.seed_file is required when demo.seed is true")
 	errs = append(errs, validateUsers(c.Demo.Users)...)
 
+	check(c.Checkout.LockTimeout <= 0 || c.Checkout.LockTimeout >= ordering.MinLockTimeout, "checkout.lock_timeout must be at least 1ms")
 	check(c.Checkout.LockTimeout < c.Checkout.ReserveTimeout, "checkout.lock_timeout must be less than checkout.reserve_timeout")
 	request := c.Checkout.ReserveTimeout + c.Checkout.ChargeTimeout + c.Checkout.FinalizeTimeout + checkoutMargin
 	check(request <= c.HTTP.WriteTimeout, "checkout.reserve_timeout + charge_timeout + finalize_timeout + 2s must not exceed http.write_timeout")

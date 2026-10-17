@@ -136,6 +136,7 @@ func newModule(p ports, d Deps) (*Module, error) {
 const (
 	RecoveryLeaseMargin = app.LeaseMargin
 	MaxCartLines        = domain.MaxCartLines
+	MinLockTimeout      = app.MinLockTimeout
 )
 
 func RecoveryItemBudget(b Budgets, dbTimeout time.Duration) time.Duration {
