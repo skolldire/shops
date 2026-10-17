@@ -32,6 +32,7 @@ type fakeQueue struct {
 	attempts       map[int64]int
 	causes         map[int64]string
 	renewErr       error
+	markErr        error
 	claimErr       error
 	published      []int64
 	rescheduled    []int64
@@ -59,6 +60,9 @@ func (q *fakeQueue) Renew(ctx context.Context, seq int64, _ string, _ time.Durat
 
 func (q *fakeQueue) MarkPublished(ctx context.Context, seq int64, _ string) (bool, error) {
 	q.note(ctx, "mark", seq, 0)
+	if q.markErr != nil {
+		return false, q.markErr
+	}
 	if q.lostMark[seq] {
 		return false, nil
 	}
@@ -316,4 +320,26 @@ func TestAnUnreadableEventThatAnotherRelayOwnsIsLeftAlone(t *testing.T) {
 	require.Equal(t, []string{"claim", "renew", "renew", "reschedule", "stats"}, q.ops(), "a lost renewal does not reschedule")
 	require.Empty(t, q.rescheduled, "a lease taken before the reschedule leaves the attempts to the new owner")
 	require.Equal(t, []string{app.RelaySkipped, app.RelaySkipped}, rec.outcomes())
+}
+
+func TestEveryDuplicateTheInboxDetectsIsCountedWhateverTheConfirmation(t *testing.T) {
+	for name, tc := range map[string]struct {
+		queue   *fakeQueue
+		report  app.RelayReport
+		outcome string
+	}{
+		"confirmed":          {&fakeQueue{events: stored(1)}, app.RelayReport{Published: 1, Duplicates: 1}, app.RelayPublished},
+		"lease lost":         {&fakeQueue{events: stored(1), lostMark: map[int64]bool{1: true}}, app.RelayReport{Skipped: 1, Duplicates: 1}, app.RelaySkipped},
+		"confirmation fails": {&fakeQueue{events: stored(1), markErr: errors.New("connection reset")}, app.RelayReport{StillPending: 1, Duplicates: 1}, app.RelayError},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, rec := &fakeHandler{duplicate: map[int64]bool{1: true}}, &relayRecorder{}
+			report, err := newTestRelay(t, tc.queue, h, rec).RunCycle(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, tc.report, report)
+			require.Equal(t, 1, rec.duplicates, "the inbox absorbed the delivery, so the detection is counted")
+			require.Equal(t, []string{tc.outcome}, rec.outcomes())
+			require.Empty(t, tc.queue.rescheduled, "an absorbed delivery is not a failure of the consumer")
+		})
+	}
 }

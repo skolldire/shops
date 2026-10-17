@@ -244,3 +244,45 @@ func TestARelayThatLostTheLeaseOfAnUnreadableEventDoesNotRescheduleIt(t *testing
 	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM outbox WHERE published_at IS NULL AND lease_owner IS NULL AND next_attempt_at > now()`))
 	require.Zero(t, f.count(t, `SELECT count(*) FROM inbox`))
 }
+
+func TestARedeliveryAbsorbedByTwoRelaysCountsTwoDetectionsAndOneEffect(t *testing.T) {
+	f := newRelayFixture(t)
+	ctx := context.Background()
+	barrier := newMarkBarrier(nil)
+	a := f.module(t, func(q app.EventQueue) app.EventQueue { barrier.EventQueue = q; return barrier })
+	b := f.module(t, func(q app.EventQueue) app.EventQueue { return q })
+	t.Cleanup(barrier.open)
+	product := f.confirmed(t, b, "alice", 3)
+	delivered, err := b.RelayOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, RelayReport{Published: 1}, delivered)
+	_, err = f.pool.Exec(ctx, `UPDATE outbox SET published_at = NULL`)
+	require.NoError(t, err)
+
+	first := make(chan relayed, 1)
+	go func() {
+		report, err := a.RelayOnce(ctx)
+		first <- relayed{report, err}
+	}()
+	select {
+	case <-barrier.entered:
+	case got := <-first:
+		t.Fatalf("worker A never reached the confirmation: %+v", got)
+	}
+	_, err = f.pool.Exec(ctx, `UPDATE outbox SET lease_until = now() - interval '1 second'`)
+	require.NoError(t, err)
+
+	reportB, err := b.RelayOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, RelayReport{Published: 1, Duplicates: 1}, reportB, "worker B took the redelivery, the inbox absorbed it and B confirmed")
+
+	barrier.open()
+	gotA := <-first
+	require.NoError(t, gotA.err)
+	require.Equal(t, RelayReport{Skipped: 1, Duplicates: 1}, gotA.report, "A detected the duplicate before it lost the lease")
+
+	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM inbox`))
+	require.Equal(t, 3, f.count(t, `SELECT units_sold FROM product_sales WHERE product_id = $1::uuid`, product), "one effect")
+	require.Equal(t, 1, f.count(t, `SELECT purchases FROM product_sales WHERE product_id = $1::uuid`, product))
+	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM outbox WHERE published_at IS NOT NULL AND lease_owner IS NULL`))
+}
