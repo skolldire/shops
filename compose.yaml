@@ -56,7 +56,7 @@ services:
 
   proxy:
     profiles: [replicas]
-    image: caddy:2.10.0-alpine
+    image: caddy:2.11.7-alpine
     command: ["caddy", "reverse-proxy", "--from", ":8081", "--to", "app:8080", "--to", "app2:8080"]
     ports:
       - "${PROXY_PORT:-8081}:8081"
