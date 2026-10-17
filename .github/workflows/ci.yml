@@ -44,6 +44,7 @@ jobs:
         uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: Dockerfile
+          recursive: true
 
   test:
     name: Unit tests (Go ${{ matrix.name }})
@@ -107,8 +108,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/docker-hub-mirror
-      - name: Build image
-        run: docker compose build app
+      - name: Build images
+        run: docker compose -f compose.yaml -f compose.debug.yaml build
       - name: Scan image (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:

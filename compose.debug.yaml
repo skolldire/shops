@@ -1,18 +1,16 @@
 services:
   db:
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
 
   app:
     ports:
-      - "127.0.0.1:9100:9100"
+      - "127.0.0.1:${METRICS_PORT:-9100}:9100"
 
   prometheus:
-    image: prom/prometheus:v3.15.0
+    build: ./deploy/prometheus
     ports:
-      - "127.0.0.1:9090:9090"
-    volumes:
-      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     depends_on:
       app:
         condition: service_healthy

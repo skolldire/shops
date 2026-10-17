@@ -84,7 +84,8 @@ func NewRelay(queue EventQueue, handler EventHandler, rec RelayRecorder, policy 
 
 func (r *Relay) RunCycle(ctx context.Context) (RelayReport, error) {
 	claimCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
-	claimed, err := r.queue.Claim(claimCtx, r.policy.Owner, r.policy.Lease, r.policy.Batch)
+	kinds := r.handler.Supports()
+	claimed, err := r.queue.Claim(claimCtx, r.policy.Owner, r.policy.Lease, r.policy.Batch, kinds)
 	cancel()
 	if err != nil {
 		return RelayReport{}, fmt.Errorf("ordering: claim outbox events: %w", err)
@@ -107,7 +108,7 @@ func (r *Relay) RunCycle(ctx context.Context) (RelayReport, error) {
 	}
 	statsCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
 	defer cancel()
-	stats, err := r.queue.Stats(statsCtx, r.policy.StuckAfter)
+	stats, err := r.queue.Stats(statsCtx, r.policy.StuckAfter, kinds)
 	if err != nil {
 		return report, fmt.Errorf("ordering: the outbox gauges were not updated: %w", err)
 	}
@@ -115,23 +116,42 @@ func (r *Relay) RunCycle(ctx context.Context) (RelayReport, error) {
 	return report, nil
 }
 
-func (r *Relay) renew(ctx context.Context, start time.Time, ref eventRef, report *RelayReport) bool {
+type relayResult struct {
+	outcome   string
+	attempts  int
+	cause     error
+	duplicate bool
+}
+
+func (r *Relay) record(ctx context.Context, ref eventRef, res relayResult, report *RelayReport) {
+	switch res.outcome {
+	case RelayPublished:
+		report.Published++
+		if res.duplicate {
+			report.Duplicates++
+			r.rec.RelayDuplicate(ctx)
+		}
+	case RelaySkipped:
+		report.Skipped++
+	default:
+		report.StillPending++
+	}
+	r.rec.RelayAttempt(ctx, RelayAttempt{Seq: ref.seq, Type: ref.kind, Attempts: res.attempts, Outcome: res.outcome, Cause: res.cause, StuckAfter: r.policy.StuckAfter})
+}
+
+func (r *Relay) renew(ctx context.Context, start time.Time, ref eventRef) (relayResult, bool) {
 	renewCtx, cancel := context.WithDeadline(ctx, start.Add(r.policy.DBTimeout))
 	owned, err := r.queue.Renew(renewCtx, ref.seq, r.policy.Owner, r.policy.Lease)
 	cancel()
 	switch {
 	case err != nil && ctx.Err() != nil:
-		return false
+		return relayResult{}, false
 	case err != nil:
-		report.StillPending++
-		r.attempt(ctx, ref, ref.attempts, RelayError, err)
-		return false
+		return relayResult{outcome: RelayError, attempts: ref.attempts, cause: err}, false
 	case !owned:
-		report.Skipped++
-		r.attempt(ctx, ref, ref.attempts, RelaySkipped, nil)
-		return false
+		return relayResult{outcome: RelaySkipped, attempts: ref.attempts}, false
 	}
-	return true
+	return relayResult{}, true
 }
 
 func (r *Relay) setAside(ctx context.Context, u domain.UnreadableEvent, report *RelayReport) {
@@ -139,8 +159,12 @@ func (r *Relay) setAside(ctx context.Context, u domain.UnreadableEvent, report *
 	item, cancelItem := context.WithDeadline(context.WithoutCancel(ctx), start.Add(r.item))
 	defer cancelItem()
 	ref := eventRef{seq: u.Seq, kind: u.Type, attempts: u.Attempts}
-	if r.renew(ctx, start, ref, report) {
-		r.reschedule(item, ref, u.Cause, report)
+	res, owned := r.renew(ctx, start, ref)
+	switch {
+	case owned:
+		r.record(item, ref, r.reschedule(item, ref, u.Cause), report)
+	case res.outcome != "":
+		r.record(ctx, ref, res, report)
 	}
 }
 
@@ -149,13 +173,19 @@ func (r *Relay) relay(ctx context.Context, e domain.StoredEvent, report *RelayRe
 	item, cancelItem := context.WithDeadline(context.WithoutCancel(ctx), start.Add(r.item))
 	defer cancelItem()
 	ref := eventRef{seq: e.Seq, kind: e.Event.Type, attempts: e.Attempts}
-	if !r.renew(ctx, start, ref, report) {
-		return
+	res, owned := r.renew(ctx, start, ref)
+	switch {
+	case owned:
+		r.record(item, ref, r.deliver(item, e, ref), report)
+	case res.outcome != "":
+		r.record(ctx, ref, res, report)
 	}
+}
+
+func (r *Relay) deliver(item context.Context, e domain.StoredEvent, ref eventRef) relayResult {
 	applied, err := r.handle(item, e)
 	if err != nil {
-		r.reschedule(item, ref, err, report)
-		return
+		return r.reschedule(item, ref, err)
 	}
 	var owned bool
 	markCtx, cancel, err := within(item, r.policy.DBTimeout)
@@ -165,19 +195,11 @@ func (r *Relay) relay(ctx context.Context, e domain.StoredEvent, report *RelayRe
 	}
 	switch {
 	case err != nil:
-		report.StillPending++
-		r.attempt(item, ref, ref.attempts, RelayError, err)
+		return relayResult{outcome: RelayError, attempts: ref.attempts, cause: err}
 	case !owned:
-		report.Skipped++
-		r.attempt(item, ref, ref.attempts, RelaySkipped, nil)
-	default:
-		report.Published++
-		if !applied {
-			report.Duplicates++
-			r.rec.RelayDuplicate(item)
-		}
-		r.attempt(item, ref, ref.attempts, RelayPublished, nil)
+		return relayResult{outcome: RelaySkipped, attempts: ref.attempts}
 	}
+	return relayResult{outcome: RelayPublished, attempts: ref.attempts, duplicate: !applied}
 }
 
 func (r *Relay) handle(item context.Context, e domain.StoredEvent) (bool, error) {
@@ -189,8 +211,7 @@ func (r *Relay) handle(item context.Context, e domain.StoredEvent) (bool, error)
 	return r.handler.Handle(ctx, e)
 }
 
-func (r *Relay) reschedule(item context.Context, ref eventRef, cause error, report *RelayReport) {
-	report.StillPending++
+func (r *Relay) reschedule(item context.Context, ref eventRef, cause error) relayResult {
 	var (
 		total int
 		owned bool
@@ -202,14 +223,9 @@ func (r *Relay) reschedule(item context.Context, ref eventRef, cause error, repo
 	}
 	switch {
 	case err != nil:
-		r.attempt(item, ref, ref.attempts, RelayError, errors.Join(cause, err))
+		return relayResult{outcome: RelayError, attempts: ref.attempts, cause: errors.Join(cause, err)}
 	case !owned:
-		r.attempt(item, ref, ref.attempts, RelaySkipped, cause)
-	default:
-		r.attempt(item, ref, total, RelayStillPending, cause)
+		return relayResult{outcome: RelaySkipped, attempts: ref.attempts, cause: cause}
 	}
-}
-
-func (r *Relay) attempt(ctx context.Context, ref eventRef, attempts int, outcome string, cause error) {
-	r.rec.RelayAttempt(ctx, RelayAttempt{Seq: ref.seq, Type: ref.kind, Attempts: attempts, Outcome: outcome, Cause: cause, StuckAfter: r.policy.StuckAfter})
+	return relayResult{outcome: RelayStillPending, attempts: total, cause: cause}
 }

@@ -22,6 +22,10 @@ func NewSalesProjection(tx Tx, inbox Inbox, sales SalesProjectionStore) (*SalesP
 	return &SalesProjection{tx: tx, inbox: inbox, sales: sales}, nil
 }
 
+func (s *SalesProjection) Supports() []domain.EventKind {
+	return domain.SupportedEvents()
+}
+
 func (s *SalesProjection) Handle(ctx context.Context, e domain.StoredEvent) (bool, error) {
 	if !domain.SupportedEvent(e.Event.Type, e.Event.Version) {
 		return false, domain.ErrUnsupportedEvent

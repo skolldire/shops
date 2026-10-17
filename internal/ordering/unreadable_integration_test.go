@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/skolldire/shops/internal/catalog"
@@ -15,9 +16,8 @@ import (
 )
 
 const (
-	syntheticSecret  = "SYNTHETIC-SECRET-7731"
-	unreadableCause  = "ordering: the event payload does not match its type and version: an amount that is not a decimal"
-	unsupportedCause = "ordering: the event type and version are not supported by this release: the outbox has no decoder for them"
+	syntheticSecret = "SYNTHETIC-SECRET-7731"
+	unreadableCause = "ordering: the event payload does not match its type and version: an amount that is not a decimal"
 )
 
 func (b *logBuffer) contains(text string) bool {
@@ -98,7 +98,7 @@ func TestAnUnreadableEventDoesNotStopTheRestOfItsBatch(t *testing.T) {
 	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_pending_events"))
 }
 
-func TestAnUnreadableEventReachesTheStuckThresholdWithoutExposingItsPayload(t *testing.T) {
+func TestAnUnreadableEventAlternatingBetweenRelaysLogsOneErrorAndAWarningAtEveryDoubling(t *testing.T) {
 	c := eventCluster(t)
 	ctx := context.Background()
 	c.pay.set(false, false)
@@ -106,8 +106,10 @@ func TestAnUnreadableEventReachesTheStuckThresholdWithoutExposingItsPayload(t *t
 	poisoned := c.checkout(t, c.a, "alice", "pm_approved", map[catalog.Product]int{tent: 1})
 	c.corruptTotal(t, poisoned.ID)
 
-	for attempt := 1; attempt <= stuckEventsAfter+2; attempt++ {
-		report, err := c.a.orders.RelayOnce(ctx)
+	attempts := 4*stuckEventsAfter + 1
+	for attempt := 1; attempt <= attempts; attempt++ {
+		relay := []replica{c.a, c.b}[attempt%2]
+		report, err := relay.orders.RelayOnce(ctx)
 		require.NoError(t, err)
 		require.Equal(t, ordering.RelayReport{StillPending: 1}, report)
 		require.Equal(t, attempt, c.event(t, poisoned.ID).attempts, "every cycle counts one attempt")
@@ -115,19 +117,24 @@ func TestAnUnreadableEventReachesTheStuckThresholdWithoutExposingItsPayload(t *t
 		if attempt >= stuckEventsAfter {
 			want = 1
 		}
-		require.Equal(t, want, c.a.metrics.gauge("outbox_stuck_events"), "attempt %d", attempt)
+		require.Equal(t, want, relay.metrics.gauge("outbox_stuck_events"), "attempt %d", attempt)
 		c.dueEvents(t)
 	}
-	require.Equal(t, 1, c.a.logs.count("ERROR", "an outbox event is stuck"), "one error when the threshold is crossed")
-	require.Equal(t, 2, c.a.logs.count("WARN", "a stuck outbox event is still pending"), "warnings afterwards")
+	logs := func(severity, message string) int {
+		return c.a.logs.count(severity, message) + c.b.logs.count(severity, message)
+	}
+	require.Equal(t, 1, logs("ERROR", "an outbox event is stuck"), "one error when the threshold is crossed, across relays")
+	require.Equal(t, 2, logs("WARN", "a stuck outbox event is still pending"), "warnings only at twice and four times the threshold")
+	require.Equal(t, int64(attempts), c.a.metrics.counter("outbox_relay_total|still_pending")+c.b.metrics.counter("outbox_relay_total|still_pending"),
+		"the metric counts every attempt")
 	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_pending_events"))
 	require.True(t, c.a.logs.contains("an amount that is not a decimal"), "the logs name the category")
-	require.False(t, c.a.logs.contains(syntheticSecret), "the logs never carry the payload")
+	require.False(t, c.a.logs.contains(syntheticSecret) || c.b.logs.contains(syntheticSecret), "the logs never carry the payload")
 	require.NotContains(t, c.event(t, poisoned.ID).lastError, syntheticSecret)
 	c.noEffectOf(t, poisoned.ID)
 }
 
-func TestAnEventOfAnUnsupportedVersionIsRetriedAndNeverConsumed(t *testing.T) {
+func TestAnEventOfAnUnsupportedVersionIsLeftPendingAndUntouched(t *testing.T) {
 	c := eventCluster(t)
 	ctx := context.Background()
 	c.pay.set(false, false)
@@ -135,23 +142,68 @@ func TestAnEventOfAnUnsupportedVersionIsRetriedAndNeverConsumed(t *testing.T) {
 	newer := c.checkout(t, c.a, "alice", "pm_approved", map[catalog.Product]int{tent: 4})
 	c.checkout(t, c.a, "bob", "pm_approved", map[catalog.Product]int{tent: 2})
 	c.exec(t, false, `UPDATE outbox SET version = version + 1 WHERE aggregate_id = $1::uuid`, newer.ID)
+	before := c.event(t, newer.ID)
 
-	report, err := c.a.orders.RelayOnce(ctx)
-	require.NoError(t, err)
-	require.Equal(t, ordering.RelayReport{Published: 1, StillPending: 1}, report)
+	for range 3 {
+		report, err := c.a.orders.RelayOnce(ctx)
+		require.NoError(t, err)
+		require.Zero(t, report.StillPending+report.Skipped, "the unsupported event is never claimed")
+	}
 	e := c.event(t, newer.ID)
-	require.False(t, e.published)
+	require.False(t, e.published, "it is never dropped or published")
 	require.False(t, e.leased)
-	require.Equal(t, 1, e.attempts)
-	require.Equal(t, unsupportedCause, e.lastError, "the outbox rejected it before the consumer, and did not read it as version 1")
+	require.Zero(t, e.attempts, "no attempt is counted for an event this replica cannot read")
+	require.Empty(t, e.lastError)
+	require.True(t, e.next.Equal(before.next), "no backoff is applied")
+	require.Zero(t, c.a.logs.count("WARN", "")+c.a.logs.count("ERROR", ""), "no delivery log")
+	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_unsupported_events"))
+	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_pending_events"))
 	c.noEffectOf(t, newer.ID)
 	require.Equal(t, 2, c.count(t, `SELECT units_sold FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
 	require.Equal(t, 1, c.count(t, `SELECT purchases FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
 
-	c.exec(t, false, `UPDATE outbox SET version = version - 1, next_attempt_at = now() WHERE aggregate_id = $1::uuid`, newer.ID)
+	c.exec(t, false, `UPDATE outbox SET version = version - 1 WHERE aggregate_id = $1::uuid`, newer.ID)
 	repaired, err := c.a.orders.RelayOnce(ctx)
 	require.NoError(t, err)
-	require.Equal(t, ordering.RelayReport{Published: 1}, repaired, "a compatible version is consumed once it is due")
+	require.Equal(t, ordering.RelayReport{Published: 1}, repaired, "a compatible version is consumed")
+	require.Equal(t, float64(0), c.a.metrics.gauge("outbox_unsupported_events"))
+	requireProjectionMatchesTheSource(t, c)
+}
+
+func TestAnEventOfAnUnknownTypeIsLeftPendingAndUntouched(t *testing.T) {
+	c := eventCluster(t)
+	ctx := context.Background()
+	c.pay.set(false, false)
+	tent := c.product(t, "TENT-1", 50)
+	c.exec(t, false, `ALTER TABLE outbox DROP CONSTRAINT outbox_type_check,
+		ADD CONSTRAINT outbox_type_check CHECK (type IN ('PurchaseConfirmed', 'PurchaseFailed', 'PurchaseRefunded'))`)
+	unknown := uuid.NewString()
+	c.exec(t, false, `INSERT INTO outbox (aggregate_type, aggregate_id, type, version, correlation_id, payload)
+		VALUES ('Purchase', $1::uuid, 'PurchaseRefunded', 1, $2, '{}')`, unknown, "purchase:"+unknown)
+	before := c.event(t, unknown)
+	c.checkout(t, c.a, "alice", "pm_approved", map[catalog.Product]int{tent: 4})
+	c.checkout(t, c.a, "bob", "pm_approved", map[catalog.Product]int{tent: 2})
+
+	report, err := c.a.orders.RelayOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ordering.RelayReport{Published: 2}, report, "the compatible events are published in the same cycle")
+	for range 2 {
+		report, err = c.a.orders.RelayOnce(ctx)
+		require.NoError(t, err)
+		require.Equal(t, ordering.RelayReport{}, report, "the event of an unknown type is never claimed")
+	}
+	e := c.event(t, unknown)
+	require.False(t, e.published, "it is never dropped or published")
+	require.False(t, e.leased)
+	require.Zero(t, e.attempts, "no attempt is counted for an event this replica cannot read")
+	require.Empty(t, e.lastError)
+	require.True(t, e.next.Equal(before.next), "no backoff is applied")
+	require.Zero(t, c.a.logs.count("WARN", "")+c.a.logs.count("ERROR", ""), "no delivery log")
+	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_unsupported_events"))
+	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_pending_events"))
+	c.noEffectOf(t, unknown)
+	require.Equal(t, 6, c.count(t, `SELECT units_sold FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
+	require.Equal(t, 2, c.count(t, `SELECT purchases FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
 	requireProjectionMatchesTheSource(t, c)
 }
 

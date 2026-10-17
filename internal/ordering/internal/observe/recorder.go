@@ -39,6 +39,9 @@ func NewCheckoutRecorder(counters Counters, log logger.Service) (*CheckoutRecord
 		return nil, errors.New("ordering: checkout recorder requires counters and a logger")
 	}
 	ctx := context.Background()
+	for _, outcome := range app.CheckoutOutcomes() {
+		counters.Counter(ctx, checkoutTotal, 0, attribute.String(outcomeKey, outcome))
+	}
 	for _, outcome := range []string{app.RecoveryConfirmed, app.RecoveryDeclined, app.RecoveryStillPending, app.RecoveryError, app.RecoverySkipped} {
 		counters.Counter(ctx, recoveryTotal, 0, attribute.String(outcomeKey, outcome))
 	}

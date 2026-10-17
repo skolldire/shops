@@ -1,9 +1,13 @@
 package postgres
 
 import (
+	"context"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
@@ -42,14 +46,19 @@ func TestAnEventIsDecodedByItsTypeAndVersion(t *testing.T) {
 func TestAnUnsupportedTypeOrVersionIsNeverReadAsVersionOne(t *testing.T) {
 	raw, err := encodePayload(confirmedV1())
 	require.NoError(t, err)
-	for _, key := range []eventKey{
-		{kind: domain.EventPurchaseConfirmed, version: domain.PurchaseEventVersion + 1},
-		{kind: domain.EventPurchaseFailed, version: 0},
-		{kind: "PurchaseRefunded", version: domain.PurchaseEventVersion},
+	for _, key := range []domain.EventKind{
+		{Type: domain.EventPurchaseConfirmed, Version: domain.PurchaseEventVersion + 1},
+		{Type: domain.EventPurchaseFailed, Version: 0},
+		{Type: "PurchaseRefunded", Version: domain.PurchaseEventVersion},
 	} {
-		_, err := decodePayload(key.kind, key.version, purchaseID, raw)
-		require.ErrorIs(t, err, domain.ErrUnsupportedEvent, "%s v%d", key.kind, key.version)
+		_, err := decodePayload(key.Type, key.Version, purchaseID, raw)
+		require.ErrorIs(t, err, domain.ErrUnsupportedEvent, "%s v%d", key.Type, key.Version)
 	}
+}
+
+func TestTheOutboxDecodesExactlyTheSupportedEvents(t *testing.T) {
+	require.ElementsMatch(t, domain.SupportedEvents(), slices.Collect(maps.Keys(decoders)),
+		"every supported kind has a decoder and there is no decoder for an unsupported one")
 }
 
 func TestAnUnreadablePayloadHasASafeCause(t *testing.T) {
@@ -94,4 +103,58 @@ func TestIdentifiersAreReadWithTheDomainGrammar(t *testing.T) {
 		_, err := decodePayload(domain.EventPurchaseConfirmed, domain.PurchaseEventVersion, aggregate, raw)
 		require.ErrorIs(t, err, domain.ErrUnreadablePayload, name)
 	}
+}
+
+func TestTheDecoderRegistryMatchesTheSupportedPairs(t *testing.T) {
+	decode := func([]byte) (domain.PurchaseEvent, error) { return domain.PurchaseEvent{}, nil }
+	confirmed := domain.EventKind{Type: "PurchaseConfirmed", Version: 1}
+	failed := domain.EventKind{Type: "PurchaseFailed", Version: 1}
+	confirmedV2 := domain.EventKind{Type: "PurchaseConfirmed", Version: 2}
+	type registry = map[domain.EventKind]func(raw []byte) (domain.PurchaseEvent, error)
+	tests := map[string]struct {
+		registry  registry
+		supported []domain.EventKind
+		want      string
+	}{
+		"one decoder per supported pair": {registry{confirmed: decode, failed: decode}, []domain.EventKind{confirmed, failed}, ""},
+		"a supported pair without a decoder": {registry{confirmed: decode}, []domain.EventKind{confirmed, failed},
+			"ordering: the outbox has no decoder for PurchaseFailed version 1"},
+		"a decoder for a pair that is not supported": {registry{confirmed: decode, failed: decode, confirmedV2: decode}, []domain.EventKind{confirmed, failed},
+			"ordering: the outbox has a decoder for PurchaseConfirmed version 2, which is not a supported event"},
+		"a pair listed twice": {registry{confirmed: decode}, []domain.EventKind{confirmed, confirmed},
+			"ordering: PurchaseConfirmed version 1 is listed twice as a supported event"},
+		"a nil decoder": {registry{confirmed: decode, failed: nil}, []domain.EventKind{confirmed, failed},
+			"ordering: the decoder for PurchaseFailed version 1 is nil"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := checkDecoders(tc.registry, tc.supported)
+			if tc.want == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tc.want)
+		})
+	}
+}
+
+func lazyPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), "host=127.0.0.1 port=1 user=x dbname=x sslmode=disable connect_timeout=1")
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+func TestNewOutboxAcceptsTheShippedRegistry(t *testing.T) {
+	_, err := NewOutbox(lazyPool(t))
+	require.NoError(t, err, "the shipped decoders match domain.SupportedEvents(), so the outbox can be built")
+}
+
+func TestTheOutboxIsNotBuiltWhenItsDecodersDoNotMatch(t *testing.T) {
+	decode := func([]byte) (domain.PurchaseEvent, error) { return domain.PurchaseEvent{}, nil }
+	registry := map[domain.EventKind]func(raw []byte) (domain.PurchaseEvent, error){{Type: "PurchaseConfirmed", Version: 1}: decode}
+	outbox, err := newOutbox(lazyPool(t), registry, []domain.EventKind{{Type: "PurchaseConfirmed", Version: 1}, {Type: "PurchaseFailed", Version: 1}})
+	require.EqualError(t, err, "ordering: the outbox has no decoder for PurchaseFailed version 1")
+	require.Nil(t, outbox)
 }

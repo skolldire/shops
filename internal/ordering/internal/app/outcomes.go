@@ -28,3 +28,10 @@ const (
 
 	ReasonPaymentNotCompleted = "payment_not_completed"
 )
+
+func CheckoutOutcomes() []string {
+	return []string{
+		OutcomeConfirmed, OutcomeDeclined, OutcomePending, OutcomeInsufficientStock, OutcomePriceChanged, OutcomeProductUnavailable,
+		OutcomeInvalid, OutcomeIdempotencyConflict, OutcomeReplayed, OutcomeInProgress, OutcomeTryAgain, OutcomeError,
+	}
+}

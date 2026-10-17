@@ -15,14 +15,13 @@ services:
     restart: "no"
 
   db:
-    image: postgres:18-alpine
+    build: ./db
     environment:
       POSTGRES_USER: shop
       POSTGRES_DB: shop
       POSTGRES_PASSWORD_FILE: /run/secrets/db_password
     volumes:
       - secrets:/run/secrets:ro
-      - ./db/init:/docker-entrypoint-initdb.d:ro
       - pgdata:/var/lib/postgresql
     depends_on:
       secrets-init:
@@ -37,11 +36,10 @@ services:
   app:
     build: .
     ports:
-      - "8080:8080"
+      - "${APP_PORT:-8080}:8080"
     stop_grace_period: 40s
     volumes:
       - secrets:/run/secrets:ro
-      - ./config/config.yaml:/etc/shop/config.yaml:ro
     depends_on:
       db:
         condition: service_healthy
@@ -52,7 +50,6 @@ services:
     stop_grace_period: 40s
     volumes:
       - secrets:/run/secrets:ro
-      - ./config/config.yaml:/etc/shop/config.yaml:ro
     depends_on:
       db:
         condition: service_healthy
@@ -62,7 +59,7 @@ services:
     image: caddy:2.10.0-alpine
     command: ["caddy", "reverse-proxy", "--from", ":8081", "--to", "app:8080", "--to", "app2:8080"]
     ports:
-      - "8081:8081"
+      - "${PROXY_PORT:-8081}:8081"
     depends_on:
       - app
       - app2

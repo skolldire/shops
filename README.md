@@ -2,13 +2,65 @@
 
 E-commerce application built as a modular monolith in Go.
 
-It currently ships the platform layer (`internal/platform`), the product catalog with its JSON API, CSV import and inventory audit (`internal/catalog`), the cart, checkout and purchases (`internal/ordering`), a simulated payment (`internal/payment`) and a server-rendered UI to browse, buy and manage products (`internal/web`).
+It ships the platform layer (`internal/platform`), the product catalog with its JSON API, CSV import and inventory audit (`internal/catalog`), the cart, the checkout, the purchases, the periodic recovery of pending payments and the purchase events with their sales projection (`internal/ordering`), a simulated payment (`internal/payment`) and a server-rendered UI to browse, buy and manage products (`internal/web`). The debug stack adds Prometheus to monitor it (see [Monitoring with Prometheus](#monitoring-with-prometheus)).
+
+```mermaid
+flowchart TB
+    client["Browser or API client"]
+    proxy["proxy (caddy) :8081<br/>replicas profile"]
+    prometheus["Prometheus :9090<br/>debug stack"]
+    subgraph replica["app replica :8080"]
+        web["web UI"]
+        subgraph ordering["ordering"]
+            checkout["cart, checkout, purchases"]
+            recovery["recovery worker"]
+            relay["event relay and sales projection"]
+        end
+        catalog["catalog"]
+        payment["payment (simulated)"]
+    end
+    db[("PostgreSQL")]
+
+    client --> proxy
+    client --> replica
+    proxy --> replica
+    prometheus -. "scrapes app:9100" .-> replica
+    web --> checkout
+    web --> catalog
+    checkout --> catalog
+    checkout --> payment
+    recovery --> catalog
+    recovery --> payment
+    replica --> db
+```
+
+## How to try it in 5 minutes
+
+With Docker (see [Requirements](#requirements)), from the root of the clone:
+
+```sh
+docker compose up --build
+```
+
+The first build downloads the base images and the Go modules and can take longer than five minutes on its own; the five minutes start when the log shows `server listening`.
+
+1. Open `http://localhost:8080`, add a product to the cart and check out with `pm_approved`: the purchase is `CONFIRMED`.
+2. Check out again with `pm_declined`: the purchase is `FAILED` with its reason and the cart is kept. Then with `pm_unknown`: the purchase stays `PENDING` until the recovery confirms it, within a minute; reload its page.
+3. Open `http://localhost:8080/admin/imports` and import `testdata/products.csv` with "Replace the inventory": the report shows the products created, updated or unchanged and the 13 rejected rows with their reasons.
+4. Stop with Ctrl+C, and run `make down` (or its [`docker compose` equivalent](#run-with-docker)) to delete the data.
+
+To see the metrics, start the debug stack instead and follow [Monitoring with Prometheus](#monitoring-with-prometheus).
 
 ## Requirements
 
-- Docker with the Compose v2 and Buildx plugins (Docker Desktop includes both)
+- Docker Engine 23.0 or later with the Compose plugin, 2.17 or later, and the Buildx plugin. That is all the stack needs: the images carry every file they use, so no file of the clone is mounted into a container and the clone works from any directory.
+  - Engine 23.0 is the first release that builds with BuildKit by default, which the Dockerfiles need (`RUN --mount=type=cache`, `COPY --chmod`).
+  - Compose 2.17 is the first release with `up --wait --wait-timeout`, which the CI smoke test uses. `make up` itself only needs `up --build`.
+  - Recent Compose releases build through Buildx. Without it they fall back to the classic builder, which stops on these Dockerfiles with `the --chmod option requires BuildKit`.
+  - Checked locally with Engine 23.0.6, Compose 2.22.0 and Buildx 0.11.2 and with Engine 29.5.2, Compose 5.6.0 and Buildx 0.38.0.
+  - Checked in CI with Engine 28.0.4 and Compose 2.38.2, the versions listed for the image of GitHub's `ubuntu-latest` runner (`ubuntu24/20261012.334`), where the image scan and end-to-end smoke job passes.
 - Go as declared in `go.mod` (currently 1.27.2), only to run tests or the binary outside Docker
-- `make`
+- `make`, optional: every target that starts the stack has its `docker compose` equivalent below
 
 ## Run with Docker
 
@@ -19,8 +71,8 @@ make up
 | Service | Purpose |
 |---|---|
 | `secrets-init` | Generates the database password into a named volume on first run, then exits |
-| `db` | PostgreSQL 18. `db/init/001_schema.sql` is applied when the data volume is created |
-| `app` | The store, the admin UI and the API on `http://localhost:8080` |
+| `db` | PostgreSQL 18, built from `db/Dockerfile` with `db/init` copied into the image. `db/init/001_schema.sql` is applied when the data volume is created |
+| `app` | The store, the admin UI and the API on `http://localhost:8080`. The image carries `config/config.yaml` and the demo CSV |
 
 ```sh
 curl -i localhost:8080/health/ready
@@ -31,6 +83,38 @@ Open `http://localhost:8080` for the store and `http://localhost:8080/admin/prod
 `make down` removes containers, data and the generated password together, so the next `make up` starts clean and the schema is applied again.
 
 `make up-replicas` starts two replicas of the app behind a proxy (`caddy`) on `http://localhost:8081`, besides the first replica on `8080`. Both replicas share the database: they seed once, recover purchases without duplicating charges and answer the same idempotency keys. The proxy keeps the `Host` header, so the same-origin check needs no configuration.
+
+Each target is one `docker compose` command, run from the root of the clone:
+
+| Target | Equivalent |
+|---|---|
+| `make up` | `docker compose up --build` |
+| `make up-replicas` | `docker compose --profile replicas up --build` |
+| `make up-debug` | `docker compose -f compose.yaml -f compose.debug.yaml up --build` |
+| `make down` | `docker compose -f compose.yaml -f compose.debug.yaml --profile replicas down -v --remove-orphans` |
+| `make logs` | `docker compose logs -f` |
+
+`up` stays in the foreground and shows the logs of every service. With `up -d` it returns as soon as the containers start, and a failure of the app only shows in `docker compose logs app`; `up -d --wait` returns once every service is healthy and fails when one is not.
+
+The ports published on the host can be changed with environment variables. They only change the host side: the containers keep their ports and receive none of these variables.
+
+| Variable | Default | Published by |
+|---|---|---|
+| `APP_PORT` | `8080` | `app` |
+| `PROXY_PORT` | `8081` | `proxy` (`make up-replicas`) |
+| `DB_PORT` | `5432` | `db`, on `127.0.0.1` (`make up-debug`). `make run` reads the same variable |
+| `METRICS_PORT` | `9100` | `app` metrics, on `127.0.0.1` (`make up-debug`) |
+| `PROMETHEUS_PORT` | `9090` | `prometheus`, on `127.0.0.1` (`make up-debug`) |
+
+```sh
+APP_PORT=18080 make up
+```
+
+To run with another configuration without rebuilding, add `compose.config.yaml`, which mounts `config/config.yaml` over the one in the image. It is the only file of the clone that is ever mounted, and only when it is asked for:
+
+```sh
+docker compose -f compose.yaml -f compose.config.yaml up --build
+```
 
 ### Upgrading an existing stack
 
@@ -50,11 +134,11 @@ make up-debug
 
 Adds, bound to `127.0.0.1` only:
 
-| Port | What |
-|---|---|
-| `5432` | PostgreSQL |
-| `9100` | Application metrics (`/metrics`) |
-| `9090` | Prometheus, scraping the app every 15s |
+| Port | Variable | What |
+|---|---|---|
+| `5432` | `DB_PORT` | PostgreSQL |
+| `9100` | `METRICS_PORT` | Application metrics (`/metrics`) |
+| `9090` | `PROMETHEUS_PORT` | Prometheus, scraping the app every 15s. Built from `deploy/prometheus/Dockerfile`, which copies `prometheus.yml` into the image |
 
 ## Run locally
 
@@ -76,7 +160,21 @@ make test-integration   # PostgreSQL via Testcontainers
 make vuln               # govulncheck
 ```
 
-Integration tests need a running Docker daemon. When `DOCKER_HOST` is unset, the Makefile uses the endpoint of the active Docker context, which also covers Colima.
+Integration tests start PostgreSQL with Testcontainers, which needs access to the Docker daemon of the machine. When `DOCKER_HOST` is unset, `make test-integration` takes the endpoint of the active Docker context (`docker context inspect`), whichever runtime it points to. Running `go test -tags=integration` directly needs `DOCKER_HOST` set the same way.
+
+## Troubleshooting
+
+**The app is not up after `up -d`.** `docker compose ps` shows the state of each service and `docker compose logs app` shows why the app stopped. A volume created by an earlier phase stops it with `database: the schema is out of date, recreate the volume with make down && make up`; `make down` deletes the data of that stack.
+
+**A port on the host is already in use.** Depending on the Docker setup, the conflict either stops the container with an error ending in `bind: address already in use`, or the container starts and the other process keeps answering on that port. `curl -s localhost:8080/health/ready` must answer `{"status":"up","checks":{"postgres":"up"}}`; anything else is not this app. Choose free ports with the [port variables](#run-with-docker) instead of stopping a process you do not know.
+
+**The first start.** The first `up --build` downloads the base images and the Go modules and compiles the app, which takes a few minutes; later starts reuse the build cache. The app is ready when its log shows `server listening` and `/health/ready` answers 200.
+
+**Integration tests fail with `rootless Docker not found, failed to create Docker provider`.** Testcontainers did not find the Docker daemon. Run them with `make test-integration`, or set `DOCKER_HOST` to the endpoint shown by `docker context inspect --format '{{.Endpoints.docker.Host}}'`.
+
+**Go version.** `go.mod` requires Go 1.27.2. An older Go downloads that toolchain on its own unless `GOTOOLCHAIN=local` is set, in which case it stops with `go.mod requires go >= 1.27.2`. `make up` builds inside Docker and needs no local Go.
+
+**A metric is missing in Prometheus.** Check that the `shops` target is `UP` in `http://127.0.0.1:9090/targets`, and wait for the next scrape (every 15s). Every series of the counters exists from the start with 0; the histograms (`import_duration_seconds` and the HTTP ones) create a series with its first observation, so `rate()` shows a new route from its second scrape on. See [Monitoring with Prometheus](#monitoring-with-prometheus).
 
 ## Continuous integration
 
@@ -84,11 +182,11 @@ Every pull request to `master` runs:
 
 | Check | What it enforces |
 |---|---|
-| Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS), the dependency rules described in [Architecture](#architecture), tidy modules, hadolint on the Dockerfile |
+| Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS, Dockerfiles), the dependency rules described in [Architecture](#architecture), tidy modules, hadolint on every Dockerfile |
 | Unit tests | Race detector on the `go.mod` version and on the latest stable Go |
 | Integration tests | Repositories, transactions, the inventory audit and HTTP acceptance tests of the product lifecycle, the checkout (concurrent buyers, idempotency, rejections, declined payments, recovery) and the UI purchase flow against PostgreSQL |
 | govulncheck | Known vulnerabilities in reachable code |
-| Image scan and end-to-end smoke | Trivy on the image, then the compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
+| Image scan and end-to-end smoke | Builds every image of the stack, Trivy on the app image, then the compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
 | Dependency review | OSV-Scanner compares the base branch with the pull request and fails on newly introduced vulnerable dependencies. Accepted exceptions live in `osv-scanner.toml` with a reason and an expiry date |
 | CodeQL | Static security analysis, also weekly |
 
@@ -151,7 +249,7 @@ The ordering module follows the same layout:
 | 8080 | `/api/v1/...` | The product API and the checkout and purchase API, described below. Unknown routes answer `404` or `405` as `application/problem+json` (RFC 9457), with `Allow` on 405 |
 | 8080 | `/health/...` | Unknown health routes answer `404` as `application/problem+json` |
 | 8080 | anything else | The web UI. Unknown pages answer an HTML `404` |
-| 9100 | `GET /metrics` | Prometheus metrics: HTTP server, Go runtime, process, imports and checkouts |
+| 9100 | `GET /metrics` | Prometheus metrics: HTTP server, Go runtime, process, imports, checkouts, recovery and events. See [Monitoring with Prometheus](#monitoring-with-prometheus) |
 
 ## Product API
 
@@ -698,7 +796,7 @@ Every finished purchase records one event, `PurchaseConfirmed` or `PurchaseFaile
 
 | Step | Statement | Deadline |
 |---|---|---|
-| Claim | One statement: `UPDATE outbox SET lease_owner, lease_until = now() + lease WHERE id IN (SELECT … WHERE published_at IS NULL AND next_attempt_at <= now() AND (lease_until IS NULL OR lease_until < now()) ORDER BY id LIMIT batch FOR UPDATE SKIP LOCKED)`. No lock is held afterwards. Each row is decoded on its own: an unreadable one is set aside with its id, `event_id` and attempts, and the rest of the batch goes on. Only a failure of the query itself fails the claim | `events.db_timeout`, the worker's context |
+| Claim | One statement: `UPDATE outbox SET lease_owner, lease_until = now() + lease WHERE id IN (SELECT … WHERE published_at IS NULL AND next_attempt_at <= now() AND (lease_until IS NULL OR lease_until < now()) AND (type, version) IN (<the pairs the consumer supports>) ORDER BY id LIMIT batch FOR UPDATE SKIP LOCKED)`. No lock is held afterwards. An event of a pair this replica does not support is never claimed. Each row is decoded on its own: an unreadable one is set aside with its id, `event_id` and attempts, and the rest of the batch goes on. Only a failure of the query itself fails the claim | `events.db_timeout`, the worker's context |
 | Renew, before each event | `UPDATE … SET lease_until = now() + lease WHERE id = $1 AND lease_owner = $owner AND published_at IS NULL`. No row changed: the event is skipped | `events.db_timeout` |
 | Consume | The consumer's own transaction (below) | `events.handler_timeout` |
 | Confirm | `UPDATE … SET published_at = now(), lease_owner = NULL, lease_until = NULL WHERE id = $1 AND lease_owner = $owner AND published_at IS NULL` | `events.db_timeout` |
@@ -708,7 +806,9 @@ Each event has one deadline, counted on the monotonic clock from just before its
 
 **Batch, lease and deadline.** A claim leases the whole batch at once, and the events are processed one after the other. With `events.batch_size: 10` and the worst case of 6s per event, the tail of a batch can outlive its 10s lease; another replica may then claim those events. That is harmless: the late worker's renewal changes no row and the event is counted as `skipped`, without effects. A smaller batch, or a longer lease, keeps that rare; a larger batch makes it common, which is why the default is 10.
 
-**The consumer.** `SalesProjection` first checks that it supports the event's type and version, and answers an error without touching the database if it does not. Then it keeps `product_sales`, the units sold per product, in one transaction: it inserts `(consumer, event_id)` into `inbox` with `ON CONFLICT DO NOTHING`, and only if that inserted a row and the event is `PurchaseConfirmed`, it adds `units_sold += quantity` and `purchases += 1` for every item. A `PurchaseFailed` is recorded in the inbox and changes nothing. `purchases` is the number of confirmed purchases that contain the product. If the projection fails, the checkout never knows: the event stays pending and is retried. There is no endpoint for the projection; it is read with SQL.
+**The producer and the event contract.** The event is built from the purchase that was just settled, and the consumer never recomputes its amounts. Property tests generate 500 valid purchases per type from a fixed seed (`propertySeed` in `internal/ordering/internal/domain/event_property_test.go`) through the real checkout, snapshot and outcome steps, and check that a `PurchaseConfirmed` keeps the exact `Σ unit_price × quantity` as its total, the purchase currency and every item, that a `PurchaseFailed` keeps the identity, the reason and the items, and that neither has a field or a value for the token, the user, the request hash or the idempotency key. They show that the invariants of a valid purchase are kept; they do not show that the constructor rejects an invalid one, because it does not validate. Every supported `(type, version)` has a reference payload in `internal/ordering/internal/postgres/testdata/` (`purchase_confirmed_v1.json`, `purchase_failed_v1.json`), and a test requires the adapter to produce exactly those bytes and to read them back. A payload of a published version never changes: a different structure is a new version, with its own decoder and reference file, and needs approval. The references are never regenerated to make a failing test pass.
+
+**The consumer.** `SalesProjection` declares the `(type, version)` pairs it supports (`domain.SupportedEvents()`, the one list the claim, the decoders and the gauges use) and still checks that it supports the event's type and version, and answers an error without touching the database if it does not. Then it keeps `product_sales`, the units sold per product, in one transaction: it inserts `(consumer, event_id)` into `inbox` with `ON CONFLICT DO NOTHING`, and only if that inserted a row and the event is `PurchaseConfirmed`, it adds `units_sold += quantity` and `purchases += 1` for every item. A `PurchaseFailed` is recorded in the inbox and changes nothing. `purchases` is the number of confirmed purchases that contain the product. If the projection fails, the checkout never knows: the event stays pending and is retried. There is no endpoint for the projection; it is read with SQL.
 
 **Guarantees.** Delivery is at least once, with an idempotent effect:
 
@@ -727,33 +827,58 @@ WHERE p.status = 'CONFIRMED'
 GROUP BY i.product_id;
 ```
 
-**Logs and stuck events.** The attempt counter comes from `UPDATE … RETURNING attempts`, so only the relay whose reschedule returns exactly `events.stuck_after_attempts` writes the one `error`, also across replicas; later attempts are `warn`. Logs carry the event sequence, its type, the attempt and the cause, never the payload or a configuration value. Alerts are defined on `outbox_stuck_events` and `outbox_oldest_pending_seconds`. The gauges show the last cycle a replica completed, so they can be behind for up to an interval, or longer while a cycle is slow or failing; the persisted state is what `SELECT count(*) FROM outbox WHERE published_at IS NULL` and the runbook query return.
+**Logs and stuck events.** The attempt counter comes from `UPDATE … RETURNING attempts`, so only the relay whose reschedule returns exactly `events.stuck_after_attempts` writes the one `error`, also across replicas. After it, a `warn` is written only when the attempt is the threshold times a power of two: with the default of 10, at 20, 40, 80 and so on; the other attempts past the threshold are `debug`, and the ones before it `info`. `outbox_relay_total` still counts every attempt. The recovery keeps its own policy, a `warn` on every attempt past its threshold. Logs carry the event sequence, its type, the attempt and the cause, never the payload or a configuration value. Alerts are defined on `outbox_stuck_events` and `outbox_oldest_pending_seconds`. The gauges show the last cycle a replica completed, so they can be behind for up to an interval, or longer while a cycle is slow or failing; the persisted state is what `SELECT count(*) FROM outbox WHERE published_at IS NULL` and the runbook query return.
 
-**What the relay report counts.** `RelayReport`, returned by `RelayOnce`, describes what this worker did in its cycle, not the state of the outbox. `StillPending` counts every attempt of this worker that did not end in a publication it confirmed. When an attempt fails and the worker loses the lease before its reschedule, that attempt still counts in `StillPending`, while the log line and `outbox_relay_total` say `skipped`, because another replica owns the event now and may already have published it. So `StillPending` does not mean the event is still pending globally.
+**Reports, metrics and logs come from one outcome.** Every path of the relay and of the recovery ends in one outcome, and a single function updates the report, the counter and the log from it, so they cannot disagree. The report summarises the state each item was left in by this worker; the metric records the result of the attempt. They differ in one place on purpose: a database error leaves the event or the purchase pending, so the report counts it in `StillPending`, while the metric says `error`. The reports have no error field.
+
+| Path | Outcome (`outbox_relay_total`) | `RelayReport` |
+|---|---|---|
+| Published | `published` | `Published` |
+| Published, and the inbox recognised a redelivery | `published` | `Published` and `Duplicates` (one attempt) |
+| Renewal, confirmation or reschedule lost to another replica | `skipped` | `Skipped` |
+| Consumer failure or unreadable event, rescheduled | `still_pending` | `StillPending` |
+| Database error renewing, confirming or rescheduling | `error` | `StillPending` |
+
+| Path | Outcome (`checkout_recovery_total`) | `RecoveryReport` |
+|---|---|---|
+| Settled as confirmed | `confirmed` | `Confirmed` |
+| Settled as declined | `declined` | `Declined` |
+| Settled as declined after voiding the charge | `declined` | `Declined` and `Voided` |
+| Renewal, finalization or reschedule lost to another worker | `skipped` | `Skipped` |
+| Provider or finalization failure, rescheduled | `still_pending` or `error` | `StillPending`, with the purchase and the cause |
+| Database error renewing or rescheduling | `error` | `StillPending`, with the purchase and the cause |
+
+A report describes one worker's cycle, not the global state: `Skipped` means another replica owns the item now and may already have finished it, and `StillPending` means this worker left it pending, not that it still is.
 
 **What a duplicate is.** Two things are kept apart. The effect: the inbox recognises and absorbs every redelivery, whatever happens to the confirmation afterwards, so `product_sales` changes once per event. The observability: `RelayReport.Duplicates` and `inbox_duplicates_total` count a redelivery the inbox recognised only when this relay then confirms the publication of that event. A relay that loses the lease before confirming (`skipped`) or gets an error from the confirmation (`error`) counts no duplicate; the relay that later confirms the redelivered event counts it once.
 
 **Runbook for a stuck event.** Find it with `SELECT id, aggregate_id, type, attempts, last_error, next_attempt_at FROM outbox WHERE published_at IS NULL ORDER BY id`, fix the cause the error names (for example a lock held on `product_sales`), and let the relay retry it; `UPDATE outbox SET next_attempt_at = now() WHERE id = …` only brings the next attempt forward. **Never mark an event as published by hand**: the projection would miss it, and the reconciliation query is the only way to repair that afterwards.
 
-**Unreadable events and unsupported versions.** The outbox reads a payload with the decoder for its exact `(type, version)`; there is one per type, for version `1`. An event is unreadable when no decoder exists for that pair, or when its payload does not match it: malformed JSON or a field of the wrong type, an amount that is not a decimal, or missing or inconsistent fields (no items, an item without quantity, a `product_id` that is not a UUID, a `purchase_id` other than `aggregate_id`). Ids are read with the same grammar as the rest of ordering: the canonical `8-4-4-4-12` hexadecimal form, in any case, normalised to lower case; braces, `urn:uuid:` and other forms are unreadable. The product is not looked up, so an event of a product deleted since then is still projected. The consumer repeats the type and version check as a second barrier. Such an event:
+**Unsupported versions are not claimed.** A replica claims only the pairs its consumer supports, so an event of another version, written by a newer release during a gradual deployment, is left pending without being touched by it: no attempt, lease, backoff or delivery log, never dropped, never published. A replica that supports it publishes it. Each replica publishes `outbox_unsupported_events`, the pending events whose pair it does not support, so the value depends on the replica: during a gradual deployment the replicas can show different values, `max` across them only says that some replica does not support those events, not that no replica can process them, and the value can lag behind by the last cycle. The consumer keeps its own check as a second barrier.
+
+**Unreadable events.** The outbox reads a payload with the decoder for its exact `(type, version)`; there is exactly one per pair of `domain.SupportedEvents()`. The outbox checks it when it is built: a missing, extra, repeated or nil decoder stops the startup, so a supported event is never read as unreadable for lack of a decoder. An event of a supported pair is unreadable when its payload does not match it: malformed JSON or a field of the wrong type, an amount that is not a decimal, or missing or inconsistent fields (no items, an item without quantity, a `product_id` that is not a UUID, a `purchase_id` other than `aggregate_id`). Ids are read with the same grammar as the rest of ordering: the canonical `8-4-4-4-12` hexadecimal form, in any case, normalised to lower case; braces, `urn:uuid:` and other forms are unreadable. The product is not looked up, so an event of a product deleted since then is still projected. Such an event:
 
 - is handled on its own: the relay renews its lease, so a relay that lost it changes nothing, and reschedules it with the same `UPDATE … RETURNING attempts`, backoff and threshold as a failed delivery. The valid events of the same batch are published in the same cycle;
 - never reaches the consumer, gets no `inbox` row and changes no sale;
-- keeps its attempts growing, counts in `outbox_pending_events`, and in `outbox_stuck_events` from `events.stuck_after_attempts` on, with the one `error` and a `warn` per attempt afterwards;
+- keeps its attempts growing, counts in `outbox_pending_events`, and in `outbox_stuck_events` from `events.stuck_after_attempts` on, with the one `error` and a `warn` at every doubling of the threshold;
 - is never dropped or marked as published.
 
-The cost: an event of a version no running consumer supports is retried forever, with a `warn` on every attempt past `events.stuck_after_attempts` and the stuck gauge above 0, until a compatible consumer is deployed or the data is fixed; it is never dropped and never blocks other events. The backoff has jitter: once it reaches its ceiling, each wait is drawn between half of `events.max_backoff` and all of it, 30 to 60 seconds with the default of 1 minute. The actual retry can come later than that, because the event is only claimed on the next tick of `events.interval` once its wait is over, the cycle takes time to process its batch, and contention can delay it further.
+The cost: an unreadable event is retried forever, with the stuck gauge above 0, until the data or its producer is fixed; it is never dropped and never blocks other events. The backoff has jitter: once it reaches its ceiling, each wait is drawn between half of `events.max_backoff` and all of it, 30 to 60 seconds with the default of 1 minute. The actual retry can come later than that, because the event is only claimed on the next tick of `events.interval` once its wait is over, the cycle takes time to process its batch, and contention can delay it further.
 
-`last_error` and the logs name only the category, never the payload or a value taken from it: `… does not match its type and version: an amount that is not a decimal`, `…: malformed JSON or a field of the wrong type`, `…: missing or inconsistent fields`, or `… are not supported by this release: the outbox has no decoder for them`. To find them without reading the payload:
+`last_error` and the logs name only the category, never the payload or a value taken from it: `… does not match its type and version: an amount that is not a decimal`, `…: malformed JSON or a field of the wrong type` or `…: missing or inconsistent fields`. To find them, and the pending events of a pair this release does not support, without reading the payload:
 
 ```sql
 SELECT id, event_id, aggregate_id, type, version, attempts, last_error, next_attempt_at
 FROM outbox
-WHERE published_at IS NULL AND (last_error LIKE '%does not match its type and version%' OR last_error LIKE '%not supported by this release%')
+WHERE published_at IS NULL
+  AND (last_error LIKE '%does not match its type and version%'
+       OR (type, version) NOT IN (VALUES ('PurchaseConfirmed', 1), ('PurchaseFailed', 1)))
 ORDER BY id;
 ```
 
-To resume, fix what produced the event, not only the row: deploy the consumer that supports the version, or fix the producer that wrote the bad payload. Only then, if the stored row itself is wrong, correct it in place with an `UPDATE` of `payload` or `version` that keeps its `id` and `event_id`, so the inbox still recognises it if it was ever delivered, and bring it forward with `UPDATE outbox SET next_attempt_at = now() WHERE id = …`. The next cycle publishes it once, and it leaves the pending and stuck gauges. Never insert a copy with a new `event_id`, delete the row or set `published_at` by hand.
+A pair is unsupported when its type and its version together are not in the list, so the query finds an unknown type as well as an unknown version of a known type, like `outbox_unsupported_events`. The `VALUES` list is `domain.SupportedEvents()` of this release, the pairs `Outbox.Stats` uses: the query describes what this release supports. A newer replica can support other pairs, so take the list from the release whose view you are checking.
+
+To resume, fix what produced the event, not only the row: deploy a release whose consumer supports the version, or fix the producer that wrote the bad payload. Only then, if the stored row itself is wrong, correct it in place with an `UPDATE` of `payload` or `version` that keeps its `id` and `event_id`, so the inbox still recognises it if it was ever delivered, and bring it forward with `UPDATE outbox SET next_attempt_at = now() WHERE id = …`. The next cycle publishes it once, and it leaves the pending and stuck gauges. Never insert a copy with a new `event_id`, delete the row or set `published_at` by hand.
 
 ### Phase 6 contract changes
 
@@ -800,6 +925,20 @@ The UI uses `html/template` and htmx 2.0.11, both embedded in the binary, so it 
 ## Design decisions
 
 Each decision states its context, the alternatives that were considered with their consequences, what was chosen, an example and when it should be revisited.
+
+| Decision | About |
+|---|---|
+| [D1](#d1-physical-and-reserved-stock) | Physical and reserved stock |
+| [D2](#d2-import-modes-applied-in-the-request) | Import modes applied in the request |
+| [D3](#d3-never-less-physical-stock-than-reserved) | Never less physical stock than reserved |
+| [D4](#d4-what-changes-the-product-version) | What changes the product version |
+| [D5](#d5-several-replicas-coordinated-through-postgresql) | Several replicas coordinated through PostgreSQL |
+| [D6](#d6-schema-changes-without-migrations) | Schema changes without migrations |
+| [D9](#d9-a-purchase-keeps-the-price-it-was-bought-at) | A purchase keeps the price it was bought at |
+| [D10](#d10-one-import-at-a-time) | One import at a time |
+| [D11](#d11-purchase-events-through-a-transactional-outbox) | Purchase events through a transactional outbox |
+
+D7 and D8 are not used. The numbers are kept as they are because earlier pull requests and commits cite D9, D10 and D11.
 
 ### D1. Physical and reserved stock
 
@@ -932,6 +1071,39 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 
 **Revisit when** a purchase needs more than one event, such as a refund: then the unique index is replaced by a sequence per aggregate (`aggregate_seq`) with a rule that rejects or postpones events out of order, which needs approval. Also when a broker is introduced: the relay publishes to it instead of calling the projection, with the same guarantees.
 
+## Design questions
+
+Short answers to the questions the design has to settle, with the decision or the section that explains each one.
+
+**The provider charged, but its answer was lost. What happens?** The purchase stays `PENDING` with its units reserved; it never becomes `FAILED` without a definitive decline. The recovery charges it again with the same reference, the purchase id, and a provider that is idempotent by reference returns the first result instead of charging again. After `recovery.stuck_after_attempts` attempts, or once it is older than `checkout.max_pending_age`, the recovery stops charging and asks the provider with `Lookup` and `Void`. The token `pm_unknown` reproduces the case. See [Periodic recovery](#periodic-recovery) and [Payment contract](#payment-contract).
+
+**Can two replicas charge the same purchase twice?** Each purchase is claimed with a lease and the lease is renewed right before the charge, so only its owner charges it, and the finalization only changes a `PENDING` purchase, so the database records one result. A worker frozen past its lease can still send a second request; only the provider's idempotency by reference closes that window, which is why it is a requirement of any gateway. See [D5](#d5-several-replicas-coordinated-through-postgresql) and [Known limitations](#known-limitations).
+
+**How is overselling prevented?** One `UPDATE` per product reserves the units only if the product is active and `stock - reserved >= q`, in product id order and in the transaction that creates the purchase. Nothing is read first and written later, and `CHECK (reserved >= 0 AND reserved <= stock)` backs it in the schema. See [States and flow](#states-and-flow) and [D1](#d1-physical-and-reserved-stock).
+
+**What does an import do to the units reserved by pending purchases?** Imports and edits write the physical stock; reservations are kept apart, so an import neither brings back nor loses reserved units. `add` adds to the physical units and `replace` sets them, and a `replace` or an edit below the reserved units is rejected with `below_reserved`. See [D1](#d1-physical-and-reserved-stock), [D2](#d2-import-modes-applied-in-the-request) and [D3](#d3-never-less-physical-stock-than-reserved).
+
+**Does a purchase keep the price it was bought at?** Yes. It keeps its own copy of the items and the total, which the history, the recovery and the charge read, and triggers reject changes to it. See [D9](#d9-a-purchase-keeps-the-price-it-was-bought-at) and [Monetary invariants](#monetary-invariants).
+
+**What happens to an event that cannot be read, or to one of an unknown version?** An event whose payload does not match its type and version is set aside on its own and retried with backoff until its data or its producer is fixed; it never reaches the consumer, is never dropped and keeps `outbox_stuck_events` above 0. An event of a version a replica does not support is not claimed by it and waits for a release that supports it. Neither holds back the other events. See [Purchase events](#purchase-events-transactional-outbox).
+
+**Who validates the events?** Three places. The producer builds the event from the purchase it has just settled, and property tests and reference payloads pin that contract. The outbox reads each payload with the decoder of its exact type and version and sets aside what does not match. The consumer checks that it supports the type and version before touching the database. See [Purchase events](#purchase-events-transactional-outbox).
+
+**Why at least once and not exactly once?** Exactly once would need the consumption and the publication in one transaction, which only works because this consumer shares the database. At least once, with an inbox that deduplicates on `event_id` in the same transaction as the effect, gives one effect per event and also works for a consumer outside this database. See [D11](#d11-purchase-events-through-a-transactional-outbox).
+
+**Why a modular monolith and not microservices?** The reservation creates the purchase in ordering and reserves the stock in catalog in one PostgreSQL transaction, and the finalization settles them together. Separate services would turn that into a saga with compensations and its own failure modes. The boundaries are still real: each module owns its tables, ordering reaches catalog and payment only through their facades, and `make lint-arch` enforces it, so a module can be moved out behind the same facade when there is a reason. See [Architecture](#architecture).
+
+**Why PostgreSQL and not a message broker?** The store already depends on PostgreSQL, and every guarantee here (one event per purchase written with the purchase, leases, idempotency keys) comes from its transactions, unique indexes and `FOR UPDATE SKIP LOCKED`. A broker adds infrastructure and would still need the outbox to publish atomically with the purchase; the relay can publish to one later without changing the guarantees. See [D5](#d5-several-replicas-coordinated-through-postgresql) and [D11](#d11-purchase-events-through-a-transactional-outbox).
+
+### Requirements for production
+
+These are not part of this delivery, and production needs them:
+
+- **Authentication.** An administration key, sent with HTTP Basic, for `/admin` and the write endpoints of the catalog API, with cross-origin protection on its forms, and real authentication for buyers instead of the demo users. See [Demo users](#demo-users).
+- **A real payment provider** that passes `paymenttest.Contract` and supports `Lookup` and `Void` by reference. See [Payment contract](#payment-contract).
+- **Retention and purge** of published events and old inbox rows. See [Evolution](#evolution).
+- **Quarantine** for events that keep failing: a separate state out of the retry loop, with a manual reprocess that keeps the `event_id`. See [Evolution](#evolution).
+
 ## Known limitations
 
 - **Search does not use an index.** `ILIKE '%q%'` scans the active products. This is fine for thousands of products; a larger catalog would need full-text search or trigram indexes.
@@ -951,7 +1123,8 @@ See [Monetary invariants](#monetary-invariants). Alternatives were reading price
 - **Movements and purchase snapshots are immutable only for the application.** The table owner or a superuser can disable their triggers, and `session_replication_role = replica` skips them.
 - **The outbox and the inbox grow without a purge.** Published events and inbox rows are kept; a purge by age is the next step once the volume matters.
 - **The units sold can lag behind the purchases.** The projection is updated by the relay after the purchase commits, so it trails it by up to an interval while events are pending, and longer while an event is retried. See the reconciliation query in [Purchase events](#purchase-events-transactional-outbox).
-- **An event no consumer supports is retried forever.** An unreadable event, or one of a version this release does not know, is retried every half to all of `events.max_backoff` (30 to 60 seconds by default, plus the worker's delays) with a `warn` on every attempt past the stuck threshold until a compatible consumer is deployed or the data is fixed; it does not hold back the other events. See [Purchase events](#purchase-events-transactional-outbox).
+- **An unreadable event is retried forever, and an unsupported one waits.** An unreadable event of a supported version is retried every half to all of `events.max_backoff` (30 to 60 seconds by default, plus the worker's delays), with a `warn` at every doubling of the stuck threshold, until the data or its producer is fixed. An event of a version no running replica supports is not claimed and stays pending until a release that supports it is deployed. Neither holds back the other events. See [Purchase events](#purchase-events-transactional-outbox).
+- **Prometheus observes one replica.** The debug configuration scrapes `app:9100` only. When the replicas profile runs, `app2` is not scraped: its counters are missing from the sums, and `outbox_unsupported_events` shows only the view of `app`. The other gauges are still right, because every replica reads them from the same database. See [Monitoring with Prometheus](#monitoring-with-prometheus).
 - **No data migrations, by design.** Pre-production data is disposable: it is recreated from an initial data load after `make down && make up`. Production skips that initial load.
 
 ## Evolution
@@ -966,6 +1139,8 @@ Pieces left out of this phase, with what would justify them:
 | Purge of published events and old inbox rows | The size of `outbox` and `inbox` |
 | Several events per purchase with a sequence per aggregate (`aggregate_seq`), replacing `outbox_one_event_per_purchase`; requires approval | A purchase that changes after it is finished, such as a refund |
 | A message broker behind the same relay | Consumers outside this database |
+| Parking an event that keeps failing in a separate state, out of the retry loop, with a manual reprocess that keeps its `event_id` | Stuck events that become frequent, or consumers owned by third parties |
+| Scraping every replica, and alert rules on the [operational signals](#operational-signals) | Monitoring an environment that runs several replicas |
 
 ## Configuration
 
@@ -1014,10 +1189,138 @@ Keys without an environment variable:
 | `events.base_backoff`, `events.max_backoff` | `1s` and `1m`; the base cannot exceed the ceiling |
 | `events.stuck_after_attempts` | `10` |
 | `http.public_origins` | `[]`. See [Same-origin check for forms](#same-origin-check-for-forms) |
+| `http.read_header_timeout`, `http.read_timeout`, `http.write_timeout`, `http.idle_timeout` | `5s`, `15s`, `30s` and `60s` |
+| `health.timeout` | `2s`. The deadline of the readiness checks |
+| `database.name`, `database.user` | `shop` and `shop` |
+| `database.password` | `${file:/run/secrets/db_password}`, the password generated by `secrets-init` |
+| `database.ssl_mode`, `database.max_conns`, `database.connect_timeout` | `disable`, `10` and `5s` |
+| `telemetry.service_name`, `telemetry.tracing.sampling_rate` | `shops` and `1` |
+
+`config/config.local.yaml`, which `make run` uses, differs only in: both listeners on `127.0.0.1`, `DB_HOST` defaulting to `127.0.0.1`, the password from `DB_PASSWORD`, `LOG_LEVEL` defaulting to `debug` and `SEED_FILE` defaulting to `testdata/products.csv`.
 
 ## Observability
 
 - **Logs:** JSON on stdout with `timestamp`, `severity` and `message`. Every request line carries `request_id`, `trace_id` and `span_id`. Sensitive fields and values (passwords, tokens, bearer credentials, card numbers) are redacted. The configuration is never logged. An import that recovers from a failed batch logs it once as a warning; a row the database finally rejects is logged once as an error.
-- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish (the image has no shell, so use `make up-debug`, which publishes it on `127.0.0.1:9100`). Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole. Every checkout that reaches the use case counts once in `checkout_total{outcome}`: `confirmed`, `declined`, `pending` (a stored purchase without a definitive payment result), `insufficient_stock`, `price_changed`, `product_unavailable`, `invalid` (field rules and the idempotency key, which the use case validates), `idempotency_conflict`, `replayed`, `in_progress`, `try_again` (only `40P01` and `55P03`) and `error` (unexpected failures); a failure counts as `try_again` or as `error`, never both. Requests rejected before the use case (unknown demo user, unreadable JSON, a body too large) are not counted there; the HTTP server metrics cover them. The recovery counts every attempt in `checkout_recovery_total{outcome}` (`confirmed`, `declined`, `still_pending`, `error`, `skipped`) and every resolution with the provider in `checkout_recovery_resolutions_total{result}` (`confirmed`, `declined`, `voided`, `mismatch`, `error`); every series is recorded with 0 at startup so it exists before the first attempt. After each cycle it publishes the gauges `checkout_pending_purchases`, `checkout_oldest_pending_seconds`, `checkout_recovery_stuck` and `checkout_recovery_stuck_reserved_units`. The relay counts every attempt in `outbox_relay_total{outcome}` (`published`, `still_pending`, `skipped`, `error`) and every redelivery the inbox recognised and this relay then confirmed as published in `inbox_duplicates_total` (a lost lease or a failed confirmation counts none), and publishes `outbox_pending_events`, `outbox_oldest_pending_seconds` and `outbox_stuck_events` after each cycle. Every replica publishes the same values from the same database, so the gauges are aggregated across replicas with `max`, never summed. No label carries users, purchases, tokens or error text.
+- **Metrics:** OpenTelemetry exported in Prometheus format on a separate port that `compose.yaml` does not publish (the image has no shell, so use `make up-debug`, which publishes it on `127.0.0.1:9100`). Imports record `import_rows_total{outcome}`, with `created`, `updated`, `unchanged`, `skipped` and `rejected`, and `import_duration_seconds`, which times every import including the ones rejected as a whole and has no series until the first import. Every checkout that reaches the use case counts once in `checkout_total{outcome}`: `confirmed`, `declined`, `pending` (a stored purchase without a definitive payment result), `insufficient_stock`, `price_changed`, `product_unavailable`, `invalid` (field rules and the idempotency key, which the use case validates), `idempotency_conflict`, `replayed`, `in_progress`, `try_again` (only `40P01` and `55P03`) and `error` (unexpected failures); a failure counts as `try_again` or as `error`, never both. Every series of `checkout_total` and of `import_rows_total` is recorded with 0 at startup, so an increase is visible from the first event. Requests rejected before the use case (unknown demo user, unreadable JSON, a body too large) are not counted there; the HTTP server metrics cover them. The recovery counts every attempt in `checkout_recovery_total{outcome}` (`confirmed`, `declined`, `still_pending`, `error`, `skipped`) and every resolution with the provider in `checkout_recovery_resolutions_total{result}` (`confirmed`, `declined`, `voided`, `mismatch`, `error`); every series is recorded with 0 at startup so it exists before the first attempt. After each cycle it publishes the gauges `checkout_pending_purchases`, `checkout_oldest_pending_seconds`, `checkout_recovery_stuck` and `checkout_recovery_stuck_reserved_units`. The relay counts every attempt in `outbox_relay_total{outcome}` (`published`, `still_pending`, `skipped`, `error`) and every redelivery the inbox recognised and this relay then confirmed as published in `inbox_duplicates_total` (a lost lease or a failed confirmation counts none), and publishes `outbox_pending_events`, `outbox_oldest_pending_seconds`, `outbox_stuck_events` and `outbox_unsupported_events` after each cycle. Every replica publishes the same pending, oldest and stuck values from the same database, so those gauges are aggregated across replicas with `max`, never summed; `outbox_unsupported_events` depends on what each replica supports, so replicas can differ and `max` only says that some replica does not support those events. No label carries users, purchases, tokens or error text.
 - **Checkout logs:** every checkout that ends with a purchase writes one line with `purchase_id` and `status`, at `warn` with its cause when the purchase stays `PENDING`. The payment token is never logged. An unexpected failure is logged once, by the HTTP adapter.
 - **Traces:** OpenTelemetry over OTLP gRPC, disabled by default. Incoming `traceparent` headers are honoured, and spans are named after the matched route. Under the request span, an import adds one `catalog.import` span for the whole operation, and every statement sent to PostgreSQL adds a `postgres <OPERATION>` child span, such as `postgres SELECT` or `postgres COMMIT`. The trace shows how long the import took, which statements ran, how long each one took and which one failed; the time not spent in PostgreSQL is reading, validating and preparing the rows. Spans carry the operation name only: never the SQL text, its arguments, a file name or a product value. The checkout adds no spans of its own; its PostgreSQL statements hang from the request span. A file rejected as a whole is an expected rejection: the caller still gets the error, but the span is not marked as failed.
+
+## Monitoring with Prometheus
+
+`make up-debug` starts the stack with Prometheus, bound to `127.0.0.1` (see [Debug stack](#debug-stack) for the ports and their variables). Every query in this section was run against that stack.
+
+| What | Where |
+|---|---|
+| The metrics of the app, as Prometheus reads them | `curl -s 127.0.0.1:9100/metrics` |
+| The state of the scrape | `http://127.0.0.1:9090/targets`: the job `shops` must be `UP` |
+| Queries | `http://127.0.0.1:9090/query`. The Table tab shows the current value and the Graph tab its evolution |
+
+`make down` stops it and deletes the data with the containers. To keep the data, stop it with `docker compose -f compose.yaml -f compose.debug.yaml down`, without `-v`.
+
+**When the series appear.** Prometheus scrapes `app:9100` every 15 seconds, so a change shows up after the next scrape.
+
+- The counters exist from startup with 0, so `increase()` sees their first event.
+- The demo seed is imported before the first scrape, so its rows are part of the initial value of `import_rows_total` and do not appear in `increase()`; later imports do.
+- The gauges are published after the first recovery or relay cycle, which runs at startup.
+- The histograms create each series with its first observation. A route of `http_server_request_duration_seconds` appears with its first request, and that request is part of its initial value, so `rate()` shows the route from its second scrape on.
+
+### Metrics
+
+Besides these, the endpoint exposes the Go runtime (`go_*`), the process (`process_*`) and `target_info`.
+
+| Metric | Type | Labels | Meaning | Changes |
+|---|---|---|---|---|
+| `http_server_request_duration_seconds` | histogram, 5 ms to 10 s | `http_route`, `http_request_method`, `http_response_status_code`, `url_scheme`, `network_protocol_name`, `network_protocol_version` | Duration of each request, by matched route | With every request |
+| `http_server_request_body_size_bytes` | histogram | The same | Size of the request bodies | With every request |
+| `http_server_response_body_size_bytes` | histogram | The same | Size of the response bodies | With every request |
+| `import_rows_total` | counter | `outcome`: `created`, `updated`, `unchanged`, `skipped`, `rejected` | Rows of every import by result, the seed included | When an import ends |
+| `import_duration_seconds` | histogram, 0.05 s to 10 s | none | Duration of every import, also the ones rejected as a whole | When an import ends |
+| `checkout_total` | counter | `outcome`: the 12 results listed in [Observability](#observability) | Checkouts that reached the use case, by the result they answered | With every checkout |
+| `checkout_recovery_total` | counter | `outcome`: `confirmed`, `declined`, `still_pending`, `error`, `skipped` | Recovery attempts | With every attempt |
+| `checkout_recovery_resolutions_total` | counter | `result`: `confirmed`, `declined`, `voided`, `mismatch`, `error` | Stuck or overdue purchases resolved with `Lookup` and `Void` | With every resolution |
+| `checkout_pending_purchases` | gauge | none | `PENDING` purchases | After every recovery cycle |
+| `checkout_oldest_pending_seconds` | gauge | none | Age of the oldest `PENDING` purchase, 0 when there is none | After every recovery cycle |
+| `checkout_recovery_stuck` | gauge | none | `PENDING` purchases with at least `recovery.stuck_after_attempts` attempts | After every recovery cycle |
+| `checkout_recovery_stuck_reserved_units` | gauge | none | Units reserved by those purchases | After every recovery cycle |
+| `outbox_relay_total` | counter | `outcome`: `published`, `still_pending`, `skipped`, `error` | Relay attempts | With every attempt |
+| `inbox_duplicates_total` | counter | none | Redeliveries the inbox recognised, counted when this relay confirms the event | With every such confirmation |
+| `outbox_pending_events` | gauge | none | Events not published yet | After every relay cycle |
+| `outbox_oldest_pending_seconds` | gauge | none | Age of the oldest pending event, 0 when there is none | After every relay cycle |
+| `outbox_stuck_events` | gauge | none | Pending events with at least `events.stuck_after_attempts` attempts | After every relay cycle |
+| `outbox_unsupported_events` | gauge | none | Pending events of a type and version this replica does not support | After every relay cycle |
+
+### Queries
+
+`increase()` extrapolates to the edges of its window, so a single event can read 1.02 instead of 1: read the results as approximate counts.
+
+**HTTP**
+
+| Question | Query |
+|---|---|
+| Requests per second by route and status | `sum by (http_route, http_response_status_code) (rate(http_server_request_duration_seconds_count[5m]))` |
+| Share of server errors | `(sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m])) or vector(0)) / sum(rate(http_server_request_duration_seconds_count[5m]))` |
+| 95th percentile of the duration by route | `histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket[5m])))` |
+
+Without `or vector(0)` the share of server errors is empty, not 0, while there is no 5xx, because there is no 5xx series to add up. The percentile is `NaN` for a route without requests in the window.
+
+**Imports**
+
+| Question | Query |
+|---|---|
+| Rows by result in the last hour | `sum by (outcome) (increase(import_rows_total[1h]))` |
+| 95th percentile of the duration | `histogram_quantile(0.95, sum by (le) (rate(import_duration_seconds_bucket[1h])))` |
+
+The percentile is `NaN` when no import ended in the window.
+
+**Checkout**
+
+| Question | Query |
+|---|---|
+| Results | `sum by (outcome) (increase(checkout_total[15m]))` |
+| Confirmed among the checkouts that reached the payment | `sum(increase(checkout_total{outcome="confirmed"}[15m])) / sum(increase(checkout_total{outcome=~"confirmed\|declined\|pending"}[15m]))` |
+| Checkouts asked to retry | `sum(increase(checkout_total{outcome="try_again"}[15m]))` |
+| Price changes and stock shortages | `sum by (outcome) (increase(checkout_total{outcome=~"price_changed\|insufficient_stock"}[15m]))` |
+
+The confirmed share is `NaN` when no checkout reached the payment in the window, and it counts each checkout by the result it answered: a `pending` that the recovery confirms later stays `pending` here and shows up in `checkout_recovery_total`. With 2 approved, 1 declined and 1 `pm_unknown` it reads 0.5.
+
+**Recovery**
+
+| Question | Query |
+|---|---|
+| Attempts by result | `sum by (outcome) (increase(checkout_recovery_total[15m]))` |
+| Resolutions with the provider | `sum by (result) (increase(checkout_recovery_resolutions_total[1h]))` |
+| Pending purchases and the oldest one | `max(checkout_pending_purchases)`, `max(checkout_oldest_pending_seconds)` |
+| Stuck purchases and their reserved units | `max(checkout_recovery_stuck)`, `max(checkout_recovery_stuck_reserved_units)` |
+
+**Purchase events**
+
+| Question | Query |
+|---|---|
+| Pending events and the oldest one | `max(outbox_pending_events)`, `max(outbox_oldest_pending_seconds)` |
+| Events published per minute | `sum(rate(outbox_relay_total{outcome="published"}[5m])) * 60` |
+| Relay attempts by result | `sum by (outcome) (increase(outbox_relay_total[15m]))` |
+| Stuck events | `max(outbox_stuck_events)` |
+| Events a replica does not support | `max by (instance) (outbox_unsupported_events)` |
+| Redeliveries absorbed by the inbox | `sum(increase(inbox_duplicates_total[1h]))` |
+
+### Several replicas
+
+- **Counters:** `sum`, because each replica counts its own work.
+- **Gauges read from the database** (the four `checkout_*` gauges, `outbox_pending_events`, `outbox_oldest_pending_seconds` and `outbox_stuck_events`): `max`, never `sum`. Every replica publishes the same values, and they can lag behind by up to one cycle.
+- **`outbox_unsupported_events`:** per replica, with `max by (instance)`. Replicas of different releases can show different values.
+
+The shipped configuration scrapes only `app:9100`, so with the replicas profile `app2` is not observed (see [Known limitations](#known-limitations)).
+
+### Operational signals
+
+No alert rules are shipped. These queries are where they would start; each one returns nothing while its signal is off:
+
+| Signal | Query | What to do |
+|---|---|---|
+| Purchases stuck in the recovery | `max(checkout_recovery_stuck) > 0` | The runbook at the end of [Periodic recovery](#periodic-recovery); `max(checkout_recovery_stuck_reserved_units)` says how many units they hold |
+| A purchase pending for longer than `checkout.max_pending_age` | `max(checkout_oldest_pending_seconds) > 1800` | The provider is not answering `Lookup` or `Void`; same runbook. 1800 seconds is the default `checkout.max_pending_age` (30m); change it with the configuration |
+| Stuck events | `max(outbox_stuck_events) > 0` | The runbook for a stuck event in [Purchase events](#purchase-events-transactional-outbox) |
+| Events not being published | `max(outbox_oldest_pending_seconds) > 60` | Check `sum by (outcome) (increase(outbox_relay_total[15m]))` and the relay logs |
+| Events a replica does not support | `max by (instance) (outbox_unsupported_events) > 0` | Unsupported versions, in [Purchase events](#purchase-events-transactional-outbox) |
+| Lock contention at checkout | `sum(increase(checkout_total{outcome="try_again"}[15m])) > 0` | Usually an `add` import holding its products; see the lock order in [States and flow](#states-and-flow) |
+| Server errors | `(sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m])) or vector(0)) / sum(rate(http_server_request_duration_seconds_count[5m])) > 0` | `docker compose logs app` |

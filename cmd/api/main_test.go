@@ -89,6 +89,23 @@ func TestMetricsServedSeparately(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `target_info{service_name="shops"`)
 }
 
+func TestEveryCheckoutAndImportRowSeriesIsExposedAtZeroBeforeAnyTraffic(t *testing.T) {
+	a := testApp(t)
+	rec := httptest.NewRecorder()
+
+	a.metrics.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	for _, outcome := range []string{"confirmed", "declined", "pending", "insufficient_stock", "price_changed", "product_unavailable",
+		"invalid", "idempotency_conflict", "replayed", "in_progress", "try_again", "error"} {
+		require.Contains(t, body, `checkout_total{outcome="`+outcome+`"} 0`)
+	}
+	for _, outcome := range []string{"created", "updated", "unchanged", "skipped", "rejected"} {
+		require.Contains(t, body, `import_rows_total{outcome="`+outcome+`"} 0`)
+	}
+}
+
 func TestContextFieldsIncludeRequestID(t *testing.T) {
 	var fields map[string]any
 	h := httpx.RequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

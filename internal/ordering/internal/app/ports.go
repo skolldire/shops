@@ -110,6 +110,7 @@ type EventStats struct {
 	Pending       int
 	OldestSeconds float64
 	Stuck         int
+	Unsupported   int
 }
 
 type ClaimedEvents struct {
@@ -118,14 +119,15 @@ type ClaimedEvents struct {
 }
 
 type EventQueue interface {
-	Claim(ctx context.Context, owner string, lease time.Duration, batch int) (ClaimedEvents, error)
+	Claim(ctx context.Context, owner string, lease time.Duration, batch int, kinds []domain.EventKind) (ClaimedEvents, error)
 	Renew(ctx context.Context, seq int64, owner string, lease time.Duration) (bool, error)
 	MarkPublished(ctx context.Context, seq int64, owner string) (bool, error)
 	Reschedule(ctx context.Context, seq int64, owner string, backoff time.Duration, cause string) (int, bool, error)
-	Stats(ctx context.Context, stuckAfter int) (EventStats, error)
+	Stats(ctx context.Context, stuckAfter int, kinds []domain.EventKind) (EventStats, error)
 }
 
 type EventHandler interface {
+	Supports() []domain.EventKind
 	Handle(ctx context.Context, e domain.StoredEvent) (bool, error)
 }
 

@@ -5,6 +5,8 @@ import (
 	"errors"
 
 	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/skolldire/shops/internal/catalog/internal/app"
 )
 
 const (
@@ -23,6 +25,9 @@ type ImportRecorder struct {
 func NewImportRecorder(counters Counters) (*ImportRecorder, error) {
 	if counters == nil {
 		return nil, errors.New("catalog: import recorder requires counters")
+	}
+	for _, outcome := range app.ImportRowOutcomes() {
+		counters.Counter(context.Background(), importRows, 0, attribute.String(outcomeKey, outcome))
 	}
 	return &ImportRecorder{counters: counters}, nil
 }

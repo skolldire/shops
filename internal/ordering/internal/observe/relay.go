@@ -16,7 +16,9 @@ const (
 	pendingEventsGauge  = "outbox_pending_events"
 	oldestEventGauge    = "outbox_oldest_pending_seconds"
 	stuckEventsGauge    = "outbox_stuck_events"
+	unsupportedGauge    = "outbox_unsupported_events"
 	relayDeliveredEvent = "ordering: an outbox event was delivered"
+	stillStuck          = "ordering: a stuck outbox event is still pending"
 )
 
 var errEventStuck = errors.New("ordering: an outbox event is stuck and keeps being retried")
@@ -51,13 +53,28 @@ func (r *RelayRecorder) RelayAttempt(ctx context.Context, a app.RelayAttempt) {
 		r.log.Info(ctx, "ordering: the relay skipped an event another replica took or published", fields)
 	case a.Outcome == app.RelayStillPending && a.Attempts == a.StuckAfter:
 		r.log.Error(ctx, errEventStuck, fields)
+	case a.Outcome == app.RelayStillPending && a.Attempts > a.StuckAfter && doubledThreshold(a.Attempts, a.StuckAfter):
+		r.log.Warn(ctx, stillStuck, fields)
 	case a.Outcome == app.RelayStillPending && a.Attempts > a.StuckAfter:
-		r.log.Warn(ctx, "ordering: a stuck outbox event is still pending", fields)
+		r.log.Debug(ctx, stillStuck, fields)
 	case a.Outcome == app.RelayStillPending:
 		r.log.Info(ctx, "ordering: the relay left an event pending", fields)
 	default:
 		r.log.Warn(ctx, "ordering: a relay step failed and the event stays pending", fields)
 	}
+}
+
+func doubledThreshold(attempts, threshold int) bool {
+	if threshold < 1 {
+		return false
+	}
+	for point := threshold; point <= attempts/2; {
+		point *= 2
+		if point == attempts {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RelayRecorder) RelayDuplicate(ctx context.Context) {
@@ -68,4 +85,5 @@ func (r *RelayRecorder) RelayGauges(ctx context.Context, s app.EventStats) {
 	r.counters.Gauge(ctx, pendingEventsGauge, float64(s.Pending))
 	r.counters.Gauge(ctx, oldestEventGauge, s.OldestSeconds)
 	r.counters.Gauge(ctx, stuckEventsGauge, float64(s.Stuck))
+	r.counters.Gauge(ctx, unsupportedGauge, float64(s.Unsupported))
 }

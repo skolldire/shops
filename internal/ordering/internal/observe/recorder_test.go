@@ -89,7 +89,7 @@ func TestPendingCheckoutLogsItsCauseOnceAsAWarning(t *testing.T) {
 	require.NotContains(t, out[0], "user_id")
 }
 
-func TestEveryRecoverySeriesExistsFromTheStart(t *testing.T) {
+func TestEveryCheckoutAndRecoverySeriesExistsFromTheStart(t *testing.T) {
 	var logs bytes.Buffer
 	log, err := logger.New(logger.Config{Level: "info"}, &logs)
 	require.NoError(t, err)
@@ -97,12 +97,17 @@ func TestEveryRecoverySeriesExistsFromTheStart(t *testing.T) {
 	_, err = observe.NewCheckoutRecorder(c, log)
 	require.NoError(t, err)
 	names := map[string]int{}
+	var checkouts []string
 	for _, got := range c.got {
 		require.Zero(t, got.value)
 		names[got.name]++
+		if got.name == "checkout_total" {
+			checkouts = append(checkouts, got.attrs[0].Value.AsString())
+		}
 	}
-	require.Equal(t, map[string]int{"checkout_recovery_total": 5, "checkout_recovery_resolutions_total": 5}, names,
-		"zero is recorded, so the series exist before the first attempt")
+	require.Equal(t, map[string]int{"checkout_total": 12, "checkout_recovery_total": 5, "checkout_recovery_resolutions_total": 5}, names,
+		"zero is recorded, so the series exist before the first checkout or attempt")
+	require.Equal(t, app.CheckoutOutcomes(), checkouts)
 }
 
 func attempt(attempts int, outcome string) app.RecoveryAttempt {

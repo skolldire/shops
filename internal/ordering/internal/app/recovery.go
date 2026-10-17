@@ -113,6 +113,30 @@ func (r *Recovery) RunCycle(ctx context.Context) (RecoveryReport, error) {
 	return report, nil
 }
 
+type recoveryResult struct {
+	outcome  string
+	attempts int
+	cause    error
+	voided   bool
+}
+
+func (r *Recovery) record(ctx context.Context, p domain.Purchase, res recoveryResult, report *RecoveryReport) {
+	switch res.outcome {
+	case RecoveryConfirmed:
+		report.Confirmed++
+	case RecoveryDeclined:
+		report.Declined++
+		if res.voided {
+			report.Voided++
+		}
+	case RecoverySkipped:
+		report.Skipped++
+	default:
+		report.StillPending = append(report.StillPending, StillPending{PurchaseID: p.ID, Cause: res.cause})
+	}
+	r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Attempts: res.attempts, Outcome: res.outcome, Cause: res.cause, StuckAfter: r.policy.StuckAfter})
+}
+
 func (r *Recovery) recover(ctx context.Context, p domain.Purchase, report *RecoveryReport) {
 	start := time.Now()
 	item, cancelItem := context.WithDeadline(context.WithoutCancel(ctx), start.Add(r.item))
@@ -124,24 +148,22 @@ func (r *Recovery) recover(ctx context.Context, p domain.Purchase, report *Recov
 	case err != nil && ctx.Err() != nil:
 		return
 	case err != nil:
-		report.StillPending = append(report.StillPending, StillPending{PurchaseID: p.ID, Cause: err})
-		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Outcome: RecoveryError, Cause: err, StuckAfter: r.policy.StuckAfter})
+		r.record(ctx, p, recoveryResult{outcome: RecoveryError, cause: err}, report)
 		return
 	case !owned:
-		report.Skipped++
-		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Outcome: RecoverySkipped, StuckAfter: r.policy.StuckAfter})
+		r.record(ctx, p, recoveryResult{outcome: RecoverySkipped}, report)
 		return
 	}
 	if renewed.Attempts >= r.policy.StuckAfter || renewed.Overdue {
-		r.resolve(item, p, renewed.Attempts, report)
+		r.record(item, p, r.resolve(item, p, renewed.Attempts), report)
 		return
 	}
 	outcome, err := r.chargeWithin(item, p)
 	if err != nil {
-		r.reschedule(item, p, renewed.Attempts, err, report)
+		r.record(item, p, r.reschedule(item, p, renewed.Attempts, err), report)
 		return
 	}
-	r.settle(item, p, renewed.Attempts, outcome, report)
+	r.record(item, p, r.settle(item, p, renewed.Attempts, outcome), report)
 }
 
 func within(item context.Context, budget time.Duration) (context.Context, context.CancelFunc, error) {
@@ -165,24 +187,17 @@ func (r *Recovery) chargeWithin(item context.Context, p domain.Purchase) (domain
 	return outcome, nil
 }
 
-func (r *Recovery) settle(ctx context.Context, p domain.Purchase, attempts int, o domain.Outcome, report *RecoveryReport) bool {
+func (r *Recovery) settle(ctx context.Context, p domain.Purchase, attempts int, o domain.Outcome) recoveryResult {
 	applied, err := r.finalizeWithin(ctx, p, o)
 	switch {
 	case err != nil:
-		r.reschedule(ctx, p, attempts, err, report)
-		return false
+		return r.reschedule(ctx, p, attempts, err)
 	case !applied:
-		report.Skipped++
-		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Attempts: attempts, Outcome: RecoverySkipped, StuckAfter: r.policy.StuckAfter})
-		return false
+		return recoveryResult{outcome: RecoverySkipped, attempts: attempts}
 	case o.Status == domain.StatusConfirmed:
-		report.Confirmed++
-		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Attempts: attempts, Outcome: RecoveryConfirmed, StuckAfter: r.policy.StuckAfter})
-	default:
-		report.Declined++
-		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Attempts: attempts, Outcome: RecoveryDeclined, StuckAfter: r.policy.StuckAfter})
+		return recoveryResult{outcome: RecoveryConfirmed, attempts: attempts}
 	}
-	return true
+	return recoveryResult{outcome: RecoveryDeclined, attempts: attempts}
 }
 
 func (r *Recovery) finalizeWithin(item context.Context, p domain.Purchase, o domain.Outcome) (bool, error) {
@@ -194,9 +209,7 @@ func (r *Recovery) finalizeWithin(item context.Context, p domain.Purchase, o dom
 	return r.finalize(ctx, p, o)
 }
 
-func (r *Recovery) reschedule(ctx context.Context, p domain.Purchase, attempts int, cause error, report *RecoveryReport) {
-	report.StillPending = append(report.StillPending, StillPending{PurchaseID: p.ID, Cause: cause})
-	outcome := attemptOutcome(cause)
+func (r *Recovery) reschedule(ctx context.Context, p domain.Purchase, attempts int, cause error) recoveryResult {
 	var (
 		total int
 		owned bool
@@ -208,23 +221,21 @@ func (r *Recovery) reschedule(ctx context.Context, p domain.Purchase, attempts i
 	}
 	switch {
 	case err != nil:
-		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Attempts: attempts, Outcome: RecoveryError, Cause: errors.Join(cause, err), StuckAfter: r.policy.StuckAfter})
+		return recoveryResult{outcome: RecoveryError, attempts: attempts, cause: errors.Join(cause, err)}
 	case !owned:
-		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Attempts: attempts, Outcome: RecoverySkipped, Cause: cause, StuckAfter: r.policy.StuckAfter})
-	default:
-		r.rec.RecoveryAttempt(ctx, RecoveryAttempt{PurchaseID: p.ID, Attempts: total, Outcome: outcome, Cause: cause, StuckAfter: r.policy.StuckAfter})
+		return recoveryResult{outcome: RecoverySkipped, attempts: attempts, cause: cause}
 	}
+	return recoveryResult{outcome: attemptOutcome(cause), attempts: total, cause: cause}
 }
 
-func (r *Recovery) resolve(ctx context.Context, p domain.Purchase, attempts int, report *RecoveryReport) {
+func (r *Recovery) resolve(ctx context.Context, p domain.Purchase, attempts int) recoveryResult {
 	found, err := r.ask(ctx, r.payments.Lookup, string(p.ID))
 	if err == nil && found.Status == PaymentNotFound {
 		found, err = r.ask(ctx, r.payments.Void, string(p.ID))
 	}
 	if err != nil {
 		r.resolution(ctx, p, attempts, ResolutionError, err)
-		r.reschedule(ctx, p, attempts, err, report)
-		return
+		return r.reschedule(ctx, p, attempts, err)
 	}
 	var (
 		outcome domain.Outcome
@@ -235,8 +246,7 @@ func (r *Recovery) resolve(ctx context.Context, p domain.Purchase, attempts int,
 		cause := fmt.Errorf("%w: %s %s instead of %s %s", errAmountMismatch,
 			found.Amount.StringFixed(2), found.Currency, p.Total.StringFixed(2), p.Currency)
 		r.resolution(ctx, p, attempts, ResolutionMismatch, cause)
-		r.reschedule(ctx, p, attempts, cause, report)
-		return
+		return r.reschedule(ctx, p, attempts, cause)
 	case found.Status == PaymentApproved:
 		outcome, result = domain.Confirmed(found.ProviderRef), ResolutionConfirmed
 	case found.Status == PaymentDeclined:
@@ -246,15 +256,14 @@ func (r *Recovery) resolve(ctx context.Context, p domain.Purchase, attempts int,
 	default:
 		cause := fmt.Errorf("%w: the provider answered %q", ErrPaymentUnavailable, found.Status)
 		r.resolution(ctx, p, attempts, ResolutionError, cause)
-		r.reschedule(ctx, p, attempts, cause, report)
-		return
+		return r.reschedule(ctx, p, attempts, cause)
 	}
-	if r.settle(ctx, p, attempts, outcome, report) {
-		if result == ResolutionVoided {
-			report.Voided++
-		}
+	res := r.settle(ctx, p, attempts, outcome)
+	if res.outcome == RecoveryConfirmed || res.outcome == RecoveryDeclined {
+		res.voided = result == ResolutionVoided
 		r.resolution(ctx, p, attempts, result, nil)
 	}
+	return res
 }
 
 func (r *Recovery) ask(item context.Context, call func(context.Context, string) (PaymentRecord, error), reference string) (PaymentRecord, error) {

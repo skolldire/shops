@@ -328,16 +328,28 @@ func sortErrors(report *ImportReport) {
 	})
 }
 
-func (i *Importer) record(ctx context.Context, report ImportReport) {
+var importRowCounts = []struct {
+	outcome string
+	rows    func(ImportReport) int
+}{
+	{string(OutcomeCreated), func(r ImportReport) int { return r.Created }},
+	{string(OutcomeUpdated), func(r ImportReport) int { return r.Updated }},
+	{string(OutcomeUnchanged), func(r ImportReport) int { return r.Unchanged }},
+	{outcomeSkipped, func(r ImportReport) int { return r.Skipped }},
+	{outcomeRejected, func(r ImportReport) int { return r.Rejected }},
+}
 
-	for outcome, n := range map[string]int{
-		string(OutcomeCreated):   report.Created,
-		string(OutcomeUpdated):   report.Updated,
-		string(OutcomeUnchanged): report.Unchanged,
-		outcomeSkipped:           report.Skipped,
-		outcomeRejected:          report.Rejected,
-	} {
-		i.rec.RecordRows(ctx, outcome, n)
+func ImportRowOutcomes() []string {
+	outcomes := make([]string, len(importRowCounts))
+	for i, c := range importRowCounts {
+		outcomes[i] = c.outcome
+	}
+	return outcomes
+}
+
+func (i *Importer) record(ctx context.Context, report ImportReport) {
+	for _, c := range importRowCounts {
+		i.rec.RecordRows(ctx, c.outcome, c.rows(report))
 	}
 }
 

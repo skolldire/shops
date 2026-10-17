@@ -410,7 +410,7 @@ func TestAMalformedOrMissingExpectedPriceChangesNothing(t *testing.T) {
 	require.Equal(t, "validation_failed", code)
 	require.Equal(t, map[string]string{"items[0].expected_unit_price": "invalid_format"}, fields)
 	unchanged(t)
-	require.Empty(t, invalidCount(), "a malformed body never reaches the checkout use case")
+	require.Equal(t, `checkout_total{outcome="invalid"} 0`, invalidCount(), "a malformed body never reaches the checkout use case")
 
 	resp, body = c.checkout("alice", uuid.NewString(), `{"items":[{"product_id":"`+id+`","quantity":2}],"payment_token":"pm_approved"}`)
 	require.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode, body)
