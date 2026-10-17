@@ -9,10 +9,13 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/skolldire/shops/internal/catalog"
 )
 
 type browser struct {
@@ -211,13 +214,15 @@ func TestCreatingAProductDuringAnImportIsRefusedInTheAPIAndTheUI(t *testing.T) {
 
 	resp, body := c.do(http.MethodPost, "/api/v1/products", `{"sku":"BUSY-1","name":"Busy","category":"Tests","price":"10.00","stock":5,"weight_kg":"1"}`)
 	require.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	require.Equal(t, "5", resp.Header.Get("Retry-After"))
+	apiRetry := resp.Header.Get("Retry-After")
+	require.Equal(t, strconv.Itoa(catalog.ImportRetryAfterSeconds), apiRetry)
 	code, _ := errorCodes(t, body)
 	require.Equal(t, "import_in_progress", code)
 
 	b := newBrowser(c)
 	resp, body = b.post("/admin/products", url.Values{"sku": {"BUSY-2"}, "name": {"Busy"}, "category": {"Tests"}, "price": {"10.00"}, "stock": {"5"}, "weight_kg": {"1"}})
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Equal(t, apiRetry, resp.Header.Get("Retry-After"), "the API and the UI ask for the same delay")
 	require.Contains(t, body, "An import is being applied. Nothing was created; try again in a few seconds.")
 	after, _, _ := c.products()
 	require.Equal(t, before, after, "neither request created a product")

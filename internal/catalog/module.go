@@ -171,6 +171,8 @@ func ParseWholeNumber(raw string) (int64, error) {
 	return domain.ParseWholeNumber(raw)
 }
 
+const ImportRetryAfterSeconds = app.ImportRetryAfterSeconds
+
 func WholeNumberErrorCode(err error) string {
 	return domain.WholeNumberErrorCode(err)
 }

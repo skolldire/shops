@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 
 	"github.com/skolldire/shops/internal/catalog"
 )
+
+var importRetryAfter = strconv.Itoa(catalog.ImportRetryAfterSeconds)
 
 var (
 	errInvalidAllowDuplicate = errors.New("web: allow_duplicate must be true or false")
@@ -139,7 +142,7 @@ func (ui *UI) importFailed(w http.ResponseWriter, r *http.Request, opts catalog.
 	case errors.Is(err, catalog.ErrTooManyRows):
 		ui.importProblem(w, r, http.StatusBadRequest, "The file has more rows than the import limit. Nothing was imported.")
 	case errors.Is(err, catalog.ErrImportInProgress):
-		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Retry-After", importRetryAfter)
 		ui.importProblem(w, r, http.StatusConflict, "Another import is being applied. Nothing was imported; choose the file again in a few seconds.")
 	case errors.Is(err, catalog.ErrIdempotencyConflict):
 		ui.importProblem(w, r, http.StatusConflict, "This form was already used for another file or mode. Nothing was imported; choose the file again.")

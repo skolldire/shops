@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -187,7 +188,7 @@ func TestCreateProductDuringAnImportAsksToRetry(t *testing.T) {
 	rec := post(h, "/admin/products", validForm())
 
 	require.Equal(t, http.StatusConflict, rec.Code)
-	require.Equal(t, "5", rec.Header().Get("Retry-After"))
+	require.Equal(t, strconv.Itoa(catalog.ImportRetryAfterSeconds), rec.Header().Get("Retry-After"))
 	require.Contains(t, rec.Body.String(), `<p class="notice error" role="alert">An import is being applied. Nothing was created; try again in a few seconds.</p>`)
 	require.Contains(t, rec.Body.String(), `value="`+validForm().Get("sku")+`"`, "the form keeps what was typed")
 }

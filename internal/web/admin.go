@@ -72,7 +72,7 @@ func (ui *UI) createProduct(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, catalog.ErrImportInProgress) {
 		form := newProductForm(values, nil)
 		form.Busy = "An import is being applied. Nothing was created; try again in a few seconds."
-		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Retry-After", importRetryAfter)
 		ui.page(w, r, http.StatusConflict, "admin_form", form)
 		return
 	}

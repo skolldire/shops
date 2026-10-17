@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -289,7 +290,7 @@ func TestErrorTable(t *testing.T) {
 			require.Equal(t, tt.code, p.Code)
 			require.NotContains(t, rec.Body.String(), "10.0.0.5")
 			if tt.code == "import_in_progress" {
-				require.Equal(t, "5", rec.Header().Get("Retry-After"))
+				require.Equal(t, strconv.Itoa(app.ImportRetryAfterSeconds), rec.Header().Get("Retry-After"))
 			}
 		})
 	}
