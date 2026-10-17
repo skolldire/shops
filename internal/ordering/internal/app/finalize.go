@@ -13,6 +13,7 @@ type finalizer struct {
 	purchases PurchaseFinisher
 	stock     StockSettlement
 	carts     PurchasedCartRemover
+	events    EventOutbox
 }
 
 type Settlement struct {
@@ -20,14 +21,15 @@ type Settlement struct {
 	Finisher PurchaseFinisher
 	Stock    StockSettlement
 	Carts    PurchasedCartRemover
+	Events   EventOutbox
 }
 
 func (s Settlement) complete() bool {
-	return s.Tx != nil && s.Finisher != nil && s.Stock != nil && s.Carts != nil
+	return s.Tx != nil && s.Finisher != nil && s.Stock != nil && s.Carts != nil && s.Events != nil
 }
 
 func (s Settlement) finalizer() finalizer {
-	return finalizer{tx: s.Tx, purchases: s.Finisher, stock: s.Stock, carts: s.Carts}
+	return finalizer{tx: s.Tx, purchases: s.Finisher, stock: s.Stock, carts: s.Carts, events: s.Events}
 }
 
 func (f finalizer) finalize(ctx context.Context, p domain.Purchase, o domain.Outcome) (bool, error) {
@@ -49,6 +51,13 @@ func (f finalizer) finalize(ctx context.Context, p domain.Purchase, o domain.Out
 			err = domain.ErrInvalidTransition
 		}
 		if err != nil {
+			return err
+		}
+		event, err := domain.NewPurchaseEvent(p, o)
+		if err != nil {
+			return err
+		}
+		if err := f.events.Append(ctx, event); err != nil {
 			return err
 		}
 		applied = true

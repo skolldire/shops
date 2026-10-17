@@ -96,6 +96,7 @@ func TestASameKeyCheckoutWaitsAtMostTheLockTimeoutAndThenGetsTheFirstResult(t *t
 		Pool: pool, Catalog: barrier, Payments: pay, Log: quiet, Metrics: telemetry.Noop(), Users: []string{"alice"},
 		Budgets:  ordering.Budgets{Reserve: 10 * time.Second, LockTimeout: 2 * time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
 		Recovery: recoveryConfig,
+		Events:   eventsConfig,
 	})
 	require.NoError(t, err)
 	router := chi.NewRouter()

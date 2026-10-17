@@ -30,12 +30,15 @@ type Deps struct {
 	Users    []string
 	Budgets  Budgets
 	Recovery RecoveryConfig
+	Events   EventsConfig
 }
 
 type Module struct {
 	checkout *app.Checkout
 	recovery *app.Recovery
-	worker   *RecoveryWorker
+	worker   *Worker
+	relay    *app.Relay
+	relayer  *Worker
 	queries  *app.Queries
 	cart     *app.Cart
 	http     *httpapi.Handler
@@ -50,6 +53,10 @@ type ports struct {
 	pending     app.PendingPurchases
 	editor      app.CartEditor
 	remover     app.PurchasedCartRemover
+	events      app.EventOutbox
+	queue       app.EventQueue
+	inbox       app.Inbox
+	sales       app.SalesProjectionStore
 }
 
 func NewModule(d Deps) (*Module, error) {
@@ -68,6 +75,18 @@ func NewModule(d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	outbox, err := postgres.NewOutbox(d.Pool)
+	if err != nil {
+		return nil, err
+	}
+	inbox, err := postgres.NewInbox(d.Pool)
+	if err != nil {
+		return nil, err
+	}
+	sales, err := postgres.NewSales(d.Pool)
+	if err != nil {
+		return nil, err
+	}
 	purchases, err := postgres.NewPurchases(d.Pool)
 	if err != nil {
 		return nil, err
@@ -78,7 +97,7 @@ func NewModule(d Deps) (*Module, error) {
 	}
 	return newModule(ports{
 		tx: tx, reservation: reservation, created: purchases, reader: purchases, finisher: purchases, pending: purchases,
-		editor: carts, remover: carts,
+		editor: carts, remover: carts, events: outbox, queue: outbox, inbox: inbox, sales: sales,
 	}, d)
 }
 
@@ -99,7 +118,7 @@ func newModule(p ports, d Deps) (*Module, error) {
 		return nil, err
 	}
 	budgets := app.Budgets{Reserve: d.Budgets.Reserve, Charge: d.Budgets.Charge, Finalize: d.Budgets.Finalize}
-	settlement := app.Settlement{Tx: p.tx, Finisher: p.finisher, Stock: stock, Carts: p.remover}
+	settlement := app.Settlement{Tx: p.tx, Finisher: p.finisher, Stock: stock, Carts: p.remover, Events: p.events}
 	checkout, err := app.NewCheckout(app.CheckoutPorts{
 		Settlement: settlement, Reservation: p.reservation, Reservations: stock, Purchases: p.created, Lookup: p.reader, Payments: payments, Recorder: rec,
 	}, budgets)
@@ -114,7 +133,14 @@ func newModule(p ports, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	worker, err := newRecoveryWorker(recovery, d.Recovery.Interval, d.Log)
+	worker, err := newTickerWorker("recovery", d.Recovery.Interval, func(ctx context.Context) error {
+		_, err := recovery.RunCycle(ctx)
+		return err
+	}, d.Log)
+	if err != nil {
+		return nil, err
+	}
+	relay, relayer, err := newRelay(p, d)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +156,47 @@ func newModule(p ports, d Deps) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Module{checkout: checkout, recovery: recovery, worker: worker, queries: queries, cart: cart, http: h}, nil
+	return &Module{checkout: checkout, recovery: recovery, worker: worker, relay: relay, relayer: relayer, queries: queries, cart: cart, http: h}, nil
+}
+
+func newRelay(p ports, d Deps) (*app.Relay, *Worker, error) {
+	rec, err := observe.NewRelayRecorder(d.Metrics, d.Log)
+	if err != nil {
+		return nil, nil, err
+	}
+	projection, err := app.NewSalesProjection(p.tx, p.inbox, p.sales)
+	if err != nil {
+		return nil, nil, err
+	}
+	e := d.Events
+	relay, err := app.NewRelay(p.queue, projection, rec, app.RelayPolicy{
+		Owner: uuid.NewString(), Lease: e.Lease, DBTimeout: e.DBTimeout, HandlerTimeout: e.HandlerTimeout,
+		Batch: e.BatchSize, StuckAfter: e.StuckAfterAttempts, Backoff: backoff(e.BaseBackoff, e.MaxBackoff),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	worker, err := newTickerWorker("relay", e.Interval, func(ctx context.Context) error {
+		_, err := relay.RunCycle(ctx)
+		return err
+	}, d.Log)
+	if err != nil {
+		return nil, nil, err
+	}
+	return relay, worker, nil
+}
+
+func (m *Module) RelayWorker() *Worker {
+	return m.relayer
+}
+
+func (m *Module) RelayOnce(ctx context.Context) (RelayReport, error) {
+	report, err := m.relay.RunCycle(ctx)
+	return RelayReport{Published: report.Published, Duplicates: report.Duplicates, Skipped: report.Skipped, StillPending: report.StillPending}, err
+}
+
+func EventItemBudget(dbTimeout, handlerTimeout time.Duration) time.Duration {
+	return app.EventItemBudget(dbTimeout, handlerTimeout)
 }
 
 const (
@@ -226,7 +292,7 @@ func (m *Module) AcceptCurrentPrice(ctx context.Context, userID, productID strin
 	return publicError(m.cart.AcceptCurrentPrice(ctx, userID, productID))
 }
 
-func (m *Module) RecoveryWorker() *RecoveryWorker {
+func (m *Module) RecoveryWorker() *Worker {
 	return m.worker
 }
 

@@ -102,6 +102,41 @@ type PendingPurchaseStats interface {
 	PendingStats(ctx context.Context, stuckAfter int) (PendingStats, error)
 }
 
+type EventOutbox interface {
+	Append(ctx context.Context, e domain.PurchaseEvent) error
+}
+
+type EventStats struct {
+	Pending       int
+	OldestSeconds float64
+	Stuck         int
+}
+
+type ClaimedEvents struct {
+	Readable   []domain.StoredEvent
+	Unreadable []domain.UnreadableEvent
+}
+
+type EventQueue interface {
+	Claim(ctx context.Context, owner string, lease time.Duration, batch int) (ClaimedEvents, error)
+	Renew(ctx context.Context, seq int64, owner string, lease time.Duration) (bool, error)
+	MarkPublished(ctx context.Context, seq int64, owner string) (bool, error)
+	Reschedule(ctx context.Context, seq int64, owner string, backoff time.Duration, cause string) (int, bool, error)
+	Stats(ctx context.Context, stuckAfter int) (EventStats, error)
+}
+
+type EventHandler interface {
+	Handle(ctx context.Context, e domain.StoredEvent) (bool, error)
+}
+
+type Inbox interface {
+	Record(ctx context.Context, consumer string, eventID domain.ID) (bool, error)
+}
+
+type SalesProjectionStore interface {
+	AddSale(ctx context.Context, productID domain.ID, units int) error
+}
+
 type PurchaseFinisher interface {
 	Finish(ctx context.Context, id domain.ID, o domain.Outcome) (bool, error)
 }

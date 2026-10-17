@@ -61,6 +61,11 @@ func buildApp(cfg AppConfig, log logger.Service, pool *pgxpool.Pool, tel *teleme
 			Lease: cfg.Recovery.Lease, DBTimeout: cfg.Recovery.DBTimeout, BaseBackoff: cfg.Recovery.BaseBackoff, MaxBackoff: cfg.Recovery.MaxBackoff,
 			StuckAfterAttempts: cfg.Recovery.StuckAfterAttempts, MaxPendingAge: cfg.Checkout.MaxPendingAge,
 		},
+		Events: ordering.EventsConfig{
+			Interval: cfg.Events.Interval, BatchSize: cfg.Events.BatchSize, Lease: cfg.Events.Lease, DBTimeout: cfg.Events.DBTimeout,
+			HandlerTimeout: cfg.Events.HandlerTimeout, BaseBackoff: cfg.Events.BaseBackoff, MaxBackoff: cfg.Events.MaxBackoff,
+			StuckAfterAttempts: cfg.Events.StuckAfterAttempts,
+		},
 	})
 	if err != nil {
 		return nil, err

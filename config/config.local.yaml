@@ -51,3 +51,12 @@ recovery:
   base_backoff: 5s
   max_backoff: 5m
   stuck_after_attempts: 10
+events:
+  interval: 1s
+  batch_size: 10
+  lease: 10s
+  db_timeout: 2s
+  handler_timeout: 2s
+  base_backoff: 1s
+  max_backoff: 1m
+  stuck_after_attempts: 10

@@ -128,8 +128,8 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' localhost:8080/)" = "200 text/html; charset=utf-8"
           test "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' localhost:8080/api/v1/products)" = "200 application/json"
           curl -s -D - -o /dev/null -X DELETE localhost:8080/health/live | grep -qi '^allow: GET'
-          tables="$(docker compose exec -T db psql -U shop -d shop -tAc "select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema = 'public'")"
-          test "$tables" = "cart_items,imports,inventory_movements,payment_fake_charges,products,purchase_items,purchases" || { echo "unexpected tables: $tables"; exit 1; }
+          tables="$(docker compose exec -T db psql -U shop -d shop -tAc "select string_agg(table_name, ',' order by table_name collate \"C\") from information_schema.tables where table_schema = 'public'")"
+          test "$tables" = "cart_items,imports,inbox,inventory_movements,outbox,payment_fake_charges,product_sales,products,purchase_items,purchases" || { echo "unexpected tables: $tables"; exit 1; }
           password="$(docker compose exec -T db cat /run/secrets/db_password)"
           if docker inspect shops-app-1 | grep -qF "$password"; then echo "password found in docker inspect"; exit 1; fi
           if docker compose logs app | grep -qF "$password"; then echo "password found in logs"; exit 1; fi

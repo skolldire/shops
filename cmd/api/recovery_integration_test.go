@@ -168,8 +168,9 @@ func TestShutdownStopsTheWorkerWhileHTTPDrainsAndBeforeThePool(t *testing.T) {
 	require.Equal(t, "HTTP/1.1 100 Continue\r\n", status, "the handler is reading the body, so the request is in flight")
 
 	cancel()
-	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "recovery worker stopped") }, 10*time.Second, 10*time.Millisecond,
-		"the worker stops as soon as the shutdown starts")
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "recovery worker stopped") && strings.Contains(logs.String(), "relay worker stopped")
+	}, 10*time.Second, 10*time.Millisecond, "both workers stop as soon as the shutdown starts")
 	out := logs.String()
 	require.Contains(t, out, "shutdown requested")
 	require.NotContains(t, out, "shutdown complete", "the request in flight is still being drained")
@@ -186,4 +187,6 @@ func TestShutdownStopsTheWorkerWhileHTTPDrainsAndBeforeThePool(t *testing.T) {
 	stopped := strings.Index(out, "recovery worker stopped")
 	require.Less(t, stopped, strings.Index(out, `"component":"recovery"`))
 	require.Less(t, strings.Index(out, `"component":"recovery"`), strings.Index(out, `"component":"postgres"`), "the worker stops before the pool")
+	require.Less(t, strings.Index(out, "relay worker stopped"), strings.Index(out, `"component":"relay"`))
+	require.Less(t, strings.Index(out, `"component":"relay"`), strings.Index(out, `"component":"postgres"`), "the relay stops before the pool")
 }

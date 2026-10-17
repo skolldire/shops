@@ -27,6 +27,7 @@ type state struct {
 	releases  int
 	reserves  int
 	commits   int
+	events    []domain.PurchaseEvent
 }
 
 func (s state) clone() state {
@@ -34,7 +35,7 @@ func (s state) clone() state {
 		purchases: maps.Clone(s.purchases), stock: maps.Clone(s.stock), deleted: maps.Clone(s.deleted),
 		carts: map[string][]domain.CartItem{}, reserved: maps.Clone(s.reserved),
 		attempts: maps.Clone(s.attempts), owners: maps.Clone(s.owners),
-		releases: s.releases, reserves: s.reserves, commits: s.commits,
+		releases: s.releases, reserves: s.reserves, commits: s.commits, events: slices.Clone(s.events),
 	}
 	for k, v := range s.purchases {
 		v.Items = slices.Clone(v.Items)
@@ -58,6 +59,8 @@ type world struct {
 	listErr    error
 	overdue    map[domain.ID]bool
 	onRenew    func(id domain.ID)
+	appendErr  error
+	appends    int
 	control    func(ctx context.Context, op string, id domain.ID) error
 }
 
@@ -308,6 +311,19 @@ func (w *world) Finish(ctx context.Context, id domain.ID, o domain.Outcome) (boo
 		won = true
 	})
 	return won, nil
+}
+
+func (w *world) Append(ctx context.Context, e domain.PurchaseEvent) error {
+	var err error
+	w.locked(ctx, func() {
+		w.appends++
+		if w.appendErr != nil {
+			err = w.appendErr
+			return
+		}
+		w.state.events = append(w.state.events, e)
+	})
+	return err
 }
 
 func (w *world) Reserve(ctx context.Context, items []domain.Quantity, _ string) ([]domain.ReservedLine, error) {

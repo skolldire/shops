@@ -121,6 +121,24 @@ type RecoveryConfig struct {
 	MaxPendingAge      time.Duration
 }
 
+type EventsConfig struct {
+	Interval           time.Duration
+	BatchSize          int
+	Lease              time.Duration
+	DBTimeout          time.Duration
+	HandlerTimeout     time.Duration
+	BaseBackoff        time.Duration
+	MaxBackoff         time.Duration
+	StuckAfterAttempts int
+}
+
+type RelayReport struct {
+	Published    int
+	Duplicates   int
+	Skipped      int
+	StillPending int
+}
+
 type PendingPurchase struct {
 	ID    string
 	Cause error

@@ -149,9 +149,15 @@ func setup(t *testing.T, pay *provider) fixture {
 		Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: telemetry.Noop(), Users: []string{"alice", "bob"},
 		Budgets:  ordering.Budgets{Reserve: 3 * time.Second, LockTimeout: time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
 		Recovery: recoveryConfig,
+		Events:   eventsConfig,
 	})
 	require.NoError(t, err)
 	return fixture{pool: pool, catalog: cat, orders: orders, pay: pay}
+}
+
+var eventsConfig = ordering.EventsConfig{
+	Interval: time.Hour, BatchSize: 10, Lease: 10 * time.Second, DBTimeout: 2 * time.Second, HandlerTimeout: 2 * time.Second,
+	BaseBackoff: time.Second, MaxBackoff: time.Minute, StuckAfterAttempts: 10,
 }
 
 var recoveryConfig = ordering.RecoveryConfig{

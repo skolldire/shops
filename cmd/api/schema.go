@@ -15,4 +15,8 @@ var requiredColumns = []database.Column{
 	{Table: "purchases", Name: "lease_owner"},
 	{Table: "purchases", Name: "last_recovery_error"},
 	{Table: "payment_fake_charges", Name: "token_hash"},
+	{Table: "outbox", Name: "aggregate_type"},
+	{Table: "outbox", Name: "lease_owner"},
+	{Table: "inbox", Name: "event_id"},
+	{Table: "product_sales", Name: "units_sold"},
 }

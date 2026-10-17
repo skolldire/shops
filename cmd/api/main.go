@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/skolldire/shops/internal/ordering"
 	"github.com/skolldire/shops/internal/platform/config"
 	"github.com/skolldire/shops/internal/platform/database"
 	"github.com/skolldire/shops/internal/platform/lifecycle"
@@ -119,11 +120,16 @@ func start(ctx context.Context, cfg AppConfig, log logger.Service, lc *lifecycle
 			return err
 		}
 	}
-	worker := a.ordering.RecoveryWorker()
-	if err := lc.OnClose("recovery", worker.Stop); err != nil {
-		return err
+	workers := []struct {
+		name   string
+		worker *ordering.Worker
+	}{{"recovery", a.ordering.RecoveryWorker()}, {"relay", a.ordering.RelayWorker()}}
+	for _, w := range workers {
+		if err := lc.OnClose(w.name, w.worker.Stop); err != nil {
+			return err
+		}
+		w.worker.Start(ctx)
 	}
-	worker.Start(ctx)
 
 	apiServer := &http.Server{
 		Addr:              cfg.HTTP.Addr,

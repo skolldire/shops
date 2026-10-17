@@ -33,7 +33,7 @@ type fixture struct {
 }
 
 func settlement(w *world) app.Settlement {
-	return app.Settlement{Tx: w, Finisher: w, Stock: w, Carts: w}
+	return app.Settlement{Tx: w, Finisher: w, Stock: w, Carts: w, Events: w}
 }
 
 func checkoutPorts(w *world, pay app.PaymentCharger, rec app.CheckoutRecorder) app.CheckoutPorts {
