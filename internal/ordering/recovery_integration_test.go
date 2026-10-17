@@ -199,6 +199,7 @@ func newClusterWith(t *testing.T, stuckAfter int, tune func(*ordering.RecoveryCo
 			Pool: pool, Catalog: cat, Payments: pay, Log: log, Metrics: metrics, Users: []string{"alice", "bob"},
 			Budgets:  ordering.Budgets{Reserve: 3 * time.Second, LockTimeout: time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
 			Recovery: config,
+			Events:   eventsConfig,
 		})
 		require.NoError(t, err)
 		return replica{orders: orders, logs: logs, metrics: metrics}

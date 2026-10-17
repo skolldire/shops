@@ -164,7 +164,7 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 
 	cfg = shippedConfig(t)
 	cfg.HTTP.ShutdownTimeout = 20 * time.Second
-	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least the longer of a checkout request")
+	require.ErrorContains(t, cfg.Validate(), "http.shutdown_timeout must be at least the longest of a checkout request")
 	cfg.HTTP.ShutdownTimeout = 30 * time.Second
 	err := cfg.Validate()
 	require.ErrorContains(t, err, "http.shutdown_timeout must be greater than recovery.lease", "30s covers the 19s purchase but equals the lease")
@@ -200,6 +200,48 @@ func TestValidateCheckoutBudgets(t *testing.T) {
 	cfg = shippedConfig(t)
 	cfg.HTTP.WriteTimeout = 10 * time.Second
 	require.ErrorContains(t, cfg.Validate(), "must not exceed http.write_timeout")
+}
+
+func TestShippedEventsDefaults(t *testing.T) {
+	cfg := shippedConfig(t)
+	require.Equal(t, EventsConfig{
+		Interval: time.Second, BatchSize: 10, Lease: 10 * time.Second, DBTimeout: 2 * time.Second, HandlerTimeout: 2 * time.Second,
+		BaseBackoff: time.Second, MaxBackoff: time.Minute, StuckAfterAttempts: 10,
+	}, cfg.Events)
+	local, err := loadConfig(t, "../../config/config.local.yaml", map[string]string{"DB_PASSWORD": testPassword}, nil)
+	require.NoError(t, err)
+	require.Equal(t, cfg.Events, local.Events)
+}
+
+func TestValidateEvents(t *testing.T) {
+	for want, change := range map[string]func(c *AppConfig){
+		"events.interval must be positive":               func(c *AppConfig) { c.Events.Interval = 0 },
+		"events.lease must be positive":                  func(c *AppConfig) { c.Events.Lease = 0 },
+		"events.db_timeout must be positive":             func(c *AppConfig) { c.Events.DBTimeout = 0 },
+		"events.handler_timeout must be positive":        func(c *AppConfig) { c.Events.HandlerTimeout = 0 },
+		"events.base_backoff must be positive":           func(c *AppConfig) { c.Events.BaseBackoff = 0 },
+		"events.max_backoff must be positive":            func(c *AppConfig) { c.Events.MaxBackoff = 0 },
+		"events.batch_size must be at least 1":           func(c *AppConfig) { c.Events.BatchSize = 0 },
+		"events.stuck_after_attempts must be at least 1": func(c *AppConfig) { c.Events.StuckAfterAttempts = 0 },
+		"events.base_backoff must not exceed":            func(c *AppConfig) { c.Events.BaseBackoff = 2 * time.Minute },
+	} {
+		cfg := shippedConfig(t)
+		change(&cfg)
+		require.ErrorContains(t, cfg.Validate(), want)
+	}
+
+	cfg := shippedConfig(t)
+	cfg.Events.Lease = 8 * time.Second
+	require.ErrorContains(t, cfg.Validate(), "events.lease must be greater than 2 × events.db_timeout + events.handler_timeout + 2s", "2s + 2s + 2s + 2s is not enough")
+	cfg.Events.Lease = 8*time.Second + time.Millisecond
+	require.NoError(t, cfg.Validate(), "just above the deadline of one event plus the margin")
+
+	cfg = shippedConfig(t)
+	cfg.Events.HandlerTimeout, cfg.Events.Lease = 30*time.Second, 40*time.Second
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "a relayed event (2 × events.db_timeout + events.handler_timeout)", "a 34s event does not fit in 35s plus 2s")
+	cfg.HTTP.ShutdownTimeout = 41 * time.Second
+	require.NoError(t, cfg.Validate())
 }
 
 func TestValidateRecovery(t *testing.T) {

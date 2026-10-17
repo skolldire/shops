@@ -191,6 +191,7 @@ func TestAnExhaustedPoolEndsTheCycleWithinTheDatabaseTimeout(t *testing.T) {
 		Pool: small, Catalog: c.cat, Payments: c.pay, Log: quiet, Metrics: &spy{counters: map[string]int64{}, gauges: map[string]float64{}},
 		Users: []string{"alice"}, Budgets: ordering.Budgets{Reserve: 3 * time.Second, LockTimeout: time.Second, Charge: 3 * time.Second, Finalize: 3 * time.Second},
 		Recovery: config,
+		Events:   eventsConfig,
 	})
 	require.NoError(t, err)
 	conn, err := small.Acquire(context.Background())

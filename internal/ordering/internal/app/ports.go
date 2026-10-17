@@ -106,6 +106,24 @@ type EventOutbox interface {
 	Append(ctx context.Context, e domain.PurchaseEvent) error
 }
 
+type EventStats struct {
+	Pending       int
+	OldestSeconds float64
+	Stuck         int
+}
+
+type EventQueue interface {
+	Claim(ctx context.Context, owner string, lease time.Duration, batch int) ([]domain.StoredEvent, error)
+	Renew(ctx context.Context, seq int64, owner string, lease time.Duration) (bool, error)
+	MarkPublished(ctx context.Context, seq int64, owner string) (bool, error)
+	Reschedule(ctx context.Context, seq int64, owner string, backoff time.Duration, cause string) (int, bool, error)
+	Stats(ctx context.Context, stuckAfter int) (EventStats, error)
+}
+
+type EventHandler interface {
+	Handle(ctx context.Context, e domain.StoredEvent) (bool, error)
+}
+
 type Inbox interface {
 	Record(ctx context.Context, consumer string, eventID domain.ID) (bool, error)
 }
