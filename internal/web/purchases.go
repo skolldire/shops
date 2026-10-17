@@ -35,10 +35,10 @@ func (ui *UI) purchases(w http.ResponseWriter, r *http.Request) {
 	}
 	data := purchasesPage{Page: res}
 	if res.Page > 1 {
-		data.PrevURL = movementsURL("/purchases", res.Page-1, res.PageSize)
+		data.PrevURL = pagingURL("/purchases", res.Page-1, res.PageSize)
 	}
 	if res.Page*res.PageSize < res.Total {
-		data.NextURL = movementsURL("/purchases", res.Page+1, res.PageSize)
+		data.NextURL = pagingURL("/purchases", res.Page+1, res.PageSize)
 	}
 	ui.page(w, r, http.StatusOK, "purchases", data)
 }
