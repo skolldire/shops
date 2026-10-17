@@ -1,6 +1,8 @@
 package postgres
 
 import (
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,14 +44,19 @@ func TestAnEventIsDecodedByItsTypeAndVersion(t *testing.T) {
 func TestAnUnsupportedTypeOrVersionIsNeverReadAsVersionOne(t *testing.T) {
 	raw, err := encodePayload(confirmedV1())
 	require.NoError(t, err)
-	for _, key := range []eventKey{
-		{kind: domain.EventPurchaseConfirmed, version: domain.PurchaseEventVersion + 1},
-		{kind: domain.EventPurchaseFailed, version: 0},
-		{kind: "PurchaseRefunded", version: domain.PurchaseEventVersion},
+	for _, key := range []domain.EventKind{
+		{Type: domain.EventPurchaseConfirmed, Version: domain.PurchaseEventVersion + 1},
+		{Type: domain.EventPurchaseFailed, Version: 0},
+		{Type: "PurchaseRefunded", Version: domain.PurchaseEventVersion},
 	} {
-		_, err := decodePayload(key.kind, key.version, purchaseID, raw)
-		require.ErrorIs(t, err, domain.ErrUnsupportedEvent, "%s v%d", key.kind, key.version)
+		_, err := decodePayload(key.Type, key.Version, purchaseID, raw)
+		require.ErrorIs(t, err, domain.ErrUnsupportedEvent, "%s v%d", key.Type, key.Version)
 	}
+}
+
+func TestTheOutboxDecodesExactlyTheSupportedEvents(t *testing.T) {
+	require.ElementsMatch(t, domain.SupportedEvents(), slices.Collect(maps.Keys(decoders)),
+		"every supported kind has a decoder and there is no decoder for an unsupported one")
 }
 
 func TestAnUnreadablePayloadHasASafeCause(t *testing.T) {

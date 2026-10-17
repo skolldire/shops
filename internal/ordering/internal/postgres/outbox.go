@@ -79,18 +79,13 @@ var (
 	errNoDecoder     = fmt.Errorf("%w: the outbox has no decoder for them", domain.ErrUnsupportedEvent)
 )
 
-type eventKey struct {
-	kind    domain.EventType
-	version int
-}
-
-var decoders = map[eventKey]func(raw []byte) (domain.PurchaseEvent, error){
-	{domain.EventPurchaseConfirmed, domain.PurchaseEventVersion}: decodeConfirmed,
-	{domain.EventPurchaseFailed, domain.PurchaseEventVersion}:    decodeFailed,
+var decoders = map[domain.EventKind]func(raw []byte) (domain.PurchaseEvent, error){
+	{Type: domain.EventPurchaseConfirmed, Version: domain.PurchaseEventVersion}: decodeConfirmed,
+	{Type: domain.EventPurchaseFailed, Version: domain.PurchaseEventVersion}:    decodeFailed,
 }
 
 func decodePayload(kind domain.EventType, version int, aggregateID string, raw []byte) (domain.PurchaseEvent, error) {
-	decode, ok := decoders[eventKey{kind: kind, version: version}]
+	decode, ok := decoders[domain.EventKind{Type: kind, Version: version}]
 	if !ok {
 		return domain.PurchaseEvent{}, errNoDecoder
 	}
@@ -162,17 +157,27 @@ func (o *Outbox) Append(ctx context.Context, e domain.PurchaseEvent) error {
 	return nil
 }
 
-func (o *Outbox) Claim(ctx context.Context, owner string, lease time.Duration, batch int) (app.ClaimedEvents, error) {
+func kindColumns(kinds []domain.EventKind) ([]string, []int) {
+	types, versions := make([]string, len(kinds)), make([]int, len(kinds))
+	for i, k := range kinds {
+		types[i], versions[i] = string(k.Type), k.Version
+	}
+	return types, versions
+}
+
+func (o *Outbox) Claim(ctx context.Context, owner string, lease time.Duration, batch int, kinds []domain.EventKind) (app.ClaimedEvents, error) {
+	types, versions := kindColumns(kinds)
 	rows, err := database.Q(ctx, o.pool).Query(ctx,
 		`UPDATE outbox SET lease_owner = $1::uuid, lease_until = now() + $2 * interval '1 microsecond'
 		 WHERE id IN (
 		     SELECT id FROM outbox
 		     WHERE published_at IS NULL AND next_attempt_at <= now() AND (lease_until IS NULL OR lease_until < now())
+		       AND (type, version) IN (SELECT * FROM unnest($4::text[], $5::bigint[]))
 		     ORDER BY id
 		     LIMIT $3
 		     FOR UPDATE SKIP LOCKED)
 		 RETURNING id, event_id::text, occurred_at, attempts, aggregate_id::text, type, version, correlation_id, payload`,
-		owner, lease.Microseconds(), batch)
+		owner, lease.Microseconds(), batch, types, versions)
 	if err != nil {
 		return app.ClaimedEvents{}, fmt.Errorf("ordering: claim outbox events: %w", err)
 	}
@@ -250,13 +255,15 @@ func (o *Outbox) Reschedule(ctx context.Context, seq int64, owner string, backof
 	return attempts, true, nil
 }
 
-func (o *Outbox) Stats(ctx context.Context, stuckAfter int) (app.EventStats, error) {
+func (o *Outbox) Stats(ctx context.Context, stuckAfter int, kinds []domain.EventKind) (app.EventStats, error) {
 	var stats app.EventStats
+	types, versions := kindColumns(kinds)
 	err := database.Q(ctx, o.pool).QueryRow(ctx,
 		`SELECT count(*),
 		        COALESCE(EXTRACT(EPOCH FROM now() - min(occurred_at)), 0)::float8,
-		        count(*) FILTER (WHERE attempts >= $1)
-		 FROM outbox WHERE published_at IS NULL`, stuckAfter).Scan(&stats.Pending, &stats.OldestSeconds, &stats.Stuck)
+		        count(*) FILTER (WHERE attempts >= $1),
+		        count(*) FILTER (WHERE (type, version) NOT IN (SELECT * FROM unnest($2::text[], $3::bigint[])))
+		 FROM outbox WHERE published_at IS NULL`, stuckAfter, types, versions).Scan(&stats.Pending, &stats.OldestSeconds, &stats.Stuck, &stats.Unsupported)
 	if err != nil {
 		return app.EventStats{}, fmt.Errorf("ordering: read the pending events: %w", err)
 	}

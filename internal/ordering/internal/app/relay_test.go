@@ -34,6 +34,7 @@ type fakeQueue struct {
 	renewErr       error
 	markErr        error
 	rescheduleErr  error
+	kinds          []domain.EventKind
 	claimErr       error
 	published      []int64
 	rescheduled    []int64
@@ -46,8 +47,11 @@ func (q *fakeQueue) note(ctx context.Context, op string, seq int64, backoff time
 	q.calls = append(q.calls, queueCall{op: op, seq: seq, deadline: deadline, backoff: backoff})
 }
 
-func (q *fakeQueue) Claim(ctx context.Context, _ string, _ time.Duration, batch int) (app.ClaimedEvents, error) {
+func (q *fakeQueue) Claim(ctx context.Context, _ string, _ time.Duration, batch int, kinds []domain.EventKind) (app.ClaimedEvents, error) {
 	q.note(ctx, "claim", 0, 0)
+	q.mu.Lock()
+	q.kinds = kinds
+	q.mu.Unlock()
 	if q.claimErr != nil {
 		return app.ClaimedEvents{}, q.claimErr
 	}
@@ -95,7 +99,7 @@ func (q *fakeQueue) Reschedule(ctx context.Context, seq int64, _ string, backoff
 	return q.attempts[seq], true, nil
 }
 
-func (q *fakeQueue) Stats(ctx context.Context, _ int) (app.EventStats, error) {
+func (q *fakeQueue) Stats(ctx context.Context, _ int, _ []domain.EventKind) (app.EventStats, error) {
 	q.note(ctx, "stats", 0, 0)
 	return app.EventStats{Pending: len(q.events)}, nil
 }
@@ -117,6 +121,10 @@ type fakeHandler struct {
 	fail      map[int64]error
 	duplicate map[int64]bool
 	onHandle  func()
+}
+
+func (h *fakeHandler) Supports() []domain.EventKind {
+	return domain.SupportedEvents()
 }
 
 func (h *fakeHandler) Handle(ctx context.Context, e domain.StoredEvent) (bool, error) {
@@ -367,4 +375,23 @@ func TestAnotherRelayCountsTheDuplicateWhoseConfirmationFailed(t *testing.T) {
 	require.Equal(t, app.RelayReport{Published: 1, Duplicates: 1}, report, "the relay that confirms the redelivery counts it")
 	require.Equal(t, 1, second.duplicates)
 	require.Equal(t, []int64{1}, q.published)
+}
+
+type limitedHandler struct {
+	*fakeHandler
+	kinds []domain.EventKind
+}
+
+func (h limitedHandler) Supports() []domain.EventKind {
+	return h.kinds
+}
+
+func TestTheRelayClaimsAndCountsOnlyTheKindsItsConsumerSupports(t *testing.T) {
+	kinds := []domain.EventKind{{Type: domain.EventPurchaseConfirmed, Version: domain.PurchaseEventVersion}}
+	q := &fakeQueue{events: stored(1)}
+	r, err := app.NewRelay(q, limitedHandler{fakeHandler: &fakeHandler{}, kinds: kinds}, &relayRecorder{}, relayPolicy())
+	require.NoError(t, err)
+	_, err = r.RunCycle(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, kinds, q.kinds, "the claim is limited to what the consumer supports")
 }

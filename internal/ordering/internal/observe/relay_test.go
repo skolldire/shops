@@ -53,7 +53,7 @@ func TestAStuckEventIsAnErrorOnceAndAWarningAfterwards(t *testing.T) {
 		r.RelayAttempt(ctx, a)
 	}
 	r.RelayDuplicate(ctx)
-	r.RelayGauges(ctx, app.EventStats{Pending: 2, OldestSeconds: 4.5, Stuck: 1})
+	r.RelayGauges(ctx, app.EventStats{Pending: 2, OldestSeconds: 4.5, Stuck: 1, Unsupported: 3})
 
 	out := strings.Split(strings.TrimSpace(logs.String()), "\n")
 	require.Len(t, out, 7)
@@ -71,7 +71,7 @@ func TestAStuckEventIsAnErrorOnceAndAWarningAfterwards(t *testing.T) {
 	require.Contains(t, out[2], `"attempt":3`)
 	require.Contains(t, out[2], "projection unavailable")
 	require.Equal(t, attribute.String("outcome", "still_pending"), c.got[0].attrs[0])
-	require.Equal(t, map[string]float64{"outbox_pending_events": 2, "outbox_oldest_pending_seconds": 4.5, "outbox_stuck_events": 1}, c.gauges)
+	require.Equal(t, map[string]float64{"outbox_pending_events": 2, "outbox_oldest_pending_seconds": 4.5, "outbox_stuck_events": 1, "outbox_unsupported_events": 3}, c.gauges)
 	require.Equal(t, "inbox_duplicates_total", c.got[len(c.got)-1].name)
 }
 

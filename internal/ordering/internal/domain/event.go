@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -59,8 +60,20 @@ type UnreadableEvent struct {
 	Cause    error
 }
 
+type EventKind struct {
+	Type    EventType
+	Version int
+}
+
+func SupportedEvents() []EventKind {
+	return []EventKind{
+		{Type: EventPurchaseConfirmed, Version: PurchaseEventVersion},
+		{Type: EventPurchaseFailed, Version: PurchaseEventVersion},
+	}
+}
+
 func SupportedEvent(t EventType, version int) bool {
-	return (t == EventPurchaseConfirmed || t == EventPurchaseFailed) && version == PurchaseEventVersion
+	return slices.Contains(SupportedEvents(), EventKind{Type: t, Version: version})
 }
 
 func NewPurchaseEvent(p Purchase, o Outcome) (PurchaseEvent, error) {

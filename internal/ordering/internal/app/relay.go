@@ -84,7 +84,8 @@ func NewRelay(queue EventQueue, handler EventHandler, rec RelayRecorder, policy 
 
 func (r *Relay) RunCycle(ctx context.Context) (RelayReport, error) {
 	claimCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
-	claimed, err := r.queue.Claim(claimCtx, r.policy.Owner, r.policy.Lease, r.policy.Batch)
+	kinds := r.handler.Supports()
+	claimed, err := r.queue.Claim(claimCtx, r.policy.Owner, r.policy.Lease, r.policy.Batch, kinds)
 	cancel()
 	if err != nil {
 		return RelayReport{}, fmt.Errorf("ordering: claim outbox events: %w", err)
@@ -107,7 +108,7 @@ func (r *Relay) RunCycle(ctx context.Context) (RelayReport, error) {
 	}
 	statsCtx, cancel := context.WithTimeout(ctx, r.policy.DBTimeout)
 	defer cancel()
-	stats, err := r.queue.Stats(statsCtx, r.policy.StuckAfter)
+	stats, err := r.queue.Stats(statsCtx, r.policy.StuckAfter, kinds)
 	if err != nil {
 		return report, fmt.Errorf("ordering: the outbox gauges were not updated: %w", err)
 	}

@@ -15,9 +15,8 @@ import (
 )
 
 const (
-	syntheticSecret  = "SYNTHETIC-SECRET-7731"
-	unreadableCause  = "ordering: the event payload does not match its type and version: an amount that is not a decimal"
-	unsupportedCause = "ordering: the event type and version are not supported by this release: the outbox has no decoder for them"
+	syntheticSecret = "SYNTHETIC-SECRET-7731"
+	unreadableCause = "ordering: the event payload does not match its type and version: an amount that is not a decimal"
 )
 
 func (b *logBuffer) contains(text string) bool {
@@ -127,7 +126,7 @@ func TestAnUnreadableEventReachesTheStuckThresholdWithoutExposingItsPayload(t *t
 	c.noEffectOf(t, poisoned.ID)
 }
 
-func TestAnEventOfAnUnsupportedVersionIsRetriedAndNeverConsumed(t *testing.T) {
+func TestAnEventOfAnUnsupportedVersionIsLeftPendingAndUntouched(t *testing.T) {
 	c := eventCluster(t)
 	ctx := context.Background()
 	c.pay.set(false, false)
@@ -135,23 +134,31 @@ func TestAnEventOfAnUnsupportedVersionIsRetriedAndNeverConsumed(t *testing.T) {
 	newer := c.checkout(t, c.a, "alice", "pm_approved", map[catalog.Product]int{tent: 4})
 	c.checkout(t, c.a, "bob", "pm_approved", map[catalog.Product]int{tent: 2})
 	c.exec(t, false, `UPDATE outbox SET version = version + 1 WHERE aggregate_id = $1::uuid`, newer.ID)
+	before := c.event(t, newer.ID)
 
-	report, err := c.a.orders.RelayOnce(ctx)
-	require.NoError(t, err)
-	require.Equal(t, ordering.RelayReport{Published: 1, StillPending: 1}, report)
+	for range 3 {
+		report, err := c.a.orders.RelayOnce(ctx)
+		require.NoError(t, err)
+		require.Zero(t, report.StillPending+report.Skipped, "the unsupported event is never claimed")
+	}
 	e := c.event(t, newer.ID)
-	require.False(t, e.published)
+	require.False(t, e.published, "it is never dropped or published")
 	require.False(t, e.leased)
-	require.Equal(t, 1, e.attempts)
-	require.Equal(t, unsupportedCause, e.lastError, "the outbox rejected it before the consumer, and did not read it as version 1")
+	require.Zero(t, e.attempts, "no attempt is counted for an event this replica cannot read")
+	require.Empty(t, e.lastError)
+	require.True(t, e.next.Equal(before.next), "no backoff is applied")
+	require.Zero(t, c.a.logs.count("WARN", "")+c.a.logs.count("ERROR", ""), "no delivery log")
+	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_unsupported_events"))
+	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_pending_events"))
 	c.noEffectOf(t, newer.ID)
 	require.Equal(t, 2, c.count(t, `SELECT units_sold FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
 	require.Equal(t, 1, c.count(t, `SELECT purchases FROM product_sales WHERE product_id = $1::uuid`, tent.ID))
 
-	c.exec(t, false, `UPDATE outbox SET version = version - 1, next_attempt_at = now() WHERE aggregate_id = $1::uuid`, newer.ID)
+	c.exec(t, false, `UPDATE outbox SET version = version - 1 WHERE aggregate_id = $1::uuid`, newer.ID)
 	repaired, err := c.a.orders.RelayOnce(ctx)
 	require.NoError(t, err)
-	require.Equal(t, ordering.RelayReport{Published: 1}, repaired, "a compatible version is consumed once it is due")
+	require.Equal(t, ordering.RelayReport{Published: 1}, repaired, "a compatible version is consumed")
+	require.Equal(t, float64(0), c.a.metrics.gauge("outbox_unsupported_events"))
 	requireProjectionMatchesTheSource(t, c)
 }
 

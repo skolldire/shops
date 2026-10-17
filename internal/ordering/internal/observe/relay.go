@@ -16,6 +16,7 @@ const (
 	pendingEventsGauge  = "outbox_pending_events"
 	oldestEventGauge    = "outbox_oldest_pending_seconds"
 	stuckEventsGauge    = "outbox_stuck_events"
+	unsupportedGauge    = "outbox_unsupported_events"
 	relayDeliveredEvent = "ordering: an outbox event was delivered"
 )
 
@@ -68,4 +69,5 @@ func (r *RelayRecorder) RelayGauges(ctx context.Context, s app.EventStats) {
 	r.counters.Gauge(ctx, pendingEventsGauge, float64(s.Pending))
 	r.counters.Gauge(ctx, oldestEventGauge, s.OldestSeconds)
 	r.counters.Gauge(ctx, stuckEventsGauge, float64(s.Stuck))
+	r.counters.Gauge(ctx, unsupportedGauge, float64(s.Unsupported))
 }

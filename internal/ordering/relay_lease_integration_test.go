@@ -16,6 +16,7 @@ import (
 
 	"github.com/skolldire/shops/internal/catalog"
 	"github.com/skolldire/shops/internal/ordering/internal/app"
+	"github.com/skolldire/shops/internal/ordering/internal/domain"
 	"github.com/skolldire/shops/internal/ordering/internal/postgres"
 	"github.com/skolldire/shops/internal/payment"
 	"github.com/skolldire/shops/internal/platform/database"
@@ -285,4 +286,91 @@ func TestARedeliveryIsCountedOnlyByTheRelayThatConfirmsIt(t *testing.T) {
 	require.Equal(t, 3, f.count(t, `SELECT units_sold FROM product_sales WHERE product_id = $1::uuid`, product), "one effect")
 	require.Equal(t, 1, f.count(t, `SELECT purchases FROM product_sales WHERE product_id = $1::uuid`, product))
 	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM outbox WHERE published_at IS NOT NULL AND lease_owner IS NULL`))
+}
+
+type capabilityHandler struct {
+	app.EventHandler
+	kinds []domain.EventKind
+}
+
+func (h capabilityHandler) Supports() []domain.EventKind {
+	return h.kinds
+}
+
+type gaugeRecorder struct {
+	mu       sync.Mutex
+	outcomes []string
+	gauges   []app.EventStats
+}
+
+func (r *gaugeRecorder) RelayAttempt(_ context.Context, a app.RelayAttempt) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.outcomes = append(r.outcomes, a.Outcome)
+}
+
+func (r *gaugeRecorder) RelayDuplicate(context.Context) {}
+
+func (r *gaugeRecorder) RelayGauges(_ context.Context, s app.EventStats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gauges = append(r.gauges, s)
+}
+
+func (f relayFixture) olderRelay(t *testing.T, kinds []domain.EventKind) (*app.Relay, *gaugeRecorder) {
+	t.Helper()
+	manager, err := database.NewTxManager(f.pool)
+	require.NoError(t, err)
+	tx, err := postgres.NewTx(manager)
+	require.NoError(t, err)
+	outbox, err := postgres.NewOutbox(f.pool)
+	require.NoError(t, err)
+	inbox, err := postgres.NewInbox(f.pool)
+	require.NoError(t, err)
+	sales, err := postgres.NewSales(f.pool)
+	require.NoError(t, err)
+	projection, err := app.NewSalesProjection(tx, inbox, sales)
+	require.NoError(t, err)
+	rec := &gaugeRecorder{}
+	relay, err := app.NewRelay(outbox, capabilityHandler{EventHandler: projection, kinds: kinds}, rec, app.RelayPolicy{
+		Owner: uuid.NewString(), Lease: 10 * time.Second, DBTimeout: 2 * time.Second, HandlerTimeout: 2 * time.Second,
+		Batch: 10, StuckAfter: 10, Backoff: func(int) time.Duration { return time.Second },
+	})
+	require.NoError(t, err)
+	return relay, rec
+}
+
+func TestAReplicaThatDoesNotSupportAnEventLeavesItToOneThatDoes(t *testing.T) {
+	f := newRelayFixture(t)
+	ctx := context.Background()
+	current := f.module(t, func(q app.EventQueue) app.EventQueue { return q })
+	older, rec := f.olderRelay(t, []domain.EventKind{{Type: domain.EventPurchaseConfirmed, Version: domain.PurchaseEventVersion}})
+	f.confirmed(t, current, "alice", 2)
+	price, stock, weight := decimal.RequireFromString("10.00"), int64(10), decimal.RequireFromString("1")
+	product, err := f.cat.Create(ctx, catalog.CreateInput{SKU: "SKU-DECLINED", Name: "Item", Category: "Tests", Price: &price, Stock: &stock, WeightKg: &weight})
+	require.NoError(t, err)
+	require.NoError(t, current.AddToCart(ctx, "bob", product.ID, 1))
+	declined, err := current.CheckoutCart(ctx, "bob", uuid.NewString(), "pm_declined")
+	require.NoError(t, err)
+	require.Equal(t, StatusFailed, declined.Purchase.Status)
+
+	report, err := older.RunCycle(ctx)
+	require.NoError(t, err)
+	require.Equal(t, app.RelayReport{Published: 1}, report, "the older replica publishes only what it supports")
+	require.Equal(t, []string{app.RelayPublished}, rec.outcomes)
+	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM outbox
+		WHERE type = 'PurchaseFailed' AND published_at IS NULL AND attempts = 0 AND lease_owner IS NULL AND last_error IS NULL AND next_attempt_at <= now()`),
+		"the unsupported event is not claimed, leased, delayed or counted as an attempt")
+	require.Equal(t, app.EventStats{Pending: 1, OldestSeconds: rec.gauges[0].OldestSeconds, Unsupported: 1}, rec.gauges[0])
+
+	reportCurrent, err := current.RelayOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, RelayReport{Published: 1}, reportCurrent, "a replica that supports it publishes it")
+
+	report, err = older.RunCycle(ctx)
+	require.NoError(t, err)
+	require.Equal(t, app.RelayReport{}, report)
+	require.Equal(t, app.EventStats{}, rec.gauges[1], "the gauges of the older replica follow the publication on its next cycle")
+	require.Zero(t, f.count(t, `SELECT count(*) FROM outbox WHERE attempts > 0`), "no attempt was ever counted for the incompatibility")
+	require.Equal(t, 2, f.count(t, `SELECT count(*) FROM inbox`))
 }
