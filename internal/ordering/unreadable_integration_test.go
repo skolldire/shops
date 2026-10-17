@@ -97,7 +97,7 @@ func TestAnUnreadableEventDoesNotStopTheRestOfItsBatch(t *testing.T) {
 	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_pending_events"))
 }
 
-func TestAnUnreadableEventReachesTheStuckThresholdWithoutExposingItsPayload(t *testing.T) {
+func TestAnUnreadableEventAlternatingBetweenRelaysLogsOneErrorAndAWarningAtEveryDoubling(t *testing.T) {
 	c := eventCluster(t)
 	ctx := context.Background()
 	c.pay.set(false, false)
@@ -105,8 +105,10 @@ func TestAnUnreadableEventReachesTheStuckThresholdWithoutExposingItsPayload(t *t
 	poisoned := c.checkout(t, c.a, "alice", "pm_approved", map[catalog.Product]int{tent: 1})
 	c.corruptTotal(t, poisoned.ID)
 
-	for attempt := 1; attempt <= stuckEventsAfter+2; attempt++ {
-		report, err := c.a.orders.RelayOnce(ctx)
+	attempts := 4*stuckEventsAfter + 1
+	for attempt := 1; attempt <= attempts; attempt++ {
+		relay := []replica{c.a, c.b}[attempt%2]
+		report, err := relay.orders.RelayOnce(ctx)
 		require.NoError(t, err)
 		require.Equal(t, ordering.RelayReport{StillPending: 1}, report)
 		require.Equal(t, attempt, c.event(t, poisoned.ID).attempts, "every cycle counts one attempt")
@@ -114,14 +116,19 @@ func TestAnUnreadableEventReachesTheStuckThresholdWithoutExposingItsPayload(t *t
 		if attempt >= stuckEventsAfter {
 			want = 1
 		}
-		require.Equal(t, want, c.a.metrics.gauge("outbox_stuck_events"), "attempt %d", attempt)
+		require.Equal(t, want, relay.metrics.gauge("outbox_stuck_events"), "attempt %d", attempt)
 		c.dueEvents(t)
 	}
-	require.Equal(t, 1, c.a.logs.count("ERROR", "an outbox event is stuck"), "one error when the threshold is crossed")
-	require.Equal(t, 2, c.a.logs.count("WARN", "a stuck outbox event is still pending"), "warnings afterwards")
+	logs := func(severity, message string) int {
+		return c.a.logs.count(severity, message) + c.b.logs.count(severity, message)
+	}
+	require.Equal(t, 1, logs("ERROR", "an outbox event is stuck"), "one error when the threshold is crossed, across relays")
+	require.Equal(t, 2, logs("WARN", "a stuck outbox event is still pending"), "warnings only at twice and four times the threshold")
+	require.Equal(t, int64(attempts), c.a.metrics.counter("outbox_relay_total|still_pending")+c.b.metrics.counter("outbox_relay_total|still_pending"),
+		"the metric counts every attempt")
 	require.Equal(t, float64(1), c.a.metrics.gauge("outbox_pending_events"))
 	require.True(t, c.a.logs.contains("an amount that is not a decimal"), "the logs name the category")
-	require.False(t, c.a.logs.contains(syntheticSecret), "the logs never carry the payload")
+	require.False(t, c.a.logs.contains(syntheticSecret) || c.b.logs.contains(syntheticSecret), "the logs never carry the payload")
 	require.NotContains(t, c.event(t, poisoned.ID).lastError, syntheticSecret)
 	c.noEffectOf(t, poisoned.ID)
 }

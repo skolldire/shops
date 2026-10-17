@@ -284,7 +284,7 @@ func TestAStuckEventIsLoggedOnceAcrossRelays(t *testing.T) {
 	c.checkout(t, c.a, "bob", "pm_approved", map[catalog.Product]int{tent: 2})
 	c.blockProjection(t, tent)
 
-	for i := range stuckEventsAfter + 2 {
+	for i := range 2 * stuckEventsAfter {
 		relay := []replica{c.a, c.b}[i%2]
 		report, err := relay.orders.RelayOnce(ctx)
 		require.NoError(t, err)
@@ -293,8 +293,9 @@ func TestAStuckEventIsLoggedOnceAcrossRelays(t *testing.T) {
 	}
 	require.Equal(t, 1, c.a.logs.count("ERROR", "an outbox event is stuck")+c.b.logs.count("ERROR", "an outbox event is stuck"),
 		"only the relay whose reschedule returned the threshold logs it")
-	require.Equal(t, 2, c.a.logs.count("WARN", "a stuck outbox event is still pending")+c.b.logs.count("WARN", "a stuck outbox event is still pending"))
-	require.Equal(t, stuckEventsAfter+2, c.count(t, `SELECT max(attempts) FROM outbox`))
+	require.Equal(t, 1, c.a.logs.count("WARN", "a stuck outbox event is still pending")+c.b.logs.count("WARN", "a stuck outbox event is still pending"),
+		"one warning at twice the threshold")
+	require.Equal(t, 2*stuckEventsAfter, c.count(t, `SELECT max(attempts) FROM outbox`))
 }
 
 func requireProjectionMatchesTheSource(t *testing.T, c cluster) {
