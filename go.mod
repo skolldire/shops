@@ -6,7 +6,7 @@ require (
 	github.com/go-chi/chi/v5 v5.4.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/shopspring/decimal v1.5.0
 	github.com/stretchr/testify v1.12.1
