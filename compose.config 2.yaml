@@ -1,0 +1,8 @@
+services:
+  app:
+    volumes:
+      - ./config/config.yaml:/etc/shop/config.yaml:ro
+
+  app2:
+    volumes:
+      - ./config/config.yaml:/etc/shop/config.yaml:ro

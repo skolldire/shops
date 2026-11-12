@@ -59,7 +59,7 @@ To see the metrics, start the debug stack instead and follow [Monitoring with Pr
   - Recent Compose releases build through Buildx. Without it they fall back to the classic builder, which stops on these Dockerfiles with `the --chmod option requires BuildKit`.
   - Checked locally with Engine 23.0.6, Compose 2.22.0 and Buildx 0.11.2 and with Engine 29.5.2, Compose 5.6.0 and Buildx 0.38.0.
   - Checked in CI with Engine 28.0.4 and Compose 2.38.2, the versions listed for the image of GitHub's `ubuntu-latest` runner (`ubuntu24/20261012.334`), where the image scan and end-to-end smoke job passes.
-- Go as declared in `go.mod` (currently 1.27.2), only to run tests or the binary outside Docker
+- Go as declared in `go.mod` (currently 1.27.3), only to run tests or the binary outside Docker
 - `make`, optional: every target that starts the stack has its `docker compose` equivalent below
 
 ## Run with Docker
@@ -172,7 +172,7 @@ Integration tests start PostgreSQL with Testcontainers, which needs access to th
 
 **Integration tests fail with `rootless Docker not found, failed to create Docker provider`.** Testcontainers did not find the Docker daemon. Run them with `make test-integration`, or set `DOCKER_HOST` to the endpoint shown by `docker context inspect --format '{{.Endpoints.docker.Host}}'`.
 
-**Go version.** `go.mod` requires Go 1.27.2. An older Go downloads that toolchain on its own unless `GOTOOLCHAIN=local` is set, in which case it stops with `go.mod requires go >= 1.27.2`. `make up` builds inside Docker and needs no local Go.
+**Go version.** `go.mod` requires Go 1.27.3. An older Go downloads that toolchain on its own unless `GOTOOLCHAIN=local` is set, in which case it stops with `go.mod requires go >= 1.27.3`. `make up` builds inside Docker and needs no local Go.
 
 **A metric is missing in Prometheus.** Check that the `shops` target is `UP` in `http://127.0.0.1:9090/targets`, and wait for the next scrape (every 15s). Every series of the counters exists from the start with 0; the histograms (`import_duration_seconds` and the HTTP ones) create a series with its first observation, so `rate()` shows a new route from its second scrape on. See [Monitoring with Prometheus](#monitoring-with-prometheus).
 
