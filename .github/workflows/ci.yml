@@ -96,7 +96,11 @@ jobs:
           go-version-file: go.mod
           check-latest: true
       - name: go.mod and the Dockerfile use the same Go release
-        run: grep -q "^FROM golang:$(go env GOVERSION | sed -E 's/^go([0-9]+\.[0-9]+).*/\1/')-alpine " Dockerfile
+        run: |
+          set -eu
+          version="$(awk '$1 == "go" {print $2}' go.mod)"
+          test "$(go env GOVERSION)" = "go${version}"
+          grep -Fxq "FROM golang:${version}-alpine AS build" Dockerfile
       - name: govulncheck
         run: make vuln GOVULNCHECK_VERSION=${{ env.GOVULNCHECK_VERSION }}
 
@@ -108,15 +112,50 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/docker-hub-mirror
+      - name: Pull service images
+        run: docker compose --profile replicas -f compose.yaml -f compose.debug.yaml pull --ignore-buildable --policy always
       - name: Build images
-        run: docker compose -f compose.yaml -f compose.debug.yaml build
+        id: build
+        run: |
+          mkdir -p trivy-reports
+          docker compose --profile replicas -f compose.yaml -f compose.debug.yaml build --pull
       - name: Scan image (Trivy)
+        id: trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: shops-app:latest
+          scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          timeout: 10m
+          output: trivy-reports/app.txt
+      - name: Scan remaining service images
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile replicas -f compose.yaml -f compose.debug.yaml config --images > trivy-reports/images.txt
+          sort -u trivy-reports/images.txt > trivy-reports/unique-images.txt
+          status=0
+          while IFS= read -r image; do
+            case "$image" in shops-app|shops-app:latest) continue ;; esac
+            report="$(printf '%s' "$image" | tr '/:' '__')"
+            if ! trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --timeout 10m "$image" 2>&1 | tee "trivy-reports/${report}.txt"; then
+              status=1
+            fi
+          done < trivy-reports/unique-images.txt
+          exit "$status"
+      - name: Show application image report
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: cat trivy-reports/app.txt
+      - name: Upload image vulnerability reports
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-vulnerability-reports
+          path: trivy-reports/
+          retention-days: 14
       - name: Start stack
         run: docker compose up -d --wait --wait-timeout 180
       - name: Smoke test

@@ -185,8 +185,8 @@ Every pull request to `master` runs:
 | Lint and style | golangci-lint, no comments (Go, SQL, YAML, HTML, CSS, Dockerfiles), the dependency rules described in [Architecture](#architecture), tidy modules, hadolint on every Dockerfile |
 | Unit tests | Race detector on the `go.mod` version and on the latest stable Go |
 | Integration tests | Repositories, transactions, the inventory audit and HTTP acceptance tests of the product lifecycle, the checkout (concurrent buyers, idempotency, rejections, declined payments, recovery) and the UI purchase flow against PostgreSQL |
-| govulncheck | Known vulnerabilities in reachable code |
-| Image scan and end-to-end smoke | Builds every image of the stack, Trivy on the app image, then the compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
+| govulncheck | Known vulnerabilities in reachable code; the Docker builder must match the exact Go patch release in `go.mod` |
+| Image scan and end-to-end smoke | Pulls fresh base and service images, builds the debug and replicas profiles, scans every service image with Trivy and saves the reports as an artifact, then checks the main compose stack: readiness, problem+json errors, schema, no password in logs or `docker inspect`, graceful shutdown |
 | Dependency review | OSV-Scanner compares the base branch with the pull request and fails on newly introduced vulnerable dependencies. Accepted exceptions live in `osv-scanner.toml` with a reason and an expiry date |
 | CodeQL | Static security analysis, also weekly |
 
